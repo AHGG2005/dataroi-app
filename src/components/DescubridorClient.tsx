@@ -2,6 +2,13 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
+import { descargarComparativaVersusPDF } from '@/lib/pdfReportGenerator';
+import {
+  descargarLibroExcelXLSX,
+  descargarCSVEstilizado,
+  ValorCeldaExcel,
+  EstiloCeldaExcel
+} from '@/lib/excelReportGenerator';
 import {
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -14,7 +21,8 @@ import {
   TrendingUp, TrendingDown, Minus, Activity,
   ArrowUpDown, ChevronDown, ChevronUp, AlertTriangle,
   MapPin, Users, Landmark, RotateCcw, Info, Anchor,
-  SlidersHorizontal, Wand2, X, Check, BarChart3, Compass
+  SlidersHorizontal, Wand2, X, Check, BarChart3, Compass,
+  Share2, Download, Printer, FlaskConical, FileSpreadsheet
 } from 'lucide-react';
 
 type CriterioOrden = 'afinidad_desc' | 'afinidad_asc' | 'salario_desc' | 'salario_asc';
@@ -33,14 +41,13 @@ const TABLA_PESOS_EXACTOS: Record<number, number[]> = {
   5: [36, 24, 18, 12, 10]
 };
 
-// Tríada de alto contraste perceptual para el Comparador Cara a Cara (Azul Rey, Violeta Ejecutivo y Naranja/Ámbar)
 const COLORES_VERSUS = [
   { hex: '#2563EB', bg: 'bg-blue-600', text: 'text-blue-700', light: 'bg-blue-50/70 border-blue-200' },
   { hex: '#9333EA', bg: 'bg-purple-600', text: 'text-purple-700', light: 'bg-purple-50/70 border-purple-200' },
   { hex: '#EA580C', bg: 'bg-orange-600', text: 'text-orange-800', light: 'bg-orange-50/70 border-orange-200' }
 ];
 
-const BENCHMARK_REGIONES: Record<string, {
+const BENCHMARK_REGIONES_BASE: Record<string, {
   nombre: string;
   corto: string;
   estados: string;
@@ -175,7 +182,6 @@ const ETIQUETAS_MAPA: { id: string; label: string; x: number; y: number; w: numb
   { id: 'sur', label: 'SUR-SURESTE', x: 432, y: 318, w: 92 }
 ];
 
-// Gradiente Ejecutivo de 5 Niveles para las 5 Prioridades (#1 Azul Rey, #2 Índigo, #3 Cerceta, #4 Cian, #5 Pizarra)
 function obtenerEstiloJerarquiaPrioridad(orden?: number) {
   if (!orden) {
     return {
@@ -232,6 +238,8 @@ const PREFERENCIAS = [
   { id: 'publico', label: 'Sector Público y Gremial', corto: 'Sector Público', icon: <Landmark className="w-4 h-4" />, desc: 'Plazas en gobierno, educación/salud pública y respaldo sindical.' }
 ];
 
+const IDS_PREFERENCIAS_VALIDAS = new Set(PREFERENCIAS.map(p => p.id));
+
 const formatoMoneda = (valor: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(valor || 0);
 
@@ -240,7 +248,6 @@ const num = (val: any, fallback: number) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-// Sincronizado al 100% con obtenerCapExCarrera de src/app/carrera/[id]/page.tsx
 function obtenerCapExCorto(cve: string) {
   const pref3 = cve.slice(0, 3);
   const pref4 = cve.slice(0, 4);
@@ -307,7 +314,6 @@ function BadgeTendencia({ codigo, etiqueta }: { codigo?: string; etiqueta?: stri
   );
 }
 
-// Mapa con Affordance de Selección: En 'nacional' se muestra en tono pizarra neutro (#CBD5E1) para invitar a hacer clic en una región específica
 function MapaMexicoMacroRegiones({
   regionActiva,
   regionHover,
@@ -320,7 +326,7 @@ function MapaMexicoMacroRegiones({
   onHoverRegion: (r: string | null) => void;
 }) {
   const obtenerEstiloPoligono = (idReg: string) => {
-    const info = BENCHMARK_REGIONES[idReg];
+    const info = BENCHMARK_REGIONES_BASE[idReg];
     const esNacional = regionActiva === 'nacional';
     const esActiva = regionActiva === idReg;
     const esHover = regionHover === idReg;
@@ -428,9 +434,65 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   const [carrerasCompararCves, setCarrerasCompararCves] = useState<string[]>([]);
   const [modalVersusAbierto, setModalVersusAbierto] = useState<boolean>(false);
   const [vistaGraficoVersus, setVistaGraficoVersus] = useState<'radar' | 'regiones'>('radar');
+  const [copiadoRanking, setCopiadoRanking] = useState<boolean>(false);
+  const [copiadoVersus, setCopiadoVersus] = useState<boolean>(false);
+
+  // Cálculo 100% Dinámico de Benchmarks Regionales desde el arreglo `datos`
+  const benchmarksDinamicosPorRegion = useMemo(() => {
+    const mapa: Record<string, typeof BENCHMARK_REGIONES_BASE['nacional']> = {};
+
+    Object.entries(BENCHMARK_REGIONES_BASE).forEach(([regKey, metaBase]) => {
+      const celdasValidas = datos
+        .map(d => d.perfiles?.[regKey]?.[generoActivo])
+        .filter(p => p && p.celdaValida !== false && Number(p.sueldo_esperado) > 0);
+
+      if (celdasValidas.length === 0) {
+        mapa[regKey] = metaBase;
+        return;
+      }
+
+      const sumaPesoSueldo = celdasValidas.reduce((acc, p) => acc + Math.max(1, Number(p.volumen_validado || 1)), 0);
+      const sumaPesoSat = celdasValidas.reduce((acc, p) => acc + Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0);
+
+      const sueldoLicDin = Math.round(
+        celdasValidas.reduce((acc, p) => acc + Number(p.sueldo_esperado) * Math.max(1, Number(p.volumen_validado || 1)), 0) / sumaPesoSueldo
+      );
+
+      const formLicDin = Number(
+        (
+          celdasValidas.reduce((acc, p) => {
+            const f = Number(p.pct_contrato || 60) * 0.45 + Number(p.pct_aguinaldo || 60) * 0.30 + Number(p.pct_afore || 50) * 0.25;
+            return acc + f * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1));
+          }, 0) / sumaPesoSat
+        ).toFixed(1)
+      );
+
+      const estratoDin = Number(
+        (
+          celdasValidas.reduce((acc, p) => acc + Number(p.indice_privilegio || 2.8) * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0) / sumaPesoSat
+        ).toFixed(2)
+      );
+
+      const nepotismoDin = Number(
+        (
+          celdasValidas.reduce((acc, p) => acc + Number(p.pct_nepotismo || 37) * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0) / sumaPesoSat
+        ).toFixed(1)
+      );
+
+      mapa[regKey] = {
+        ...metaBase,
+        sueldo_lic: sueldoLicDin > 0 ? sueldoLicDin : metaBase.sueldo_lic,
+        formalidad_lic: formLicDin > 0 ? formLicDin : metaBase.formalidad_lic,
+        estrato_medio: estratoDin > 0 ? estratoDin : metaBase.estrato_medio,
+        nepotismo_medio: nepotismoDin > 0 ? nepotismoDin : metaBase.nepotismo_medio
+      };
+    });
+
+    return mapa;
+  }, [datos, generoActivo]);
 
   const { minSueldoCatalogo, maxSueldoCatalogo, sueldoSugerido } = useMemo(() => {
-    const prepaRef = BENCHMARK_REGIONES[regionActiva]?.sueldo_prepa[generoActivo] || 10500;
+    const prepaRef = benchmarksDinamicosPorRegion[regionActiva]?.sueldo_prepa[generoActivo] || 10500;
     const pisoPrepaFloor = Math.floor(prepaRef / 500) * 500;
 
     const sueldos = datos
@@ -444,7 +506,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
     const minReal = Math.min(...sueldos);
     const maxReal = Math.max(...sueldos);
-    // Garantiza que el extremo izquierdo del slider incluya siempre la referencia de Preparatoria
     const minFloor = Math.min(pisoPrepaFloor, Math.floor(minReal / 500) * 500);
     const maxFloor = Math.floor(maxReal / 500) * 500;
     const sugerido = Math.max(minFloor, Math.min(maxFloor - 1500, Math.ceil(prepaRef / 500) * 500));
@@ -454,32 +515,93 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       maxSueldoCatalogo: maxFloor > minFloor ? maxFloor : minFloor + 1000,
       sueldoSugerido: sugerido
     };
-  }, [datos, regionActiva, generoActivo]);
+  }, [datos, regionActiva, generoActivo, benchmarksDinamicosPorRegion]);
 
   const [sueldoMinimo, setSueldoMinimo] = useState<number>(11500);
 
   useEffect(() => {
     try {
-      const guardado = sessionStorage.getItem(STORAGE_KEY_DESCUBRIDOR);
-      if (guardado) {
-        const parsed = JSON.parse(guardado);
-        if (parsed.regionActiva && BENCHMARK_REGIONES[parsed.regionActiva]) {
-          setRegionActiva(parsed.regionActiva);
+      const params = new URLSearchParams(window.location.search);
+      const regUrl = params.get('region');
+      const genUrl = params.get('genero');
+      const sueldoUrl = params.get('sueldo');
+      const prioUrl = params.get('prio');
+      const compUrl = params.get('comparar');
+
+      const tieneParamsUrl = Boolean(regUrl || genUrl || sueldoUrl || prioUrl || compUrl);
+
+      if (tieneParamsUrl) {
+        let regInicial = 'nacional';
+        if (regUrl && BENCHMARK_REGIONES_BASE[regUrl]) {
+          regInicial = regUrl;
+          setRegionActiva(regUrl);
         }
-        if (parsed.generoActivo === 0 || parsed.generoActivo === 1 || parsed.generoActivo === 2) {
-          setGeneroActivo(parsed.generoActivo);
+
+        let genInicial: CodigoGenero = 0;
+        if (genUrl === 'mujeres' || genUrl === '2') genInicial = 2;
+        else if (genUrl === 'hombres' || genUrl === '1') genInicial = 1;
+        setGeneroActivo(genInicial);
+
+        if (sueldoUrl && Number(sueldoUrl) >= 7000) {
+          setSueldoMinimo(Number(sueldoUrl));
+        } else {
+          const prepaRef = BENCHMARK_REGIONES_BASE[regInicial]?.sueldo_prepa[genInicial] || 10500;
+          setSueldoMinimo(Math.ceil(prepaRef / 500) * 500);
         }
-        if (typeof parsed.sueldoMinimo === 'number' && parsed.sueldoMinimo >= 7000) {
-          setSueldoMinimo(parsed.sueldoMinimo);
+
+        if (prioUrl) {
+          const listaPrio = prioUrl
+            .split(',')
+            .map(s => s.trim())
+            .filter(id => IDS_PREFERENCIAS_VALIDAS.has(id))
+            .slice(0, MAX_PRIORIDADES);
+          if (listaPrio.length > 0) {
+            setActivos(listaPrio);
+            setModoVistaFiltros('colapsado');
+          }
         }
-        if (Array.isArray(parsed.activos) && parsed.activos.length > 0) {
-          setActivos(parsed.activos.slice(0, MAX_PRIORIDADES));
-          setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
-        } else if (parsed.modoVistaFiltros === 'expandido') {
-          setModoVistaFiltros('expandido');
+
+        if (compUrl) {
+          const cvesDisponibles = new Set(datos.map(d => String(d.cve_carrera).padStart(6, '0')));
+          const listaComp = compUrl
+            .split(',')
+            .map(s => s.trim().padStart(6, '0'))
+            .filter(cve => cvesDisponibles.has(cve))
+            .slice(0, MAX_COMPARAR);
+
+          if (listaComp.length > 0) {
+            setCarrerasCompararCves(listaComp);
+            if (!prioUrl) {
+              setActivos(['empleabilidad', 'formalidad', 'ia']);
+            }
+            setModoVistaFiltros('colapsado');
+            if (listaComp.length >= 2) {
+              setModalVersusAbierto(true);
+            }
+          }
         }
       } else {
-        setSueldoMinimo(sueldoSugerido);
+        const guardado = sessionStorage.getItem(STORAGE_KEY_DESCUBRIDOR);
+        if (guardado) {
+          const parsed = JSON.parse(guardado);
+          if (parsed.regionActiva && BENCHMARK_REGIONES_BASE[parsed.regionActiva]) {
+            setRegionActiva(parsed.regionActiva);
+          }
+          if (parsed.generoActivo === 0 || parsed.generoActivo === 1 || parsed.generoActivo === 2) {
+            setGeneroActivo(parsed.generoActivo);
+          }
+          if (typeof parsed.sueldoMinimo === 'number' && parsed.sueldoMinimo >= 7000) {
+            setSueldoMinimo(parsed.sueldoMinimo);
+          }
+          if (Array.isArray(parsed.activos) && parsed.activos.length > 0) {
+            setActivos(parsed.activos.slice(0, MAX_PRIORIDADES));
+            setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
+          } else if (parsed.modoVistaFiltros === 'expandido') {
+            setModoVistaFiltros('expandido');
+          }
+        } else {
+          setSueldoMinimo(sueldoSugerido);
+        }
       }
     } catch {
       setSueldoMinimo(sueldoSugerido);
@@ -500,20 +622,36 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           modoVistaFiltros
         })
       );
+
+      const url = new URL(window.location.href);
+      url.searchParams.set('region', regionActiva);
+      url.searchParams.set('genero', generoActivo === 2 ? 'mujeres' : generoActivo === 1 ? 'hombres' : 'total');
+      url.searchParams.set('sueldo', String(sueldoMinimo));
+      if (activos.length > 0) {
+        url.searchParams.set('prio', activos.join(','));
+      } else {
+        url.searchParams.delete('prio');
+      }
+      if (carrerasCompararCves.length > 0) {
+        url.searchParams.set('comparar', carrerasCompararCves.join(','));
+      } else {
+        url.searchParams.delete('comparar');
+      }
+      window.history.replaceState({}, '', url.toString().replace(/%2C/gi, ','));
     } catch {
-      // Ignorar errores de almacenamiento privado
+      // Ignorar errores en modo privado
     }
-  }, [hidratado, regionActiva, generoActivo, sueldoMinimo, activos, modoVistaFiltros]);
+  }, [hidratado, regionActiva, generoActivo, sueldoMinimo, activos, modoVistaFiltros, carrerasCompararCves]);
 
   const cambiarRegionConCalibracion = (nuevaReg: string) => {
     setRegionActiva(nuevaReg);
-    const prepaRef = BENCHMARK_REGIONES[nuevaReg]?.sueldo_prepa[generoActivo] || 10500;
+    const prepaRef = BENCHMARK_REGIONES_BASE[nuevaReg]?.sueldo_prepa[generoActivo] || 10500;
     setSueldoMinimo(Math.ceil(prepaRef / 500) * 500);
   };
 
   const cambiarGeneroConCalibracion = (nuevoGen: CodigoGenero) => {
     setGeneroActivo(nuevoGen);
-    const prepaRef = BENCHMARK_REGIONES[regionActiva]?.sueldo_prepa[nuevoGen] || 10500;
+    const prepaRef = BENCHMARK_REGIONES_BASE[regionActiva]?.sueldo_prepa[nuevoGen] || 10500;
     setSueldoMinimo(Math.ceil(prepaRef / 500) * 500);
   };
 
@@ -562,8 +700,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     return (tieneCorp && tieneIndep) || (tieneCorp && tienePub) || (tieneIndep && tienePub);
   }, [activos]);
 
-  const { rankingVisible, rankingCompleto, totalFiltradas, totalEnRegion } = useMemo(() => {
-    const infoReg = BENCHMARK_REGIONES[regionActiva] || BENCHMARK_REGIONES.nacional;
+  const { rankingVisible, rankingCompleto, listaOrdenadaCompleta, totalFiltradas, totalEnRegion } = useMemo(() => {
+    const infoReg = benchmarksDinamicosPorRegion[regionActiva] || BENCHMARK_REGIONES_BASE.nacional;
     const sueldoPrepaBase = infoReg.sueldo_prepa[generoActivo] || infoReg.sueldo_prepa[0];
     const mediaEstratoReg = infoReg.estrato_medio || 2.80;
     const mediaNepotismoReg = infoReg.nepotismo_medio || 37.2;
@@ -576,7 +714,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     const listaConPerfil = carrerasValidasEnCelda.map(carrera => {
       const p = carrera.perfiles?.[regionActiva]?.[generoActivo] || {};
 
-      // 1. Empleabilidad: 55% Bajo Desempleo + 45% Baja Saturación ANUIES (Cero variables ocultas)
       const desempleo = num(p.tasa_desempleo, 3.8);
       const ocupacionScore = Math.max(0, 100 - desempleo * 11);
       const satRaw = num(p.indice_saturacion_pct, 100);
@@ -584,7 +721,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const saturacionScore = Math.max(0, Math.min(100, 145 - saturacion));
       const rawEmpleabilidad = ocupacionScore * 0.55 + saturacionScore * 0.45;
 
-      // 2. Calidad OIT: Ordenado directamente por tasaCalidadOIT (Cero inversiones visuales)
       const pContrato = num(p.pct_contrato, 55);
       const pAfore = num(p.pct_afore, 45);
       const pAguinaldo = num(p.pct_aguinaldo, 60);
@@ -601,15 +737,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const rawFormalidad = tasaCalidadOIT + pSgmm * 0.001;
       const tasaFormalidadTotal = Number((pContrato * 0.45 + pAguinaldo * 0.30 + pAfore * 0.25).toFixed(1));
 
-      // 3. Corporativo e Independiente/PYME: Alineados al decimal con el porcentaje mostrado en la pastilla
       const rawCorporativo = pCorp + pSgmm * 0.001;
       const sumaIndepPyme = Number((pMicro + pPyme).toFixed(1));
       const rawEmprendimiento = sumaIndepPyme + pMicro * 0.001;
 
-      // 4. Trabajo Remoto: Directo del CSV auditado (SINCO cuello blanco + Dingel-Neiman / Banxico)
       const rawRemoto = pHomeOffice;
 
-      // 5. Movilidad Social y Meritocracia (Modelo Chetty / CEEY: Apertura sin nepotismo 40% + Impulso salarial/formal 35% + Inclusión socioeconómica 25%)
       const nep = num(p.pct_nepotismo, mediaNepotismoReg);
       const privRaw = num(p.indice_privilegio, mediaEstratoReg);
       const diffEst = privRaw - mediaEstratoReg;
@@ -623,21 +756,17 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const impulsoAscenso = saltoSalarialScore * 0.45 + tasaCalidadOIT * 0.35 + Math.min(100, pCorp * 2.2 + pPyme * 0.6) * 0.20;
       const rawMovilidad = Math.max(12, Math.min(96, aperturaContratacion * 0.40 + impulsoAscenso * 0.35 + inclusionOrigen * 0.25));
 
-      // 6. Equidad Laboral: 50% Licencia Parental del perfil activo + 50% Paridad Salarial
       const materno = num(p.pct_materno ?? p.pct_materno_estructural, 23);
       const brechaSal = num(p.brecha_salarial_pct, 12);
       const paridadSalarialPct = Math.max(60, Math.round(100 - brechaSal));
       const rawEquidad = materno * 0.50 + paridadSalarialPct * 0.50;
 
-      // 7. Blindaje IA
       const rawIA = Math.max(0, 100 - num(p.riesgo_ia_score, 40));
 
-      // 8. Estabilidad y Arraigo: 55% Empleo Único + 45% Arraigo Local (sin pContrato oculto)
       const pctEmpleoUnico = Number(Math.max(0, 100 - pPluri).toFixed(1));
       const pctArraigoLocal = Number(Math.max(0, 100 - pDesarr).toFixed(1));
       const rawBalance = Math.max(0, 100 - pPluri * 5.0) * 0.55 + Math.max(0, 100 - pDesarr * 6.5) * 0.45;
 
-      // 9. Sector Público y Gremial
       const rawPublico = num(p.pct_gobierno, 0) * 0.65 + num(p.pct_sindicato, 0) * 0.35;
 
       const premioVsPrepaPct = sueldoPrepaBase > 0 && sueldoEsp > 0
@@ -695,6 +824,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       return {
         rankingVisible: [],
         rankingCompleto: listaConPerfil,
+        listaOrdenadaCompleta: [],
         totalFiltradas: totalViables,
         totalEnRegion: listaConPerfil.length
       };
@@ -736,9 +866,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const p = carrera.perfilActivo;
       let matchScoreExacto = 0;
       const desglosePrioridades: {
+        idPref: string;
         orden: number;
         label: string;
         datoReal: string;
+        datoCorto: string;
         score: number;
         rankRubro: number;
         totalViables: number;
@@ -759,6 +891,19 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gobierno · ${num(p.pct_sindicato, 0).toFixed(1)}% Sindicato`
       };
 
+      const datoCortoPorDim: Record<string, string> = {
+        empleabilidad: `Desemp ${num(p.tasa_desempleo, 0).toFixed(1)}% / Sat ${num(p.indice_saturacion_pct, 100)}%`,
+        formalidad: `${carrera.tasaCalidadOIT}% Calidad OIT`,
+        corporativo: `${num(p.pct_corp, 0).toFixed(1)}% Corp`,
+        emprendimiento: `${(num(p.pct_micro, 0) + num(p.pct_pyme, 0)).toFixed(1)}% Indep+PYME`,
+        remoto: `${num(p.pct_home_office, 0).toFixed(1)}% Home Office`,
+        movilidad: `${carrera.crudos.movilidad.toFixed(1)}% Mérito`,
+        equidad: `${carrera.paridadSalarialPct}% Paridad / ${num(p.pct_materno ?? p.pct_materno_estructural, 23).toFixed(0)}% Parental`,
+        ia: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje IA`,
+        balance: `${carrera.pctEmpleoUnico}% Único / ${carrera.pctArraigoLocal}% Arraigo`,
+        publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gob / ${num(p.pct_sindicato, 0).toFixed(1)}% Sind`
+      };
+
       activos.forEach((idPref) => {
         const infoPeso = pesosPrioridad[idPref];
         const scoreDim = scoresPorDim[idPref]?.[carrera.cve_carrera] ?? 50;
@@ -767,9 +912,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
         const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
         desglosePrioridades.push({
+          idPref,
           orden: infoPeso?.orden || 1,
           label: prefMeta?.corto || idPref,
           datoReal: datoRealPorDim[idPref] || '',
+          datoCorto: datoCortoPorDim[idPref] || '',
           score: Math.round(scoreDim),
           rankRubro: posRubro,
           totalViables
@@ -823,15 +970,17 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     return {
       rankingVisible: visibles,
       rankingCompleto: rankingMaestro,
+      listaOrdenadaCompleta: listaOrdenada,
       totalFiltradas: rankingMaestro.length,
       totalEnRegion: listaConPerfil.length
     };
-  }, [datos, activos, pesosPrioridad, sueldoMinimo, orden, mostrarTodas, regionActiva, generoActivo]);
+  }, [datos, activos, pesosPrioridad, sueldoMinimo, orden, mostrarTodas, regionActiva, generoActivo, benchmarksDinamicosPorRegion]);
 
   const carrerasRestantes = Math.max(0, totalFiltradas - 10);
   const regionMostradaEnTarjeta = regionHover || regionActiva;
-  const infoRegionTarjeta = BENCHMARK_REGIONES[regionMostradaEnTarjeta] || BENCHMARK_REGIONES.nacional;
-  const sueldoPrepaActual = (BENCHMARK_REGIONES[regionActiva] || BENCHMARK_REGIONES.nacional).sueldo_prepa[generoActivo];
+  const infoRegionTarjeta = benchmarksDinamicosPorRegion[regionMostradaEnTarjeta] || BENCHMARK_REGIONES_BASE.nacional;
+  const infoRegActiva = benchmarksDinamicosPorRegion[regionActiva] || BENCHMARK_REGIONES_BASE.nacional;
+  const sueldoPrepaActual = infoRegActiva.sueldo_prepa[generoActivo];
   const diferenciaSliderVsPrepaPct = sueldoPrepaActual > 0
     ? Math.round(((sueldoMinimo - sueldoPrepaActual) / sueldoPrepaActual) * 100)
     : 0;
@@ -856,12 +1005,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     });
   }, [carrerasEnVersus]);
 
-  // No dibuja barras fantasma cuando una región no tiene muestra certificada en el género activo
   const datosRegionesVersus = useMemo(() => {
     const regs = ['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
     return regs.map(rKey => {
       const fila: Record<string, any> = {
-        region: BENCHMARK_REGIONES[rKey]?.corto || rKey
+        region: BENCHMARK_REGIONES_BASE[rKey]?.corto || rKey
       };
       carrerasEnVersus.forEach((c: any) => {
         const perfReg = c.perfiles?.[rKey]?.[generoActivo];
@@ -873,11 +1021,413 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     });
   }, [carrerasEnVersus, generoActivo]);
 
+  const compartirRankingLink = async () => {
+    const url = window.location.href.replace(/%2C/gi, ',');
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `DataROI — Ranking en ${infoRegActiva.corto} (${etiquetaGeneroCorto})`,
+          text: `Mira mi ranking personalizado de carreras en ${infoRegActiva.nombre} con DataROI.`,
+          url
+        });
+        return;
+      } catch {
+        // Fallback al portapapeles
+      }
+    }
+    await navigator.clipboard.writeText(url);
+    setCopiadoRanking(true);
+    setTimeout(() => setCopiadoRanking(false), 2200);
+  };
+
+  // Construcción de Tablas del Ranking con Columnas Separadas por cada Prioridad (Cero textos largos con |)
+  const construirTablasRanking = () => {
+    const colsPrioCabeceras: string[] = [];
+    activos.forEach((idPref, idx) => {
+      const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+      const nomLimpio = (prefMeta?.corto || idPref).replace(/\s+/g, '_');
+      colsPrioCabeceras.push(`Prio${idx + 1}_${nomLimpio}_Lugar`);
+      colsPrioCabeceras.push(`Prio${idx + 1}_${nomLimpio}_Dato`);
+    });
+
+    const cabeceras = [
+      'Lugar_Afinidad',
+      'CVE_Carrera',
+      'Nombre_Carrera',
+      'Afinidad_Global_Pct',
+      'Salario_Mensual_MXN',
+      'Prima_vs_Prepa_Pct',
+      'Tendencia_Real',
+      'ROI_Univ_Publica_Anios',
+      'ROI_Univ_Privada_Anios',
+      'Empleo_Calidad_OIT_Pct',
+      'Desempleo_Abierto_Pct',
+      'Saturacion_ANUIES_Pct',
+      'Meritocracia_Pct',
+      'Blindaje_IA_Pct',
+      ...colsPrioCabeceras
+    ];
+
+    const filas: ValorCeldaExcel[][] = listaOrdenadaCompleta.map((c: any) => {
+      const pos = c.rankAfinidad;
+      const estiloPodio: EstiloCeldaExcel | undefined =
+        pos === 1 ? 'gold' : pos === 2 ? 'silver' : pos === 3 ? 'bronze' : undefined;
+
+      const celda = (v: string | number): ValorCeldaExcel =>
+        estiloPodio ? { v, s: estiloPodio } : v;
+
+      const roiPub = calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false);
+      const roiPriv = calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true);
+
+      const celdasPrioridades: ValorCeldaExcel[] = [];
+      activos.forEach((_, idx) => {
+        const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
+        if (itemP) {
+          const esLiderRubro = itemP.rankRubro === 1;
+          celdasPrioridades.push({
+            v: `#${itemP.rankRubro} de ${itemP.totalViables}`,
+            s: esLiderRubro ? 'winner' : estiloPodio
+          });
+          celdasPrioridades.push(celda(itemP.datoCorto || itemP.datoReal));
+        } else {
+          celdasPrioridades.push(celda('-'), celda('-'));
+        }
+      });
+
+      return [
+        celda(pos),
+        celda(c.cve_carrera),
+        celda(c.nombre_carrera),
+        celda(Number(c.matchScore.toFixed(1))),
+        celda(c.sueldo_esperado),
+        celda(c.premioVsPrepaPct),
+        celda(c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable'),
+        celda(roiPub ?? 'Negativo'),
+        celda(roiPriv ?? 'Negativo'),
+        celda(c.tasaCalidadOIT),
+        celda(Number(num(c.perfilActivo?.tasa_desempleo, 3.2).toFixed(1))),
+        celda(num(c.perfilActivo?.indice_saturacion_pct, 92)),
+        celda(Number((c.crudos?.movilidad ?? 50).toFixed(1))),
+        celda(100 - num(c.perfilActivo?.riesgo_ia_score, 40)),
+        ...celdasPrioridades
+      ];
+    });
+
+    return { cabeceras, filas };
+  };
+
+  const exportarRankingExcel = () => {
+    if (listaOrdenadaCompleta.length === 0) return;
+    const { cabeceras, filas } = construirTablasRanking();
+
+    const filasParametros: ValorCeldaExcel[][] = [
+      ['Macro-Región Económica', infoRegActiva.nombre, infoRegActiva.estados],
+      ['Perspectiva de Género', etiquetaGeneroCorto, `Sueldo Base Preparatoria: ${formatoMoneda(sueldoPrepaActual)}/mes`],
+      ['Piso Salarial Mensual Mínimo', sueldoMinimo, `${diferenciaSliderVsPrepaPct >= 0 ? `+${diferenciaSliderVsPrepaPct}%` : `${diferenciaSliderVsPrepaPct}%`} respecto a Preparatoria`],
+      ['Carreras que Cumplen el Filtro', totalFiltradas, `De ${totalEnRegion} carreras con muestra certificada en la región`],
+      ...activos.map((idPref, idx) => {
+        const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+        const infoPeso = pesosPrioridad[idPref];
+        return [
+          `Prioridad #${idx + 1} (${infoPeso?.pesoPct || 0}% de peso)`,
+          prefMeta?.label || idPref,
+          prefMeta?.desc || ''
+        ];
+      })
+    ];
+
+    descargarLibroExcelXLSX(
+      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}.xlsx`,
+      [
+        {
+          nombre: '1_Ranking_Personalizado',
+          cabeceras,
+          filas
+        },
+        {
+          nombre: '2_Parametros_Simulacion',
+          cabeceras: ['Parametro_de_Decision', 'Valor_Seleccionado', 'Explicacion_y_Referencia'],
+          filas: filasParametros
+        }
+      ]
+    );
+  };
+
+  const exportarRankingCSV = () => {
+    if (listaOrdenadaCompleta.length === 0) return;
+    const { cabeceras, filas } = construirTablasRanking();
+    descargarCSVEstilizado(
+      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}.csv`,
+      cabeceras,
+      filas
+    );
+  };
+
+  const compartirVersusLink = async () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('region', regionActiva);
+    url.searchParams.set('genero', queryGeneroParam);
+    url.searchParams.set('comparar', carrerasCompararCves.join(','));
+    const linkFinal = url.toString().replace(/%2C/gi, ',');
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `DataROI Versus — ${carrerasEnVersus.map((c: any) => c.nombre_carrera).join(' vs. ')}`,
+          text: `Comparativa ejecutiva Cara a Cara en ${infoRegActiva.nombre} (${etiquetaGeneroCorto}).`,
+          url: linkFinal
+        });
+        return;
+      } catch {
+        // Fallback al portapapeles
+      }
+    }
+    await navigator.clipboard.writeText(linkFinal);
+    setCopiadoVersus(true);
+    setTimeout(() => setCopiadoVersus(false), 2200);
+  };
+
+  // Construcción de Hojas para el Comparador Cara a Cara (Con celdas ganadoras en Verde ★ y Podio Oro/Plata/Bronce)
+  const construirHojasVersus = () => {
+    const conteoVictorias = new Array(carrerasEnVersus.length).fill(0);
+
+    const encontrarLider = (valores: number[], mejorAlto: boolean, invalido = Infinity): ValorCeldaExcel => {
+      const validos = valores.filter(v => Number.isFinite(v) && v < invalido);
+      if (validos.length === 0) return 'Sin muestra';
+      const mejor = mejorAlto ? Math.max(...validos) : Math.min(...validos);
+      const ganadores = carrerasEnVersus
+        .filter((_, idx) => valores[idx] === mejor && valores[idx] < invalido)
+        .map((c: any) => c.nombre_carrera);
+      return ganadores.length > 0 ? { v: `★ ${ganadores.join(' / ')}`, s: 'winner' } : '-';
+    };
+
+    const registrarFilaNumerica = (
+      cat: string,
+      ind: string,
+      vals: number[],
+      fmt: (v: number) => string,
+      mejorAlto: boolean,
+      invalido = Infinity
+    ): ValorCeldaExcel[] => {
+      const validos = vals.filter(v => Number.isFinite(v) && v < invalido);
+      const mejor = validos.length > 0 ? (mejorAlto ? Math.max(...validos) : Math.min(...validos)) : null;
+
+      const celdasCarreras: ValorCeldaExcel[] = vals.map((v, idx) => {
+        const esGanador = mejor !== null && v === mejor && v < invalido;
+        if (esGanador) conteoVictorias[idx] += 1;
+        const txt = fmt(v);
+        return esGanador ? { v: `★ ${txt}`, s: 'winner' } : txt;
+      });
+
+      return [
+        cat,
+        ind,
+        ...celdasCarreras,
+        encontrarLider(vals, mejorAlto, invalido)
+      ];
+    };
+
+    const cabecerasMatriz = [
+      'Categoria',
+      'Indicador_Auditado',
+      ...carrerasEnVersus.map((c: any) => `${c.nombre_carrera} (${c.cve_carrera})`),
+      'Carrera_Lider_del_Rubro'
+    ];
+
+    const filasPrioridadesActivas: ValorCeldaExcel[][] = activos.map((idPref, idx) => {
+      const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+      const valsRank = carrerasEnVersus.map((c: any) => {
+        const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
+        return itemP ? itemP.rankRubro : 999;
+      });
+      const mejorRank = Math.min(...valsRank);
+
+      const celdasPrio: ValorCeldaExcel[] = carrerasEnVersus.map((c: any, cIdx) => {
+        const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
+        if (!itemP) return '-';
+        const gana = valsRank[cIdx] === mejorRank && mejorRank < 900;
+        if (gana) conteoVictorias[cIdx] += 1;
+        const txt = `#${itemP.rankRubro} de ${itemP.totalViables} (${itemP.datoCorto || itemP.datoReal})`;
+        return gana ? { v: `★ ${txt}`, s: 'winner' } : txt;
+      });
+
+      return [
+        '2. Prioridades Seleccionadas',
+        `Prioridad #${idx + 1}: ${prefMeta?.label || idPref}`,
+        ...celdasPrio,
+        encontrarLider(valsRank, false, 900)
+      ];
+    });
+
+    const ejesRadar = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Autonomía', 'Estabilidad'] as const;
+    const filasRadar: ValorCeldaExcel[][] = ejesRadar.map(eje => {
+      const vals = carrerasEnVersus.map((c: any) => Number(c.pilaresRadar?.[eje] ?? 50));
+      return registrarFilaNumerica('3. Huella de 6 Pilares (0-100)', `Pilar ${eje} (Score 0-100)`, vals, v => `${v} / 100`, true);
+    });
+
+    const fmtAnios = (v: number) => (v >= 900 ? 'Retorno negativo' : v === 1 ? '1 año' : `${v} años`);
+
+    const filasHoja1: ValorCeldaExcel[][] = [
+      ['1. Contexto y Trazabilidad', 'Macro-Región y Perfil Evaluado', ...carrerasEnVersus.map(() => `${infoRegActiva.nombre} (${etiquetaGeneroCorto})`), '-'],
+      ['1. Contexto y Trazabilidad', 'Sueldo Base Preparatoria de Referencia', ...carrerasEnVersus.map(() => `${formatoMoneda(sueldoPrepaActual)} / mes`), '-'],
+      registrarFilaNumerica('1. Contexto y Trazabilidad', 'Muestra Física Certificada INEGI', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.n_encuestados_reales, 0)), v => `${v} encuestados`, true),
+      registrarFilaNumerica('2. Ranking Global', 'Afinidad Global con tus Prioridades', carrerasEnVersus.map((c: any) => Number((c.matchScore ?? 50).toFixed(1))), v => `${v}%`, true),
+      ...filasPrioridadesActivas,
+      ...filasRadar,
+      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Salario Mensual Consolidado', carrerasEnVersus.map((c: any) => c.sueldo_esperado), v => `${formatoMoneda(v)} / mes`, true),
+      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Prima Salarial vs. Preparatoria', carrerasEnVersus.map((c: any) => c.premioVsPrepaPct), v => `${v >= 0 ? `+${v}%` : `${v}%`} vs. Prepa`, true),
+      ['4. Salario y Retorno (ROI)', 'Tendencia Salarial Real (2021–2026)', ...carrerasEnVersus.map((c: any) => c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable'), '-'],
+      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Retorno Inversión Univ. Pública', carrerasEnVersus.map((c: any) => calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false) ?? 999), fmtAnios, false, 900),
+      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Retorno Inversión Univ. Privada Media', carrerasEnVersus.map((c: any) => calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true) ?? 999), fmtAnios, false, 900),
+      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Inversión Requerida en Equipo (CapEx)', carrerasEnVersus.map((c: any) => obtenerCapExCorto(c.cve_carrera).costoEquipo), v => formatoMoneda(v), false),
+      registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Empleo de Calidad (Estándar OIT)', carrerasEnVersus.map((c: any) => c.tasaCalidadOIT), v => `${v}%`, true),
+      registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Formalidad Laboral Total', carrerasEnVersus.map((c: any) => c.tasaFormalidadTotal), v => `${v}%`, true),
+      registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Tasa de Desempleo Abierto', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.tasa_desempleo, 3.5)), v => `${v.toFixed(1)}%`, false),
+      registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Índice de Saturación ANUIES', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_saturacion_pct, 100)), v => `${v}%`, false),
+      ['5. Calidad y Mercado Laboral', 'Sector Empleador Dominante', ...carrerasEnVersus.map((c: any) => obtenerSectorDominante(c.perfilActivo)), '-'],
+      registrarFilaNumerica('5. Ecosistema Empleador', 'Inserción en Grandes Corporativos', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_corp, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('5. Ecosistema Empleador', 'Inserción en PYMEs', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_pyme, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('5. Ecosistema Empleador', 'Práctica Independiente / Microempresa', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_micro, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('5. Ecosistema Empleador', 'Sector Público y Gobierno', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_gobierno, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Contrato Escrito Estable', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_contrato, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Aguinaldo de Ley', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_aguinaldo, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Fondo de Retiro (AFORE)', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_afore, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Protección Materna / Paterna', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_materno, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Afiliación Sindical / Gremial', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_sindicato, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Seguro Médico Privado (SGMM)', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_sgmm, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Apertura y Movilidad Social (% Mérito)', carrerasEnVersus.map((c: any) => Number((c.crudos?.movilidad ?? 50).toFixed(1))), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Estrato Socioeconómico de Origen (1 a 4)', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_privilegio, 2.8)), v => `${v.toFixed(2)} / 4`, false),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Contratación por Contactos / Nepotismo', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_nepotismo, 37)), v => `${v.toFixed(1)}%`, false),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Blindaje Humano ante IA', carrerasEnVersus.map((c: any) => 100 - num(c.perfilActivo?.riesgo_ia_score, 40)), v => `${v}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Trabajo Remoto / Home Office', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_home_office, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Empleo Único sin Pluriempleo', carrerasEnVersus.map((c: any) => c.pctEmpleoUnico), v => `${v}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Arraigo Local sin Migrar de Estado', carrerasEnVersus.map((c: any) => c.pctArraigoLocal), v => `${v}%`, true)
+    ];
+
+    // Calcular Podio Final por Conteo de Victorias (Oro, Plata y Bronce)
+    const victoriasUnicas = Array.from(new Set(conteoVictorias)).sort((a, b) => b - a);
+    const celdasPodioFinal: ValorCeldaExcel[] = conteoVictorias.map(v => {
+      const posPodio = victoriasUnicas.indexOf(v) + 1;
+      const medalla = posPodio === 1 ? '1° LUGAR (ORO)' : posPodio === 2 ? '2° LUGAR (PLATA)' : '3° LUGAR (BRONCE)';
+      const estilo: EstiloCeldaExcel = posPodio === 1 ? 'gold' : posPodio === 2 ? 'silver' : 'bronze';
+      return { v: `${medalla} — ${v} rubros ganados`, s: estilo };
+    });
+
+    filasHoja1.push([
+      { v: '8. Veredicto y Podio Global', s: 'section' },
+      { v: 'Podio por Total de Indicadores Liderados', s: 'section' },
+      ...celdasPodioFinal,
+      encontrarLider(conteoVictorias, true)
+    ]);
+
+    // Hoja 2: Comparativa Salarial en las 5 Macro-Regiones
+    const regs = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
+    const filasHoja2: ValorCeldaExcel[][] = regs.map(rKey => {
+      const metaR = BENCHMARK_REGIONES_BASE[rKey];
+      const prepaR = metaR.sueldo_prepa[generoActivo];
+      const vals = carrerasEnVersus.map((c: any) => {
+        const pr = c.perfiles?.[rKey]?.[generoActivo];
+        return pr && pr.celdaValida !== false && Number(pr.sueldo_esperado) > 0 ? Number(pr.sueldo_esperado) : -1;
+      });
+      const validos = vals.filter(v => v > 0);
+      const mejor = validos.length > 0 ? Math.max(...validos) : null;
+
+      const celdasReg: ValorCeldaExcel[] = vals.map(v => {
+        if (v <= 0) return 'Sin muestra';
+        const prima = prepaR > 0 ? Number((((v - prepaR) / prepaR) * 100).toFixed(1)) : 0;
+        const txt = `${formatoMoneda(v)} (${prima >= 0 ? `+${prima}%` : `${prima}%`} vs Prepa)`;
+        return mejor !== null && v === mejor ? { v: `★ ${txt}`, s: 'winner' } : txt;
+      });
+
+      return [
+        metaR.nombre,
+        formatoMoneda(prepaR),
+        ...celdasReg,
+        encontrarLider(vals.map(v => (v > 0 ? v : -999)), true, 9999999)
+      ];
+    });
+
+    return { cabecerasMatriz, filasHoja1, filasHoja2 };
+  };
+
+  const exportarVersusExcel = () => {
+    if (carrerasEnVersus.length < 2) return;
+    const { cabecerasMatriz, filasHoja1, filasHoja2 } = construirHojasVersus();
+    descargarLibroExcelXLSX(
+      `DataROI_Versus_${regionActiva}_${queryGeneroParam}_${carrerasCompararCves.join('_')}.xlsx`,
+      [
+        {
+          nombre: '1_Matriz_Cara_a_Cara',
+          cabeceras: cabecerasMatriz,
+          filas: filasHoja1
+        },
+        {
+          nombre: '2_Sueldos_5_MacroRegiones',
+          cabeceras: [
+            'Macro_Region',
+            'Base_Prepa_MXN',
+            ...carrerasEnVersus.map((c: any) => `${c.nombre_carrera} (${c.cve_carrera})`),
+            'Lider_Regional'
+          ],
+          filas: filasHoja2
+        }
+      ]
+    );
+  };
+
+  const exportarVersusCSV = () => {
+    if (carrerasEnVersus.length < 2) return;
+    const { cabecerasMatriz, filasHoja1 } = construirHojasVersus();
+    descargarCSVEstilizado(
+      `DataROI_Versus_${regionActiva}_${queryGeneroParam}_${carrerasCompararCves.join('_')}.csv`,
+      cabecerasMatriz,
+      filasHoja1
+    );
+  };
+
+  const descargarPDFVersusDirecto = () => {
+    if (carrerasEnVersus.length < 2) return;
+    descargarComparativaVersusPDF({
+      regionNombre: infoRegActiva.nombre,
+      regionCorto: infoRegActiva.corto,
+      perfilEtiqueta: etiquetaGeneroCorto,
+      sueldoPrepa: sueldoPrepaActual,
+      carreras: carrerasEnVersus.map((c: any) => {
+        const sueldosRegMap: Record<string, number | null> = {};
+        (['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const).forEach(rk => {
+          const pr = c.perfiles?.[rk]?.[generoActivo];
+          sueldosRegMap[rk] = pr && pr.celdaValida !== false && Number(pr.sueldo_esperado) > 0
+            ? Number(pr.sueldo_esperado)
+            : null;
+        });
+        return {
+          cve_carrera: c.cve_carrera,
+          nombre_carrera: c.nombre_carrera,
+          sueldo_esperado: c.sueldo_esperado,
+          premioVsPrepaPct: c.premioVsPrepaPct,
+          roiPublica: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false),
+          roiPrivada: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true),
+          costoEquipo: obtenerCapExCorto(c.cve_carrera).costoEquipo,
+          tasaCalidadOIT: c.tasaCalidadOIT,
+          tasaDesempleo: num(c.perfilActivo?.tasa_desempleo, 3.5),
+          saturacionPct: num(c.perfilActivo?.indice_saturacion_pct, 100),
+          meritoPct: Number((c.crudos?.movilidad ?? 50).toFixed(1)),
+          blindajeIA: 100 - num(c.perfilActivo?.riesgo_ia_score, 40),
+          empleoUnicoPct: c.pctEmpleoUnico,
+          sectorPrincipal: obtenerSectorDominante(c.perfilActivo),
+          pilaresRadar: c.pilaresRadar || {},
+          sueldosPorRegion: sueldosRegMap
+        };
+      }),
+      nombreArchivo: `DataROI_Comparativa_Versus_${regionActiva}_${queryGeneroParam}_${carrerasCompararCves.join('_')}.pdf`
+    });
+  };
+
   return (
     <div className="max-w-6xl mx-auto pb-24">
       
       {/* CABECERA */}
-      <div className="mb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+      <div className="no-print mb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight">
             Descubridor de Carreras
@@ -887,39 +1437,49 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           </p>
         </div>
 
-        {modoVistaFiltros !== 'wizard' && (
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => {
-                setPasoWizard(1);
-                setModoVistaFiltros('wizard');
-              }}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
-            >
-              <Wand2 className="w-3.5 h-3.5 text-blue-600" />
-              Guía paso a paso
-            </button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <Link
+            href="/laboratorio"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-emerald-500 text-xs font-bold text-slate-700 shadow-2xs transition-all"
+          >
+            <FlaskConical className="w-3.5 h-3.5 text-emerald-600" />
+            Laboratorio Crudo
+          </Link>
 
-            <button
-              onClick={() => setModoVistaFiltros(prev => (prev === 'colapsado' ? 'expandido' : 'colapsado'))}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                modoVistaFiltros === 'expandido'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
-              }`}
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              {modoVistaFiltros === 'expandido' ? 'Contraer filtros' : 'Editar filtros'}
-            </button>
-          </div>
-        )}
+          {modoVistaFiltros !== 'wizard' && (
+            <>
+              <button
+                onClick={() => {
+                  setPasoWizard(1);
+                  setModoVistaFiltros('wizard');
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+              >
+                <Wand2 className="w-3.5 h-3.5 text-blue-600" />
+                Guía paso a paso
+              </button>
+
+              <button
+                onClick={() => setModoVistaFiltros(prev => (prev === 'colapsado' ? 'expandido' : 'colapsado'))}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                  modoVistaFiltros === 'expandido'
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
+                }`}
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                {modoVistaFiltros === 'expandido' ? 'Contraer filtros' : 'Editar filtros'}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* ========================================================================= */}
       {/* MODO 1: ASISTENTE PASO A PASO (WIZARD PROGRESIVO CON FADE-IN)              */}
       {/* ========================================================================= */}
       {modoVistaFiltros === 'wizard' && (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-8 max-w-3xl mx-auto mb-8 animate-in fade-in duration-200">
+        <div className="no-print bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-8 max-w-3xl mx-auto mb-8 animate-in fade-in duration-200">
           
           <div className="flex items-center justify-between gap-2 mb-4">
             <span className="text-xs font-black uppercase tracking-wider text-blue-600">
@@ -940,7 +1500,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             />
           </div>
 
-          {/* PASO 1: MACRO-REGIÓN CON INVITACIÓN AL CLIC Y SALTO DE FORMALIDAD */}
+          {/* PASO 1: MACRO-REGIÓN */}
           {pasoWizard === 1 && (
             <div key="paso1" className="animate-in fade-in slide-in-from-right-4 duration-200">
               <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-1">
@@ -951,7 +1511,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </p>
 
               <div className="flex flex-wrap gap-2 mb-4">
-                {Object.entries(BENCHMARK_REGIONES).map(([idReg, meta]) => {
+                {Object.entries(benchmarksDinamicosPorRegion).map(([idReg, meta]) => {
                   const activa = regionActiva === idReg;
                   return (
                     <button
@@ -1005,14 +1565,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* PASO 2: PERSPECTIVA DE GÉNERO CON IDENTIDAD CROMÁTICA */}
+          {/* PASO 2: PERSPECTIVA DE GÉNERO */}
           {pasoWizard === 2 && (
             <div key="paso2" className="animate-in fade-in slide-in-from-right-4 duration-200">
               <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-1">
                 2. ¿Bajo qué perspectiva deseas analizar los datos?
               </h2>
               <p className="text-xs md:text-sm text-slate-500 mb-5">
-                Puedes consultar el mercado general o filtrar las muestras exclusivas de mujeres u hombres profesionistas en {BENCHMARK_REGIONES[regionActiva]?.corto}.
+                Puedes consultar el mercado general o filtrar las muestras exclusivas de mujeres u hombres profesionistas en {infoRegActiva.corto}.
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
@@ -1021,19 +1581,19 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                     id: 0 as CodigoGenero,
                     titulo: 'Total General',
                     sub: 'Muestra consolidada de hombres y mujeres en la región.',
-                    prepa: BENCHMARK_REGIONES[regionActiva]?.sueldo_prepa[0]
+                    prepa: infoRegActiva.sueldo_prepa[0]
                   },
                   {
                     id: 2 as CodigoGenero,
                     titulo: 'Solo Mujeres',
                     sub: 'Sueldos, formalidad y brechas reales observadas en mujeres.',
-                    prepa: BENCHMARK_REGIONES[regionActiva]?.sueldo_prepa[2]
+                    prepa: infoRegActiva.sueldo_prepa[2]
                   },
                   {
                     id: 1 as CodigoGenero,
                     titulo: 'Solo Hombres',
                     sub: 'Sueldos, formalidad e inserción observada en hombres.',
-                    prepa: BENCHMARK_REGIONES[regionActiva]?.sueldo_prepa[1]
+                    prepa: infoRegActiva.sueldo_prepa[1]
                   }
                 ]).map((op) => {
                   const act = generoActivo === op.id;
@@ -1077,7 +1637,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 3. ¿Cuál es tu piso salarial mensual esperado?
               </h2>
               <p className="text-xs md:text-sm text-slate-500 mb-6">
-                Descartaremos del ranking cualquier carrera cuyo sueldo consolidado en {BENCHMARK_REGIONES[regionActiva]?.corto} esté por debajo de tu meta.
+                Descartaremos del ranking cualquier carrera cuyo sueldo consolidado en {infoRegActiva.corto} esté por debajo de tu meta.
               </p>
 
               <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200/80 text-center mb-4">
@@ -1120,7 +1680,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* PASO 4: SELECCIÓN DE HASTA 5 PRIORIDADES + ALERTA DE BALANCE */}
+          {/* PASO 4: SELECCIÓN DE HASTA 5 PRIORIDADES */}
           {pasoWizard === 4 && (
             <div key="paso4" className="animate-in fade-in slide-in-from-right-4 duration-200">
               <div className="flex items-start justify-between gap-2 mb-3">
@@ -1233,14 +1793,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       {/* MODO 2: CINTA COMPACTA COLAPSADA                                          */}
       {/* ========================================================================= */}
       {modoVistaFiltros === 'colapsado' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-3.5 mb-6 flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-150">
+        <div className="no-print bg-white rounded-2xl border border-slate-200 shadow-xs p-3.5 mb-6 flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-150">
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setModoVistaFiltros('expandido')}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-blue-50 text-xs font-bold text-slate-800 border border-slate-200/80 transition-colors cursor-pointer"
             >
               <MapPin className="w-3.5 h-3.5 text-blue-600" />
-              <span>{BENCHMARK_REGIONES[regionActiva]?.corto}</span>
+              <span>{infoRegActiva.corto}</span>
             </button>
 
             <button
@@ -1290,7 +1850,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       {/* MODO 3: PANEL EXPANDIDO DE 2 COLUMNAS PARA EDICIÓN RÁPIDA                 */}
       {/* ========================================================================= */}
       {modoVistaFiltros === 'expandido' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-7 animate-in fade-in duration-200">
+        <div className="no-print grid grid-cols-1 lg:grid-cols-12 gap-5 mb-7 animate-in fade-in duration-200">
           
           <div className="lg:col-span-5 space-y-4">
             <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-xs">
@@ -1303,7 +1863,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </div>
 
               <div className="flex flex-wrap gap-1.5 mb-2.5">
-                {Object.entries(BENCHMARK_REGIONES).map(([idReg, meta]) => {
+                {Object.entries(benchmarksDinamicosPorRegion).map(([idReg, meta]) => {
                   const activa = regionActiva === idReg;
                   return (
                     <button
@@ -1524,14 +2084,40 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             <div>
               <h2 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-blue-600" />
-                Ranking en {BENCHMARK_REGIONES[regionActiva]?.corto} ({etiquetaGeneroCorto})
+                Ranking en {infoRegActiva.corto} ({etiquetaGeneroCorto})
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 Posición competitiva exacta (<strong>#Lugar / {totalFiltradas}</strong>) y opción para comparar hasta <strong>{MAX_COMPARAR} carreras Cara a Cara</strong>.
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <div className="no-print flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                onClick={compartirRankingLink}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+              >
+                {copiadoRanking ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" />}
+                {copiadoRanking ? '¡Link copiado!' : 'Compartir'}
+              </button>
+
+              <button
+                onClick={exportarRankingExcel}
+                title="Descargar Libro de Excel (.xlsx) con 2 Hojas, colores de podio y columnas separadas por prioridad"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs transition-all cursor-pointer"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                Excel (2 Hojas)
+              </button>
+
+              <button
+                onClick={exportarRankingCSV}
+                title="Descargar tabla en formato CSV limpio con columnas separadas por prioridad"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-blue-600" />
+                CSV
+              </button>
+
               <span className="text-xs font-bold text-slate-700 bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs">
                 Evaluando <strong>{totalFiltradas}</strong> carreras
               </span>
@@ -1557,7 +2143,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               <AlertCircle className="w-10 h-10 text-rose-400 mx-auto mb-3" />
               <h3 className="text-lg font-black text-rose-900">Ninguna carrera supera ese piso salarial en esta región</h3>
               <p className="text-xs text-rose-700 mt-1 max-w-md mx-auto">
-                En <strong>{BENCHMARK_REGIONES[regionActiva]?.nombre}</strong> ninguna carrera con muestra sólida para este perfil supera los <strong>{formatoMoneda(sueldoMinimo)}</strong>.
+                En <strong>{infoRegActiva.nombre}</strong> ninguna carrera con muestra sólida para este perfil supera los <strong>{formatoMoneda(sueldoMinimo)}</strong>.
               </p>
               <button
                 onClick={() => setModoVistaFiltros('expandido')}
@@ -1625,7 +2211,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   <Link
                     key={carrera.cve_carrera}
                     href={`/carrera/${carrera.cve_carrera}?region=${regionActiva}&genero=${queryGeneroParam}`}
-                    className={`block bg-white p-5 rounded-2xl border-2 transition-all group relative overflow-hidden ${borderClass}`}
+                    className={`print-avoid-break block bg-white p-5 rounded-2xl border-2 transition-all group relative overflow-hidden ${borderClass}`}
                   >
                     <div
                       className={`absolute bottom-0 left-0 h-1 opacity-25 ${
@@ -1761,7 +2347,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                           </p>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="no-print flex items-center gap-2">
                           <button
                             onClick={(e) => toggleCarreraComparar(e, carrera.cve_carrera)}
                             disabled={topeComparador}
@@ -1789,7 +2375,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               })}
 
               {carrerasRestantes > 0 && (
-                <div className="pt-5 text-center">
+                <div className="no-print pt-5 text-center">
                   <button
                     onClick={() => setMostrarTodas(prev => !prev)}
                     className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white border-2 border-slate-200 hover:border-blue-600 hover:text-blue-600 font-bold text-xs md:text-sm text-slate-700 shadow-2xs transition-all cursor-pointer"
@@ -1817,7 +2403,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       {/* BANDEJA FLOTANTE INFERIOR DEL COMPARADOR CARA A CARA (DOCK)               */}
       {/* ========================================================================= */}
       {carrerasEnVersus.length > 0 && (
-        <div className="fixed bottom-4 left-4 right-4 z-40 max-w-4xl mx-auto bg-slate-900/95 backdrop-blur-md text-white p-3.5 rounded-2xl shadow-2xl border border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in slide-in-from-bottom-4 duration-200">
+        <div className="no-print fixed bottom-4 left-4 right-4 z-40 max-w-4xl mx-auto bg-slate-900/95 backdrop-blur-md text-white p-3.5 rounded-2xl shadow-2xl border border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in slide-in-from-bottom-4 duration-200">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-black uppercase tracking-wider text-blue-400 mr-1 flex items-center gap-1.5">
               <Scale className="w-4 h-4" /> Versus ({carrerasEnVersus.length}/{MAX_COMPARAR}):
@@ -1862,23 +2448,57 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL EJECUTIVO DE COMPARACIÓN CARA A CARA (REDISEÑADO Y SIN COLISIONES)  */}
+      {/* MODAL EJECUTIVO DE COMPARACIÓN CARA A CARA (CON EXCEL, CSV Y PDF)         */}
       {/* ========================================================================= */}
       {modalVersusAbierto && carrerasEnVersus.length >= 2 && (
-        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+        <div className="versus-print-modal fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-5xl w-full max-h-[92vh] overflow-y-auto p-6 md:p-8 animate-in zoom-in-95 duration-200">
             
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
               <div>
                 <span className="text-xs font-black uppercase tracking-wider text-blue-600 block mb-0.5">
-                  Comparador Ejecutivo Cara a Cara · {BENCHMARK_REGIONES[regionActiva]?.corto} ({etiquetaGeneroCorto})
+                  Comparador Ejecutivo Cara a Cara · {infoRegActiva.corto} ({etiquetaGeneroCorto})
                 </span>
                 <h2 className="text-xl md:text-2xl font-black text-slate-900">
                   Contraste Directo de Indicadores y Retorno de Inversión
                 </h2>
               </div>
 
-              <div className="flex items-center gap-2 self-end sm:self-center">
+              <div className="no-print flex flex-wrap items-center gap-2 self-end lg:self-center">
+                <button
+                  onClick={compartirVersusLink}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
+                >
+                  {copiadoVersus ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" />}
+                  {copiadoVersus ? '¡Link copiado!' : 'Compartir Versus'}
+                </button>
+
+                <button
+                  onClick={exportarVersusExcel}
+                  title="Descargar Libro de Excel (.xlsx) con 2 Hojas, celdas ganadoras en verde y podio Oro/Plata/Bronce"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  Excel (2 Hojas)
+                </button>
+
+                <button
+                  onClick={exportarVersusCSV}
+                  title="Descargar comparativa en formato CSV limpio"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-blue-600" />
+                  CSV
+                </button>
+
+                <button
+                  onClick={descargarPDFVersusDirecto}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5 text-blue-600" />
+                  Descargar PDF
+                </button>
+
                 <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
                   <button
                     onClick={() => setVistaGraficoVersus('radar')}
@@ -1907,8 +2527,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </div>
             </div>
 
-            {/* BLOQUE VISUAL SUPERIOR: LEYENDA LATERAL COMPLETA (SIN TRUNCATE) + RADAR O BARRAS REGIONALES */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 my-6 items-center bg-slate-50 p-5 rounded-2xl border border-slate-200/80">
+            {/* BLOQUE VISUAL SUPERIOR */}
+            <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6 my-6 items-center bg-slate-50 p-5 rounded-2xl border border-slate-200/80">
               <div className="lg:col-span-5 space-y-3">
                 <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
                   {vistaGraficoVersus === 'radar' ? (
@@ -1925,7 +2545,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 </h3>
                 <p className="text-xs text-slate-500 leading-relaxed">
                   {vistaGraficoVersus === 'radar'
-                    ? `Las líneas de alto contraste y los vértices marcados muestran qué carrera envuelve a las demás en ${BENCHMARK_REGIONES[regionActiva]?.nombre}.`
+                    ? `Las líneas de alto contraste y los vértices marcados muestran qué carrera envuelve a las demás en ${infoRegActiva.nombre}.`
                     : 'Contrasta cuánto paga cada una de las carreras seleccionadas a lo largo de las 5 macro-regiones económicas del país.'}
                 </p>
 
@@ -2001,8 +2621,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </div>
             </div>
 
-            {/* TABLA COMPARATIVA CON CELDAS GANADORAS ILUMINADAS Y SIN BUG EN SALARIO */}
-            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+            {/* TABLA COMPARATIVA */}
+            <div className="print-avoid-break overflow-x-auto rounded-2xl border border-slate-200">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-900 text-white text-xs">
@@ -2155,7 +2775,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </table>
             </div>
 
-            <div className="mt-6 pt-4 border-t border-slate-200 flex justify-end">
+            <div className="no-print mt-6 pt-4 border-t border-slate-200 flex justify-end">
               <button
                 onClick={() => setModalVersusAbierto(false)}
                 className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"

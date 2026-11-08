@@ -344,6 +344,7 @@ async function RankingCargador() {
         perfiles[reg][sx] = {
           celdaValida,
           n_encuestados_reales: Number(satUsar.n_encuestados_reales ?? 0),
+          volumen_muestra_nacional: Number(satUsar.volumen_muestra_nacional ?? 0),
           sueldo_esperado: sueldoConsolidado,
           tendencia_salarial: tendenciaCelda.etiqueta,
           tendencia_codigo: tendenciaCelda.codigo,

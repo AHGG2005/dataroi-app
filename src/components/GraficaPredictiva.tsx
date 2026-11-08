@@ -124,6 +124,13 @@ export interface SueldoRegionalItem {
   sinMuestraRegional: boolean;
 }
 
+export interface PuntoAnualRealItem {
+  anio: number;
+  sueldoLic: number | null;
+  sueldoPrepa: number | null;
+  pea: number;
+}
+
 export interface ResumenMercadoRegion {
   sueldoActivo: number;
   sueldoNacionalBase: number;
@@ -140,6 +147,7 @@ export interface ResumenMercadoRegion {
   isStem: boolean;
   usandoFallbackNacional: boolean;
   comparativaRegiones: SueldoRegionalItem[];
+  serieAnualReal: PuntoAnualRealItem[];
 }
 
 function calcularSueldoRegionalBuhlmann(
@@ -194,7 +202,6 @@ function clasificarTendenciaReal21_26(puntosAnuales: { anio: number; sueldo: num
 
   const crecRealAcum = sueldoBase > 0 ? (sueldoRec - sueldoBase) / sueldoBase : 0;
 
-  // Evaluar pendiente en el tramo post-pandemia (2022–2026)
   const postPandemia = validos.filter(p => p.anio >= 2022);
   const loteEval = postPandemia.length >= 3 ? postPandemia : validos;
   const aniosEval = loteEval.map(p => p.anio);
@@ -452,6 +459,13 @@ export default function GraficaPredictiva({
         };
       });
 
+    const serieAnualReal: PuntoAnualRealItem[] = dataArray.map(d => ({
+      anio: Number(d.anio),
+      sueldoLic: d[etiquetaLinea] != null ? Number(d[etiquetaLinea]) : null,
+      sueldoPrepa: d['Base Preparatoria'] != null ? Number(d['Base Preparatoria']) : null,
+      pea: Math.round(Number(d._pob || 0))
+    }));
+
     const tendencia = clasificarTendenciaReal21_26(
       dataArray.map(d => ({ anio: d.anio, sueldo: d[etiquetaLinea] }))
     );
@@ -471,7 +485,6 @@ export default function GraficaPredictiva({
     const premioVsPrepaPct = itemRegionActiva?.premioPct || 0;
     const gananciaAnualExtra = (sueldoActivo - sueldoPrepaActivo) * 12;
 
-    // Promedio consolidado de 5 años (2022-2026) para PEA, Desempleados y Tasa de Desempleo
     const pobActiva = loteConsolidado.length > 0
       ? Math.round(loteConsolidado.reduce((acc, d) => acc + d._pob, 0) / loteConsolidado.length)
       : 0;
@@ -498,7 +511,8 @@ export default function GraficaPredictiva({
       tendenciaCodigo: tendencia.codigo,
       isStem: carreraEsStem,
       usandoFallbackNacional: fallbackNacional,
-      comparativaRegiones
+      comparativaRegiones,
+      serieAnualReal
     };
 
     return {
@@ -522,7 +536,8 @@ export default function GraficaPredictiva({
         pob: resumen.poblacionActiva,
         des: resumen.desempleadosActivos,
         sat: Math.round(resumen.saturacion),
-        reg: resumen.comparativaRegiones.map(r => r.sueldoCarrera)
+        reg: resumen.comparativaRegiones.map(r => r.sueldoCarrera),
+        ser: resumen.serieAnualReal.map(x => x.sueldoLic)
       });
       if (ultimaFirmaEmitidaRef.current !== firmaActual) {
         ultimaFirmaEmitidaRef.current = firmaActual;
