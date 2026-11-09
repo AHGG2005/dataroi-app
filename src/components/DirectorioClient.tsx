@@ -5,13 +5,12 @@ import Link from 'next/link';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
-  ValorCeldaExcel,
-  EstiloCeldaExcel
+  ValorCeldaExcel
 } from '@/lib/excelReportGenerator';
 import {
   Search, Microscope, ShieldCheck, ChevronRight, SlidersHorizontal,
   TrendingUp, TrendingDown, Minus, Activity, Download, Share2, Check,
-  ArrowUpDown, FlaskConical, Users, Sparkles, FileSpreadsheet
+  ArrowUpDown, FlaskConical, Users, Sparkles, FileSpreadsheet, Scale
 } from 'lucide-react';
 
 export type CarreraDirectorioItem = {
@@ -29,6 +28,8 @@ export type CarreraDirectorioItem = {
   formalidad_total_pct: number;
   desempleo_pct: number;
   saturacion_pct: number;
+  meritocracia_pct: number;
+  score_balance: number;
   pea_activa: number;
   n_encuestados: number;
   costo_capex: number;
@@ -39,7 +40,16 @@ export type CarreraDirectorioItem = {
   tendencia_codigo: 'crecimiento' | 'estable' | 'ajuste' | 'volatil';
 };
 
-type OrdenDirectorio = 'salario_desc' | 'salario_asc' | 'saturacion_asc' | 'ia_asc' | 'alfabetico';
+type OrdenDirectorio = 'balance_desc' | 'salario_desc' | 'salario_asc' | 'saturacion_asc' | 'ia_asc' | 'alfabetico';
+
+const ETIQUETAS_ORDEN_HUMANO: Record<OrdenDirectorio, string> = {
+  balance_desc: 'Mejor Balance General (6 Pilares)',
+  salario_desc: 'Mayor Salario Mensual ($ a $)',
+  salario_asc: 'Menor Salario Mensual ($ a $)',
+  saturacion_asc: 'Menor Saturación de Egresados ANUIES',
+  ia_asc: 'Mayor Blindaje Humano ante IA',
+  alfabetico: 'Orden Alfabético (A–Z)'
+};
 
 const formatoMoneda = (valor: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(valor || 0);
@@ -105,6 +115,10 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
     });
 
     return [...filtradas].sort((a, b) => {
+      if (orden === 'balance_desc') {
+        if (b.score_balance !== a.score_balance) return b.score_balance - a.score_balance;
+        return b.sueldo_mensual - a.sueldo_mensual;
+      }
       if (orden === 'salario_desc') return b.sueldo_mensual - a.sueldo_mensual;
       if (orden === 'salario_asc') return a.sueldo_mensual - b.sueldo_mensual;
       if (orden === 'saturacion_asc') return a.saturacion_pct - b.saturacion_pct;
@@ -113,12 +127,14 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
     });
   }, [busqueda, filtroStem, filtroRiesgo, orden, directorio]);
 
+  // Sin colores de Oro/Plata/Bronce en el Catálogo General (lectura limpia y neutra)
   const construirDatosExportacionCatalogo = () => {
     const cabeceras = [
-      'Posicion',
+      'Orden_Lista',
       'CVE_Carrera',
       'Nombre_Carrera',
       'Es_STEM',
+      'Score_Balance_6_Pilares_0_100',
       'Salario_Mensual_MXN',
       'Prima_vs_Prepa_Pct',
       'Tendencia_2021_2026',
@@ -130,6 +146,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       'Formalidad_Total_Pct',
       'Desempleo_Abierto_Pct',
       'Saturacion_ANUIES_Pct',
+      'Meritocracia_Pct',
       'Blindaje_IA_Pct',
       'Inversion_Equipo_CapEx_MXN',
       'ROI_Univ_Publica_Anios',
@@ -139,39 +156,32 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       'Muestra_Encuestados_INEGI'
     ];
 
-    const filas: ValorCeldaExcel[][] = carrerasFiltradas.map((c, idx) => {
-      const pos = idx + 1;
-      const estiloPodio: EstiloCeldaExcel | undefined =
-        pos === 1 ? 'gold' : pos === 2 ? 'silver' : pos === 3 ? 'bronze' : undefined;
-
-      const celda = (v: string | number): ValorCeldaExcel =>
-        estiloPodio ? { v, s: estiloPodio } : v;
-
-      return [
-        celda(pos),
-        celda(c.cve_carrera),
-        celda(c.nombre_carrera),
-        celda(c.is_stem ? 'Sí' : 'No'),
-        celda(c.sueldo_mensual),
-        celda(c.premio_prepa_pct),
-        celda(c.tendencia_etiqueta),
-        celda(c.sueldo_2022_2023),
-        celda(c.sueldo_2025_2026),
-        celda(c.cambio_real_pct),
-        celda(c.crecimiento_anual_pct),
-        celda(c.calidad_oit_pct),
-        celda(c.formalidad_total_pct),
-        celda(c.desempleo_pct),
-        celda(c.saturacion_pct),
-        celda(100 - c.riesgo_ia_score),
-        celda(c.costo_capex),
-        celda(c.roi_publica_anios),
-        celda(c.roi_privada_anios),
-        celda(c.sector_lider),
-        celda(c.pea_activa),
-        celda(c.n_encuestados)
-      ];
-    });
+    const filas: ValorCeldaExcel[][] = carrerasFiltradas.map((c, idx) => [
+      idx + 1,
+      c.cve_carrera,
+      { v: c.nombre_carrera, s: 'bold' },
+      c.is_stem ? 'Sí' : 'No',
+      { v: c.score_balance, s: 'bold' },
+      { v: c.sueldo_mensual, s: 'bold' },
+      c.premio_prepa_pct,
+      c.tendencia_etiqueta,
+      c.sueldo_2022_2023,
+      c.sueldo_2025_2026,
+      c.cambio_real_pct,
+      c.crecimiento_anual_pct,
+      c.calidad_oit_pct,
+      c.formalidad_total_pct,
+      c.desempleo_pct,
+      c.saturacion_pct,
+      c.meritocracia_pct,
+      100 - c.riesgo_ia_score,
+      c.costo_capex,
+      c.roi_publica_anios,
+      c.roi_privada_anios,
+      c.sector_lider,
+      c.pea_activa,
+      c.n_encuestados
+    ]);
 
     return { cabeceras, filas };
   };
@@ -190,11 +200,11 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
           nombre: '2_Contexto_Metodologico',
           cabeceras: ['Parametro_Global', 'Valor_Auditado', 'Detalle_Metodologico'],
           filas: [
-            ['Total de Carreras Exportadas', carrerasFiltradas.length, 'Filtradas según los criterios activos en el Directorio Nacional'],
-            ['Media Salarial Licenciatura Nacional', mediaSalarialCatalogo, 'MXN / mes (Pesos constantes de 2026 deflactados con INPC)'],
-            ['Salario Base Preparatoria Nacional', 10608, 'MXN / mes (Benchmark de referencia para cálculo de Prima y ROI)'],
-            ['Muestra Física Total Auditada', totalEncuestadosCatalogo, 'Profesionistas encuestados físicamente en microdatos ENOE INEGI'],
-            ['Criterio de Ordenamiento Aplicado', orden, 'Orden activo al momento de la exportación']
+            ['Total de Carreras Exportadas', `${carrerasFiltradas.length} licenciaturas`, 'Filtradas según los criterios activos en el Directorio Nacional'],
+            ['Criterio de Ordenamiento Aplicado', ETIQUETAS_ORDEN_HUMANO[orden], 'Orden activo en pantalla al momento de exportar el catálogo'],
+            ['Media Salarial Licenciatura Nacional', `${formatoMoneda(mediaSalarialCatalogo)} MXN / mes`, 'Pesos constantes de 2026 deflactados con el INPC'],
+            ['Salario Base Preparatoria Nacional', '$10,608 MXN / mes', 'Benchmark de referencia para el cálculo de Prima Salarial y ROI'],
+            ['Muestra Física Total Auditada', `${totalEncuestadosCatalogo.toLocaleString('es-MX')} encuestados`, 'Profesionistas encuestados físicamente en microdatos ENOE INEGI']
           ]
         }
       ]
@@ -285,7 +295,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
               <div className="flex flex-wrap items-center gap-1.5 mt-1">
                 <button
                   onClick={exportarCatalogoExcel}
-                  title="Descargar libro de Excel (.xlsx) con colores de podio y columnas auto-ajustadas"
+                  title="Descargar libro de Excel (.xlsx) con 2 hojas y ancho de columna auto-ajustado"
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] cursor-pointer"
                 >
                   <FileSpreadsheet className="w-3 h-3" /> Excel
@@ -361,6 +371,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
               className="bg-transparent border-none text-xs font-bold text-slate-800 focus:ring-0 cursor-pointer outline-none"
             >
               <option value="salario_desc">Mayor Salario ($ a $)</option>
+              <option value="balance_desc">Mejor Balance General (6 Pilares)</option>
               <option value="salario_asc">Menor Salario ($ a $)</option>
               <option value="saturacion_asc">Menor Saturación ANUIES</option>
               <option value="ia_asc">Mayor Blindaje ante IA</option>
@@ -441,19 +452,19 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                       <span className="text-slate-400 block text-[10px]">Saturación</span>
                       <strong className="text-slate-800 font-black">{carrera.saturacion_pct}%</strong>
                     </div>
-                    <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
-                      <span className="text-slate-400 block text-[10px]">Blindaje IA</span>
-                      <strong className="text-slate-800 font-black">{blindajeIA}%</strong>
+                    <div className="bg-blue-50/60 p-2 rounded-lg border border-blue-100">
+                      <span className="text-blue-600 font-bold block text-[10px]">Balance 6P</span>
+                      <strong className="text-blue-700 font-black">{carrera.score_balance} pts</strong>
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between text-xs font-bold text-slate-500 group-hover:text-blue-600">
                     <span className="flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5" />
-                      PEA: {carrera.pea_activa.toLocaleString('es-MX')} ocup.
+                      PEA: {carrera.pea_activa.toLocaleString('es-MX')} · IA: {blindajeIA}% blindaje
                     </span>
                     <span className="inline-flex items-center gap-1">
-                      Abrir dashboard <ChevronRight className="w-4 h-4" />
+                      Abrir <ChevronRight className="w-4 h-4" />
                     </span>
                   </div>
                 </div>

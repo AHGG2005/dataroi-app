@@ -75,23 +75,11 @@ function calcularSueldoPonderadoRobusto(filas: any[], sueldoRefNacional = 0): nu
   return sumaProducto / sumaPob;
 }
 
+// Sincronizado al 100% con GraficaPredictiva.tsx: promedia directamente el cierre 2025-2026 ponderado por PEA
 function calcularSueldoNacionalConsolidado(filasRealesNacSx: any[]): number {
-  const base22_24 = calcularSueldoPonderadoRobusto(
-    filasRealesNacSx.filter(r => r.anio >= 2022 && r.anio <= 2024)
-  );
-  const filas25_26 = filasRealesNacSx.filter(r => r.anio === 2025 || r.anio === 2026);
-  if (filas25_26.length === 0) return Math.round(base22_24);
-
-  const filasSuavizadas = filas25_26.map(r => {
-    let s = Number(r.sueldo_promedio_mensual || 0);
-    if (base22_24 > 0 && s > 0) {
-      if (s > base22_24 * 1.12) s = Math.round(base22_24 * 1.10);
-      if (s < base22_24 * 0.88) s = Math.round(base22_24 * 0.90);
-    }
-    return { ...r, sueldo_promedio_mensual: s };
-  });
-
-  return Math.round(calcularSueldoPonderadoRobusto(filasSuavizadas));
+  const filas25_26 = filasRealesNacSx.filter(r => (r.anio === 2025 || r.anio === 2026) && Number(r.sueldo_promedio_mensual) > 0);
+  const lote = filas25_26.length > 0 ? filas25_26 : filasRealesNacSx;
+  return Math.round(calcularSueldoPonderadoRobusto(lote));
 }
 
 function calcularSueldoRegionalBuhlmann(
@@ -113,7 +101,6 @@ function calcularSueldoRegionalBuhlmann(
   return Math.round(z * obsAcotado + (1.0 - z) * anclaParidad);
 }
 
-// Evalúa la pendiente sobre el periodo post-pandemia (2022–2026) para no distorsionar con el rebote de 2021
 function clasificarTendenciaReal21_26(filasRealesValidas: any[]) {
   const porAnioMap: Record<number, { prod: number; peso: number }> = {};
   filasRealesValidas.forEach(r => {
@@ -156,7 +143,6 @@ function clasificarTendenciaReal21_26(filasRealesValidas: any[]) {
 
   const crecRealAcum = sueldoBase > 0 ? (sueldoRec - sueldoBase) / sueldoBase : 0;
 
-  // Pendiente lineal evaluada en el tramo post-pandemia (2022-2026)
   const aniosPost = anios.filter(a => a >= 2022);
   const aniosEval = aniosPost.length >= 3 ? aniosPost : anios;
   const sueldosEval = aniosEval.map(a => porAnioMap[a].prod / porAnioMap[a].peso);
@@ -320,13 +306,14 @@ async function RankingCargador() {
         const refNacSx = sx === 1 ? (sueldoNacH || sueldoNacTotal) : sx === 2 ? (sueldoNacM || sueldoNacTotal) : sueldoNacTotal;
 
         const sueldoObsCrudo = calcularSueldoPonderadoRobusto(
-          filas25_26.length > 0 ? filas25_26 : loteEmpleo,
-          reg === 'nacional' ? 0 : refNacSx
+          filas25_26.length > 0 ? filas25_26 : loteEmpleo
         );
 
         const sueldoConsolidado = reg === 'nacional'
           ? Math.round(sueldoObsCrudo || refNacSx)
-          : calcularSueldoRegionalBuhlmann(sueldoObsCrudo, refNacSx, reg, nKishCelda);
+          : (sueldoObsCrudo > 0
+              ? (nKishCelda > 0 ? calcularSueldoRegionalBuhlmann(sueldoObsCrudo, refNacSx, reg, nKishCelda) : Math.round(sueldoObsCrudo))
+              : refNacSx);
 
         const pobActivaConsolidada = loteEmpleo.length > 0
           ? Math.round(loteEmpleo.reduce((acc, r) => acc + Number(r.poblacion_activa_total || 0), 0) / loteEmpleo.length)

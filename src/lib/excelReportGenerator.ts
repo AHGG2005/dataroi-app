@@ -1,10 +1,11 @@
 // src/lib/excelReportGenerator.ts
-// Motor Nativo OpenXML (.xlsx Multi-Hoja con Estilos y Auto-Ancho) + Exportador CSV RFC 4180
+// Motor Nativo OpenXML (.xlsx Multi-Hoja con Estilos, Semáforo y Alineación Uniforme) + Exportador CSV RFC 4180
 
 export type EstiloCeldaExcel =
   | 'default'
   | 'header'
   | 'winner'
+  | 'warning'
   | 'gold'
   | 'silver'
   | 'bronze'
@@ -71,7 +72,8 @@ const STYLE_INDEX_MAP: Record<EstiloCeldaExcel, number> = {
   bronze: 5,
   section: 6,
   zebra: 7,
-  bold: 8
+  bold: 8,
+  warning: 9
 };
 
 const AMP = String.fromCharCode(38);
@@ -100,7 +102,7 @@ function colIndexToLetter(colIdx: number): string {
 function construirStylesXml(): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="7">
+  <fonts count="8">
     <font><sz val="10"/><color rgb="FF0F172A"/><name val="Calibri"/></font>
     <font><b/><sz val="10.5"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF065F46"/><name val="Calibri"/></font>
@@ -108,8 +110,9 @@ function construirStylesXml(): string {
     <font><b/><sz val="10"/><color rgb="FF1E293B"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF9A3412"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF1E3A8A"/><name val="Calibri"/></font>
+    <font><b/><sz val="10"/><color rgb="FF9F1239"/><name val="Calibri"/></font>
   </fonts>
-  <fills count="9">
+  <fills count="10">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FF0F172A"/></patternFill></fill>
@@ -119,6 +122,7 @@ function construirStylesXml(): string {
     <fill><patternFill patternType="solid"><fgColor rgb="FFFFEDD5"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FFDBEAFE"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FFF8FAFC"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFFE4E6"/></patternFill></fill>
   </fills>
   <borders count="2">
     <border><left/><right/><top/><bottom/><diagonal/></border>
@@ -133,16 +137,17 @@ function construirStylesXml(): string {
   <cellStyleXfs count="1">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
   </cellStyleXfs>
-  <cellXfs count="9">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
-    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-    <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-    <xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-    <xf numFmtId="0" fontId="4" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-    <xf numFmtId="0" fontId="5" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-    <xf numFmtId="0" fontId="6" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-    <xf numFmtId="0" fontId="0" fillId="8" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-    <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
+  <cellXfs count="10">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="5" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="6" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="8" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="7" fillId="9" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
   </cellXfs>
 </styleSheet>`;
 }
@@ -153,7 +158,7 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
     ...hoja.filas.map(f => f.length)
   );
 
-  const anchos = new Array(numCols).fill(12);
+  const anchos = new Array(numCols).fill(13);
   hoja.cabeceras.forEach((cab, cIdx) => {
     anchos[cIdx] = Math.max(anchos[cIdx], String(cab || '').length + 5);
   });
@@ -163,7 +168,7 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
       const rawVal = celda && typeof celda === 'object' && 'v' in celda ? celda.v : celda;
       const len = String(rawVal ?? '').length;
       if (len + 4 > anchos[cIdx]) {
-        anchos[cIdx] = Math.min(56, len + 4);
+        anchos[cIdx] = Math.min(58, len + 4);
       }
     });
   });
@@ -180,7 +185,7 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
       return `<c r="${ref}" t="inlineStr" s="1"><is><t>${escapeXml(cab)}</t></is></c>`;
     })
     .join('');
-  rowsXml.push(`<row r="1" ht="22" customHeight="1">${celdasHeader}</row>`);
+  rowsXml.push(`<row r="1" ht="23" customHeight="1">${celdasHeader}</row>`);
 
   hoja.filas.forEach((fila, rIdx) => {
     const numFila = rIdx + 2;
@@ -201,7 +206,7 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
       })
       .join('');
 
-    rowsXml.push(`<row r="${numFila}" ht="19" customHeight="1">${celdasFila}</row>`);
+    rowsXml.push(`<row r="${numFila}" ht="19.5" customHeight="1">${celdasFila}</row>`);
   });
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

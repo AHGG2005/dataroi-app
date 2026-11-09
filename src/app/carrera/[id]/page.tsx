@@ -8,7 +8,8 @@ import { descargarReporteCarreraPDF } from '@/lib/pdfReportGenerator';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
-  ValorCeldaExcel
+  ValorCeldaExcel,
+  EstiloCeldaExcel
 } from '@/lib/excelReportGenerator';
 import GraficaPredictiva, {
   BENCHMARK_PREPA,
@@ -1224,67 +1225,127 @@ function CarreraPerfilContenido() {
     setTimeout(() => setEnlaceCopiado(false), 2200);
   };
 
+  // Construcción de las 4 Hojas del Excel con #Lugar en Región, Semáforo de 3 Niveles y Líderes por Columna en Hoja 3
   const construirHojasFichaCarrera = () => {
+    const cohortRegSx = todosSatelitesGlobal.filter(
+      r => String(r.region || 'nacional').toLowerCase() === regionActiva && Number(r.sexo ?? 0) === codigoSexo
+    );
+    const loteRanking = cohortRegSx.length > 5
+      ? cohortRegSx
+      : todosSatelitesGlobal.filter(r => String(r.region || 'nacional').toLowerCase() === 'nacional' && Number(r.sexo ?? 0) === 0);
+
+    const calcularLugarEnRegion = (extractor: (row: any) => number, valorActual: number, mejorAlto: boolean): string => {
+      if (loteRanking.length === 0) return '-';
+      const valores = loteRanking.map(extractor).filter(v => Number.isFinite(v));
+      if (valores.length === 0) return '-';
+      const mejores = valores.filter(v => (mejorAlto ? v > valorActual + 0.001 : v < valorActual - 0.001)).length;
+      return `#${mejores + 1} de ${valores.length}`;
+    };
+
     const filaInd = (
       cat: string,
       ind: string,
       valCar: number | string,
       valMed: number | string,
       unidad: string,
-      mejorAlto: boolean | null = null
+      mejorAlto: boolean | null = null,
+      umbralSignificativo = 3.0,
+      lugarReg = '-'
     ): ValorCeldaExcel[] => {
       if (typeof valCar === 'number' && typeof valMed === 'number' && mejorAlto !== null) {
         const diff = Number((valCar - valMed).toFixed(2));
-        const gana = mejorAlto ? diff >= 0 : diff <= 0;
+        const diffFavorable = mejorAlto ? diff : -diff;
         const signo = diff > 0 ? `+${diff}` : `${diff}`;
+
+        let estiloValor: EstiloCeldaExcel = 'bold';
+        let veredictoTxt = '= En Rango Promedio Regional';
+
+        if (diffFavorable >= umbralSignificativo) {
+          estiloValor = 'winner';
+          veredictoTxt = '★ Ventaja Sólida vs. Media';
+        } else if (diffFavorable <= -umbralSignificativo) {
+          estiloValor = 'warning';
+          veredictoTxt = '▲ Rezago / Mayor Fricción';
+        }
+
         return [
           cat,
           ind,
-          { v: valCar, s: gana ? 'winner' : 'bold' },
+          { v: valCar, s: estiloValor },
           valMed,
-          `${signo} (${gana ? 'Favorable vs. Media' : 'Por debajo / Mayor fricción'})`,
+          signo,
+          lugarReg,
+          { v: veredictoTxt, s: estiloValor === 'bold' ? 'default' : estiloValor },
           unidad
         ];
       }
-      return [cat, ind, { v: valCar, s: 'bold' }, valMed, '-', unidad];
+      return [cat, ind, { v: String(valCar), s: 'bold' }, String(valMed), '-', lugarReg, 'Referencia Contextual', unidad];
     };
+
+    const colHrsCampo = codigoSexo === 1 ? 'hrs_doble_jornada_hombres' : codigoSexo === 2 ? 'hrs_doble_jornada_mujeres' : 'hrs_doble_jornada_mujeres';
 
     const filasHoja1: ValorCeldaExcel[][] = [
       filaInd('1. Identificación', 'Clave CMPE INEGI', cve_carrera, '-', carreraInfo.nombre_carrera),
       filaInd('1. Identificación', 'Macro-Región y Perfil Evaluado', REGIONES_INFO[regionActiva]?.nombre || regionActiva, '-', etiquetaGeneroActual),
-      filaInd('1. Identificación', 'Muestra Certificada INEGI', nEncuestadosActivos, '-', 'Encuestados físicos reales'),
-      filaInd('2. Salario y ROI', 'Salario Mensual Consolidado', sueldoParaRadar, benchReg.sueldo_lic_promedio, 'MXN / mes', true),
-      filaInd('2. Salario y ROI', 'Salario Base Preparatoria Regional', sueldoPrepaParaROI, sueldoPrepaParaROI, 'MXN / mes'),
-      filaInd('2. Salario y ROI', 'Prima Salarial vs. Preparatoria', statsMercado?.premioVsPrepaPct ?? 0, '-', '% sobre bachillerato'),
+      filaInd('1. Identificación', 'Muestra Certificada INEGI', `${nEncuestadosActivos} encuestados`, '-', 'Encuestados físicos reales'),
+      filaInd('2. Salario y ROI', 'Salario Mensual Consolidado', sueldoParaRadar, benchReg.sueldo_lic_promedio, 'MXN / mes', true, 800, '-'),
+      filaInd('2. Salario y ROI', 'Salario Base Preparatoria Regional', `${formatoMoneda(sueldoPrepaParaROI)} / mes`, `${formatoMoneda(sueldoPrepaParaROI)} / mes`, 'Referencia bachillerato'),
+      filaInd('2. Salario y ROI', 'Prima Salarial vs. Preparatoria', `${statsMercado?.premioVsPrepaPct ?? 0}%`, '-', '% sobre bachillerato'),
       filaInd('2. Salario y ROI', 'Tendencia Salarial Real (2021–2026)', statsMercado?.tendenciaEtiqueta || 'Estable', '-', 'Pesos constantes 2026'),
-      filaInd('2. Salario y ROI', 'Inversión Total Estimada (Carrera + Equipo)', inversionTotalROI, '-', `MXN (${tipoUniROI})`),
-      filaInd('2. Salario y ROI', 'Tiempo de Recuperación (ROI)', aniosRetornoROI ?? 'No amortizable', '-', semaforoROI.etiqueta),
-      filaInd('2. Salario y ROI', 'Ganancia Neta a 10 Años vs. Prepa', gananciaNeta10Anios, '-', 'MXN acumulados'),
-      filaInd('3. Calidad y Mercado', 'Empleo de Calidad (Estándar OIT)', tasaEmpleoCalidadPct, mediaCalidadOITContexto, '% de ocupados', true),
-      filaInd('3. Calidad y Mercado', 'Formalidad Laboral Total', tasaFormalidadPct, scoreFormalidadMedia, '% de ocupados', true),
-      filaInd('3. Calidad y Mercado', 'Tasa de Desempleo Abierto', Number(desempleoSeguro.toFixed(1)), 3.5, '% de la PEA', false),
-      filaInd('3. Calidad y Mercado', 'Índice de Saturación ANUIES', Number(saturacionSegura.toFixed(0)), 100, `% (${diagSat.texto})`, false),
-      filaInd('3. Calidad y Mercado', 'PEA Activa Estimada', peaTotal, '-', 'Personas'),
-      filaInd('4. Ecosistema Empleador', 'PYME (Empresas 6–100 empleados)', pPyme, benchContextual.pct_pyme, '% de ocupados', true),
-      filaInd('4. Ecosistema Empleador', 'Microempresa y Práctica Independiente', pMicro, benchContextual.pct_micro, '% de ocupados', true),
-      filaInd('4. Ecosistema Empleador', 'Gran Corporativo y Transnacional', pCorp, benchContextual.pct_corp, '% de ocupados', true),
-      filaInd('4. Ecosistema Empleador', 'Administración Pública y Gobierno', pGob, benchContextual.pct_gobierno, '% de ocupados', true),
-      filaInd('4. Ecosistema Empleador', 'Academia, Investigación y ONGs', pAcademiaOtros, '-', '% de ocupados'),
-      filaInd('5. Escalera de Prestaciones', 'Contrato Escrito Estable', pContrato, benchContextual.pct_contrato, '% de cobertura', true),
-      filaInd('5. Escalera de Prestaciones', 'Aguinaldo de Ley', pAguinaldo, benchContextual.pct_aguinaldo, '% de cobertura', true),
-      filaInd('5. Escalera de Prestaciones', 'Fondo de Retiro (AFORE)', pAfore, benchContextual.pct_afore, '% de cobertura', true),
-      filaInd('5. Escalera de Prestaciones', 'Protección Materna / Paterna', Number(sateliteActual?.pct_materno || 0), benchContextual.pct_materno, '% de cobertura', true),
-      filaInd('5. Escalera de Prestaciones', 'Afiliación Sindical / Gremial', pSindicato, benchContextual.pct_sindicato, '% de cobertura', true),
-      filaInd('5. Escalera de Prestaciones', 'Seguro Médico Privado (SGMM)', pSgmm, benchContextual.pct_sgmm, '% de cobertura', true),
-      filaInd('6. Barreras y Modalidad', 'Índice de Privilegio (Estrato Origen 1–4)', social.estrato, benchContextual.indice_privilegio, 'Escala INEGI 1 a 4', false),
-      filaInd('6. Barreras y Modalidad', 'Ingreso por Redes Familiares (Nepotismo)', social.nepotismo, benchContextual.pct_nepotismo, '% por contactos', false),
-      filaInd('6. Barreras y Modalidad', 'Índice de Ascensor Meritocrático', social.scoreMovilidad, 58.0, `% (${social.cuadrante.nombre})`, true),
-      filaInd('6. Barreras y Modalidad', 'Pluriempleo (Segundo Trabajo)', pPluriempleo, benchContextual.pct_pluriempleo, '% con 2+ empleos', false),
-      filaInd('6. Barreras y Modalidad', 'Migración Forzada (Desarraigo)', pDesarraigo, benchContextual.pct_desarraigo, '% que emigró de estado', false),
-      filaInd('6. Barreras y Modalidad', 'Trabajo Doméstico No Remunerado', hrsHogarActiva, benchContextual.hrs_hogar, 'Horas / semana', false),
-      filaInd('6. Barreras y Modalidad', 'Trabajo Remoto (Home Office)', pHomeOffice, benchContextual.pct_home_office, '% remoto', true),
-      filaInd('6. Barreras y Modalidad', 'Jornada de Medio Tiempo (<30h)', pMedioTiempo, benchContextual.pct_medio_tiempo, '% medio tiempo'),
-      filaInd('6. Barreras y Modalidad', 'Riesgo de Automatización IA', riesgoIA, 40, '% de exposición', false)
+      filaInd('2. Salario y ROI', 'Inversión Total Estimada (Carrera + Equipo)', formatoMoneda(inversionTotalROI), '-', `Modalidad: ${tipoUniROI}`),
+      filaInd('2. Salario y ROI', 'Tiempo de Recuperación (ROI)', formatearAniosROI(aniosRetornoROI), '-', semaforoROI.etiqueta),
+      filaInd('2. Salario y ROI', 'Ganancia Neta a 10 Años vs. Prepa', formatoMoneda(gananciaNeta10Anios), '-', 'MXN acumulados'),
+      filaInd(
+        '3. Calidad y Mercado',
+        'Empleo de Calidad (Estándar OIT)',
+        tasaEmpleoCalidadPct,
+        mediaCalidadOITContexto,
+        '% de ocupados',
+        true,
+        3.0,
+        calcularLugarEnRegion(
+          r => ((Math.min(Number(r.pct_contrato || 0), Number(r.pct_afore || 0)) * 0.70 + Number(r.pct_contrato || 0) * 0.30) * (1 - Number(r.pct_pluriempleo || 0) / 200)),
+          tasaEmpleoCalidadPct,
+          true
+        )
+      ),
+      filaInd(
+        '3. Calidad y Mercado',
+        'Formalidad Laboral Total',
+        tasaFormalidadPct,
+        scoreFormalidadMedia,
+        '% de ocupados',
+        true,
+        3.0,
+        calcularLugarEnRegion(
+          r => Number(r.pct_contrato || 0) * 0.45 + Number(r.pct_aguinaldo || 0) * 0.30 + Number(r.pct_afore || 0) * 0.25,
+          tasaFormalidadPct,
+          true
+        )
+      ),
+      filaInd('3. Calidad y Mercado', 'Tasa de Desempleo Abierto', Number(desempleoSeguro.toFixed(1)), 3.5, '% de la PEA', false, 1.2, '-'),
+      filaInd('3. Calidad y Mercado', 'Índice de Saturación ANUIES', Number(saturacionSegura.toFixed(0)), 100, `% (${diagSat.texto})`, false, 12, '-'),
+      filaInd('3. Calidad y Mercado', 'PEA Activa Estimada', `${peaTotal.toLocaleString('es-MX')} profesionistas`, '-', 'Volumen laboral activo'),
+      filaInd('4. Ecosistema Empleador', 'PYME (Empresas 6–100 empleados)', pPyme, benchContextual.pct_pyme, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_pyme || 0), pPyme, true)),
+      filaInd('4. Ecosistema Empleador', 'Microempresa y Práctica Independiente', pMicro, benchContextual.pct_micro, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_micro || 0), pMicro, true)),
+      filaInd('4. Ecosistema Empleador', 'Gran Corporativo y Transnacional', pCorp, benchContextual.pct_corp, '% de ocupados', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_corp || 0), pCorp, true)),
+      filaInd('4. Ecosistema Empleador', 'Administración Pública y Gobierno', pGob, benchContextual.pct_gobierno, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_gobierno || 0), pGob, true)),
+      filaInd('4. Ecosistema Empleador', 'Academia, Investigación y ONGs', `${pAcademiaOtros}%`, '-', '% de ocupados'),
+      filaInd('5. Escalera de Prestaciones', 'Contrato Escrito Estable', pContrato, benchContextual.pct_contrato, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_contrato || 0), pContrato, true)),
+      filaInd('5. Escalera de Prestaciones', 'Aguinaldo de Ley', pAguinaldo, benchContextual.pct_aguinaldo, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_aguinaldo || 0), pAguinaldo, true)),
+      filaInd('5. Escalera de Prestaciones', 'Fondo de Retiro (AFORE)', pAfore, benchContextual.pct_afore, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_afore || 0), pAfore, true)),
+      filaInd('5. Escalera de Prestaciones', 'Protección Materna / Paterna', Number(sateliteActual?.pct_materno || 0), benchContextual.pct_materno, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_materno || 0), Number(sateliteActual?.pct_materno || 0), true)),
+      filaInd('5. Escalera de Prestaciones', 'Afiliación Sindical / Gremial', pSindicato, benchContextual.pct_sindicato, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_sindicato || 0), pSindicato, true)),
+      filaInd('5. Escalera de Prestaciones', 'Seguro Médico Privado (SGMM)', pSgmm, benchContextual.pct_sgmm, '% de cobertura', true, 2.0, calcularLugarEnRegion(r => Number(r.pct_sgmm || 0), pSgmm, true)),
+      filaInd('6. Barreras y Modalidad', 'Índice de Privilegio (Estrato Origen 1–4)', social.estrato, benchContextual.indice_privilegio, 'Escala INEGI 1 a 4', false, 0.12, calcularLugarEnRegion(r => Number(r.indice_privilegio || 2.8), social.estrato, false)),
+      filaInd('6. Barreras y Modalidad', 'Ingreso por Redes Familiares (Nepotismo)', social.nepotismo, benchContextual.pct_nepotismo, '% por contactos', false, 3.0, calcularLugarEnRegion(r => Number(r.pct_nepotismo || 37), social.nepotismo, false)),
+      filaInd('6. Barreras y Modalidad', 'Índice de Ascensor Meritocrático', social.scoreMovilidad, 58.0, `% (${social.cuadrante.nombre})`, true, 2.5, '-'),
+      filaInd('6. Barreras y Modalidad', 'Pluriempleo (Segundo Trabajo)', pPluriempleo, benchContextual.pct_pluriempleo, '% con 2+ empleos', false, 2.0, calcularLugarEnRegion(r => Number(r.pct_pluriempleo || 5), pPluriempleo, false)),
+      filaInd('6. Barreras y Modalidad', 'Migración Forzada (Desarraigo)', pDesarraigo, benchContextual.pct_desarraigo, '% que emigró de estado', false, 1.5, calcularLugarEnRegion(r => Number(r.pct_desarraigo || 2.5), pDesarraigo, false)),
+      filaInd('6. Barreras y Modalidad', 'Trabajo Doméstico No Remunerado', hrsHogarActiva, benchContextual.hrs_hogar, 'Horas / semana', false, 1.8, calcularLugarEnRegion(r => Number(r[colHrsCampo] || 15), hrsHogarActiva, false)),
+      filaInd('6. Barreras y Modalidad', 'Trabajo Remoto (Home Office)', pHomeOffice, benchContextual.pct_home_office, '% remoto', true, 2.0, calcularLugarEnRegion(r => Number(r.pct_home_office || 0), pHomeOffice, true)),
+      filaInd('6. Barreras y Modalidad', 'Jornada de Medio Tiempo (<30h)', pMedioTiempo, benchContextual.pct_medio_tiempo, '% medio tiempo', null, 3.0, calcularLugarEnRegion(r => Number(r.pct_medio_tiempo || 14), pMedioTiempo, false)),
+      filaInd('6. Barreras y Modalidad', 'Riesgo de Automatización IA', riesgoIA, 40, '% de exposición', false, 8.0, calcularLugarEnRegion(r => Number(r.riesgo_ia_score || 40), riesgoIA, false))
     ];
 
     const serieReal = obtenerSerieAnualConfiable();
@@ -1302,18 +1363,33 @@ function CarreraPerfilContenido() {
       ];
     });
 
+    // Hoja 3: Iluminar en Verde (winner) al verdadero líder regional de cada una de las 4 métricas de la carrera
+    const dispRegs = filasComparativaRegional.filter(r => r.celdaDisponible);
+    const maxSalReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.sueldoCarrera)) : -1;
+    const maxPrimaReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.premioPct)) : -999;
+    const maxFormReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.formalidadPct)) : -1;
+    const maxDifFormReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.diffFormalidadPts)) : -999;
+
     const filasHoja3: ValorCeldaExcel[][] = filasComparativaRegional.map(r => {
       const esAct = r.region === regionActiva;
       return [
-        { v: r.nombreCorto, s: esAct ? 'section' : 'bold' },
+        { v: esAct ? `★ ${r.nombreCorto} (Activa)` : r.nombreCorto, s: esAct ? 'section' : 'bold' },
         r.estados,
         r.celdaDisponible ? 'Muestra Certificada' : 'Muestra Insuficiente',
-        r.celdaDisponible ? { v: r.sueldoCarrera, s: esAct ? 'winner' : 'bold' } : 'Sin muestra',
+        r.celdaDisponible
+          ? { v: r.sueldoCarrera, s: r.sueldoCarrera === maxSalReg ? 'winner' : 'bold' }
+          : 'Sin muestra',
         r.sueldoPrepa,
-        r.celdaDisponible ? r.premioPct : 'N/D',
-        r.celdaDisponible ? r.formalidadPct : 'Sin muestra',
+        r.celdaDisponible
+          ? { v: r.premioPct, s: r.premioPct === maxPrimaReg ? 'winner' : 'default' }
+          : 'N/D',
+        r.celdaDisponible
+          ? { v: r.formalidadPct, s: r.formalidadPct === maxFormReg ? 'winner' : 'bold' }
+          : 'Sin muestra',
         r.formalidadPrepaPct,
-        r.celdaDisponible ? r.diffFormalidadPts : 'N/D'
+        r.celdaDisponible
+          ? { v: r.diffFormalidadPts, s: r.diffFormalidadPts === maxDifFormReg ? 'winner' : 'default' }
+          : 'N/D'
       ];
     });
 
@@ -1324,7 +1400,7 @@ function CarreraPerfilContenido() {
         pro
       ]),
       ...diagnosticoEjecutivo.topContras.map((con, idx) => [
-        { v: `Riesgo o Fricción #${idx + 1}`, s: 'gold' as const },
+        { v: `Riesgo o Fricción #${idx + 1}`, s: 'warning' as const },
         'Factor de Riesgo a Considerar',
         con
       ])
@@ -1340,7 +1416,16 @@ function CarreraPerfilContenido() {
       [
         {
           nombre: '1_Indicadores_y_ROI',
-          cabeceras: ['Categoria', 'Indicador_Auditado', 'Valor_Carrera', 'Media_Contextual_Region', 'Diferencial_vs_Media', 'Unidad_o_Detalle'],
+          cabeceras: [
+            'Categoria',
+            'Indicador_Auditado',
+            'Valor_Carrera',
+            'Media_Contextual_Region',
+            'Diferencial_vs_Media',
+            'Lugar_en_Region',
+            'Veredicto_Estadistico',
+            'Unidad_o_Detalle'
+          ],
           filas: filasHoja1
         },
         {
@@ -1366,7 +1451,16 @@ function CarreraPerfilContenido() {
     const { filasHoja1 } = construirHojasFichaCarrera();
     descargarCSVEstilizado(
       `DataROI_Ficha_${cve_carrera}_${regionActiva}_${modoGenero}.csv`,
-      ['Categoria', 'Indicador_Auditado', 'Valor_Carrera', 'Media_Contextual_Region', 'Diferencial_vs_Media', 'Unidad_o_Detalle'],
+      [
+        'Categoria',
+        'Indicador_Auditado',
+        'Valor_Carrera',
+        'Media_Contextual_Region',
+        'Diferencial_vs_Media',
+        'Lugar_en_Region',
+        'Veredicto_Estadistico',
+        'Unidad_o_Detalle'
+      ],
       filasHoja1
     );
   };
@@ -1469,7 +1563,7 @@ function CarreraPerfilContenido() {
 
           <button
             onClick={exportarFichaExcel}
-            title="Descargar Libro de Excel (.xlsx) con 4 Hojas separadas, colores y auto-ancho"
+            title="Descargar Libro de Excel (.xlsx) con 4 Hojas, #Lugar en Región y Semáforo Estadístico"
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs transition-all cursor-pointer"
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />

@@ -463,16 +463,18 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     yCon += 2.5;
   });
 
-  // FILA 3: Curva Salarial Real (2021-2026) + Radar con Relleno Translúcido
+  // FILA 3: Curva Salarial Real (2021-2026) con Padding Interno para separar 2021 del Eje Y
   p1.roundedRect(24, 294, 470, 278, 10, C_WHITE, C_BORDER);
   p1.text('EVOLUCIÓN SALARIAL REAL VS. PREPARATORIA (2021–2026)', 36, 304, 9.5, true, C_DARK);
   p1.text(`Tendencia Real: ${d.tendenciaEtiqueta} (Pesos constantes de 2026 deflactados con INPC)`, 36, 317, 7.6, false, C_SLATE);
 
-  const chartLeft = 78;
-  const chartRight = 468;
+  const gridLeft = 64;
+  const gridRight = 476;
+  const plotLeft = 86;
+  const plotRight = 462;
   const chartTop = 342;
   const chartBottom = 528;
-  const chartW = chartRight - chartLeft;
+  const plotW = plotRight - plotLeft;
   const chartH = chartBottom - chartTop;
 
   const valsCurva = d.serieAnual.flatMap(s => [s.sueldoLic || 0, s.sueldoPrepa || 0]);
@@ -480,15 +482,15 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
 
   for (let v = 0; v <= maxCurva; v += 5000) {
     const yTick = chartBottom - (v / maxCurva) * chartH;
-    p1.line(chartLeft - 8, yTick, chartRight, yTick, C_BORDER, 0.5, true);
-    p1.text(`$${Math.round(v / 1000)}k`, chartLeft - 14, yTick - 3, 7.2, false, C_SLATE, 'right');
+    p1.line(gridLeft, yTick, gridRight, yTick, C_BORDER, 0.5, true);
+    p1.text(`$${Math.round(v / 1000)}k`, gridLeft - 6, yTick - 3, 7.2, false, C_SLATE, 'right');
   }
 
   const ptsLic: { x: number; y: number; val: number; anio: number }[] = [];
   const ptsPrepa: { x: number; y: number; val: number; anio: number }[] = [];
 
   d.serieAnual.forEach((item, idx) => {
-    const xPt = chartLeft + (idx / Math.max(1, d.serieAnual.length - 1)) * chartW;
+    const xPt = plotLeft + (idx / Math.max(1, d.serieAnual.length - 1)) * plotW;
     p1.text(String(item.anio), xPt, chartBottom + 8, 7.5, true, C_SLATE, 'center');
     if (item.sueldoLic && item.sueldoLic > 0) {
       const yPt = chartBottom - (item.sueldoLic / maxCurva) * chartH;
@@ -581,7 +583,6 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
   p2.text(`Región Activa: ${d.regionNombre} (${d.perfilEtiqueta})`, 36, 40, 8, false, [0.75, 0.82, 0.92]);
   p2.text('PÁGINA 2 / 2', 804, 26, 8.5, true, [0.58, 0.77, 0.99], 'right');
 
-  // BLOQUE SUPERIOR IZQ P2: Las 5 Macro-Regiones con Termómetros Verticales Dobles
   p2.roundedRect(24, 64, 400, 226, 10, C_WHITE, C_BORDER);
   p2.text('COMPARATIVA POR MACRO-REGIÓN (SALARIO Y FORMALIDAD)', 36, 74, 9.2, true, C_DARK);
   p2.text('Cada región muestra su termómetro de Salario (izq.) y Formalidad (der.) con marca negra de Prepa.', 36, 86, 7.1, false, C_SLATE);
@@ -609,7 +610,6 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       const trackH = 104;
       const trackBottom = trackTop + trackH;
 
-      // Termómetro 1 (Izquierda): Salario
       const xT1 = cxR + 10;
       const wT = 22;
       p2.roundedRect(xT1, trackTop, wT, trackH, 4, C_WHITE, C_BORDER, 0.5);
@@ -618,7 +618,6 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       const yPrepaSal = trackBottom - Math.max(6, Math.min(trackH - 4, (item.sueldoPrepa / maxSueldoReg) * trackH));
       p2.rect(xT1 - 1, yPrepaSal - 1, wT + 2, 2.2, C_DARK);
 
-      // Termómetro 2 (Derecha): Formalidad
       const xT2 = cxR + 40;
       p2.roundedRect(xT2, trackTop, wT, trackH, 4, C_WHITE, C_BORDER, 0.5);
       const hForm = Math.max(8, Math.min(trackH - 4, (item.formalidadPct / 100) * trackH));
@@ -1022,7 +1021,7 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
     {
       label: 'Inversión Requerida en Equipo (CapEx)',
       vals: v.carreras.map(c => c.costoEquipo),
-      fmt: (n: number) => (n === 18000 ? 'Básica (~$18,000 MXN)' : n === 42000 ? 'Media (~$42,000 MXN)' : 'Alta (~$85,000 MXN)'),
+      fmt: (n: number) => (n === 18000 ? 'Básica ($18,000 MXN)' : n === 42000 ? 'Media ($42,000 MXN)' : 'Alta ($85,000 MXN)'),
       mejorAlto: false,
       invalido: Infinity
     },

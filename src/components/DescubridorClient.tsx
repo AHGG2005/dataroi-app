@@ -25,7 +25,7 @@ import {
   Share2, Download, Printer, FlaskConical, FileSpreadsheet
 } from 'lucide-react';
 
-type CriterioOrden = 'afinidad_desc' | 'afinidad_asc' | 'salario_desc' | 'salario_asc';
+type CriterioOrden = 'afinidad_desc' | 'balance_desc' | 'afinidad_asc' | 'salario_desc' | 'salario_asc';
 type CodigoGenero = 0 | 1 | 2; // 0 = Total, 1 = Hombres, 2 = Mujeres
 type ModoVistaFiltros = 'wizard' | 'colapsado' | 'expandido';
 
@@ -424,6 +424,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   const [generoActivo, setGeneroActivo] = useState<CodigoGenero>(0);
 
   const [activos, setActivos] = useState<string[]>([]);
+  const [modoBalanceGeneral, setModoBalanceGeneral] = useState<boolean>(false);
   const [orden, setOrden] = useState<CriterioOrden>('afinidad_desc');
   const [mostrarTodas, setMostrarTodas] = useState(false);
 
@@ -437,7 +438,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   const [copiadoRanking, setCopiadoRanking] = useState<boolean>(false);
   const [copiadoVersus, setCopiadoVersus] = useState<boolean>(false);
 
-  // Cálculo 100% Dinámico de Benchmarks Regionales desde el arreglo `datos`
   const benchmarksDinamicosPorRegion = useMemo(() => {
     const mapa: Record<string, typeof BENCHMARK_REGIONES_BASE['nacional']> = {};
 
@@ -549,7 +549,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           setSueldoMinimo(Math.ceil(prepaRef / 500) * 500);
         }
 
-        if (prioUrl) {
+        if (prioUrl === 'balance_general') {
+          setModoBalanceGeneral(true);
+          setActivos([]);
+          setModoVistaFiltros('colapsado');
+        } else if (prioUrl) {
           const listaPrio = prioUrl
             .split(',')
             .map(s => s.trim())
@@ -557,6 +561,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             .slice(0, MAX_PRIORIDADES);
           if (listaPrio.length > 0) {
             setActivos(listaPrio);
+            setModoBalanceGeneral(false);
             setModoVistaFiltros('colapsado');
           }
         }
@@ -572,7 +577,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           if (listaComp.length > 0) {
             setCarrerasCompararCves(listaComp);
             if (!prioUrl) {
-              setActivos(['empleabilidad', 'formalidad', 'ia']);
+              setModoBalanceGeneral(true);
             }
             setModoVistaFiltros('colapsado');
             if (listaComp.length >= 2) {
@@ -593,7 +598,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           if (typeof parsed.sueldoMinimo === 'number' && parsed.sueldoMinimo >= 7000) {
             setSueldoMinimo(parsed.sueldoMinimo);
           }
-          if (Array.isArray(parsed.activos) && parsed.activos.length > 0) {
+          if (parsed.modoBalanceGeneral) {
+            setModoBalanceGeneral(true);
+            setActivos([]);
+            setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
+          } else if (Array.isArray(parsed.activos) && parsed.activos.length > 0) {
             setActivos(parsed.activos.slice(0, MAX_PRIORIDADES));
             setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
           } else if (parsed.modoVistaFiltros === 'expandido') {
@@ -619,6 +628,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           generoActivo,
           sueldoMinimo,
           activos,
+          modoBalanceGeneral,
           modoVistaFiltros
         })
       );
@@ -627,7 +637,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       url.searchParams.set('region', regionActiva);
       url.searchParams.set('genero', generoActivo === 2 ? 'mujeres' : generoActivo === 1 ? 'hombres' : 'total');
       url.searchParams.set('sueldo', String(sueldoMinimo));
-      if (activos.length > 0) {
+      if (modoBalanceGeneral) {
+        url.searchParams.set('prio', 'balance_general');
+      } else if (activos.length > 0) {
         url.searchParams.set('prio', activos.join(','));
       } else {
         url.searchParams.delete('prio');
@@ -641,7 +653,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     } catch {
       // Ignorar errores en modo privado
     }
-  }, [hidratado, regionActiva, generoActivo, sueldoMinimo, activos, modoVistaFiltros, carrerasCompararCves]);
+  }, [hidratado, regionActiva, generoActivo, sueldoMinimo, activos, modoBalanceGeneral, modoVistaFiltros, carrerasCompararCves]);
 
   const cambiarRegionConCalibracion = (nuevaReg: string) => {
     setRegionActiva(nuevaReg);
@@ -657,14 +669,21 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
   useEffect(() => {
     setMostrarTodas(false);
-  }, [activos, sueldoMinimo, orden, regionActiva, generoActivo]);
+  }, [activos, modoBalanceGeneral, sueldoMinimo, orden, regionActiva, generoActivo]);
 
   const togglePreferencia = (id: string) => {
+    setModoBalanceGeneral(false);
     setActivos(prev => {
       if (prev.includes(id)) return prev.filter(p => p !== id);
       if (prev.length >= MAX_PRIORIDADES) return prev;
       return [...prev, id];
     });
+  };
+
+  const activarModoBalanceGeneral = () => {
+    setActivos([]);
+    setModoBalanceGeneral(true);
+    setOrden('afinidad_desc');
   };
 
   const toggleCarreraComparar = (e: React.MouseEvent, cve: string) => {
@@ -699,6 +718,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     const tienePub = activos.includes('publico');
     return (tieneCorp && tieneIndep) || (tieneCorp && tienePub) || (tieneIndep && tienePub);
   }, [activos]);
+
+  const tieneCriteriosActivos = activos.length > 0 || modoBalanceGeneral;
+
+  // Prioridades que se muestran como columnas y pastillas (si está en Balance General muestra los 5 pilares nucleares con peso igual)
+  const prioridadesEfectivasParaMostrar = useMemo(() => {
+    if (modoBalanceGeneral) {
+      return ['empleabilidad', 'formalidad', 'movilidad', 'ia', 'balance'];
+    }
+    return activos;
+  }, [modoBalanceGeneral, activos]);
 
   const { rankingVisible, rankingCompleto, listaOrdenadaCompleta, totalFiltradas, totalEnRegion } = useMemo(() => {
     const infoReg = benchmarksDinamicosPorRegion[regionActiva] || BENCHMARK_REGIONES_BASE.nacional;
@@ -784,6 +813,18 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         pContrato * 0.35
       );
 
+      // Score de Balance General (6 Pilares Estructurales)
+      const scoreBalance6Pilares = Number(
+        (
+          radarSalario * 0.22 +
+          radarFormalidad * 0.18 +
+          radarEmpleo * 0.22 +
+          radarMerito * 0.16 +
+          radarAutonomia * 0.10 +
+          radarEstabilidad * 0.12
+        ).toFixed(1)
+      );
+
       return {
         ...carrera,
         perfilActivo: { ...p, indice_saturacion_pct: saturacion },
@@ -794,6 +835,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         paridadSalarialPct,
         pctEmpleoUnico,
         pctArraigoLocal,
+        scoreBalance6Pilares,
         pilaresRadar: {
           Salario: radarSalario,
           Formalidad: radarFormalidad,
@@ -820,7 +862,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     const filtroSueldo = listaConPerfil.filter(c => c.sueldo_esperado >= sueldoMinimo);
     const totalViables = filtroSueldo.length;
 
-    if (activos.length === 0 || totalViables === 0) {
+    if (!tieneCriteriosActivos || totalViables === 0) {
       return {
         rankingVisible: [],
         rankingCompleto: listaConPerfil,
@@ -904,24 +946,46 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gob / ${num(p.pct_sindicato, 0).toFixed(1)}% Sind`
       };
 
-      activos.forEach((idPref) => {
-        const infoPeso = pesosPrioridad[idPref];
-        const scoreDim = scoresPorDim[idPref]?.[carrera.cve_carrera] ?? 50;
-        const posRubro = rankPorDim[idPref]?.[carrera.cve_carrera] ?? totalViables;
-        matchScoreExacto += scoreDim * (infoPeso?.pesoNorm || 1 / activos.length);
+      if (modoBalanceGeneral) {
+        // En Modo Balance General: Pondera por igual las 10 dimensiones + Score de Salario (Carrera Mejor Redondeada)
+        const suma10Dims = dims.reduce((acc, dKey) => acc + (scoresPorDim[dKey]?.[carrera.cve_carrera] ?? 50), 0) / dims.length;
+        matchScoreExacto = suma10Dims * 0.55 + carrera.scoreBalance6Pilares * 0.45;
 
-        const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
-        desglosePrioridades.push({
-          idPref,
-          orden: infoPeso?.orden || 1,
-          label: prefMeta?.corto || idPref,
-          datoReal: datoRealPorDim[idPref] || '',
-          datoCorto: datoCortoPorDim[idPref] || '',
-          score: Math.round(scoreDim),
-          rankRubro: posRubro,
-          totalViables
+        prioridadesEfectivasParaMostrar.forEach((idPref, idx) => {
+          const scoreDim = scoresPorDim[idPref]?.[carrera.cve_carrera] ?? 50;
+          const posRubro = rankPorDim[idPref]?.[carrera.cve_carrera] ?? totalViables;
+          const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+          desglosePrioridades.push({
+            idPref,
+            orden: idx + 1,
+            label: prefMeta?.corto || idPref,
+            datoReal: datoRealPorDim[idPref] || '',
+            datoCorto: datoCortoPorDim[idPref] || '',
+            score: Math.round(scoreDim),
+            rankRubro: posRubro,
+            totalViables
+          });
         });
-      });
+      } else {
+        activos.forEach((idPref) => {
+          const infoPeso = pesosPrioridad[idPref];
+          const scoreDim = scoresPorDim[idPref]?.[carrera.cve_carrera] ?? 50;
+          const posRubro = rankPorDim[idPref]?.[carrera.cve_carrera] ?? totalViables;
+          matchScoreExacto += scoreDim * (infoPeso?.pesoNorm || 1 / activos.length);
+
+          const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+          desglosePrioridades.push({
+            idPref,
+            orden: infoPeso?.orden || 1,
+            label: prefMeta?.corto || idPref,
+            datoReal: datoRealPorDim[idPref] || '',
+            datoCorto: datoCortoPorDim[idPref] || '',
+            score: Math.round(scoreDim),
+            rankRubro: posRubro,
+            totalViables
+          });
+        });
+      }
 
       return {
         ...carrera,
@@ -953,6 +1017,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
     const listaOrdenada = [...rankingMaestro].sort((a, b) => {
       if (orden === 'afinidad_desc') return a.rankAfinidad - b.rankAfinidad;
+      if (orden === 'balance_desc') {
+        if (b.scoreBalance6Pilares !== a.scoreBalance6Pilares) return b.scoreBalance6Pilares - a.scoreBalance6Pilares;
+        return a.rankAfinidad - b.rankAfinidad;
+      }
       if (orden === 'afinidad_asc') return b.rankAfinidad - a.rankAfinidad;
       if (orden === 'salario_desc') {
         if (b.sueldo_esperado !== a.sueldo_esperado) return b.sueldo_esperado - a.sueldo_esperado;
@@ -974,7 +1042,20 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       totalFiltradas: rankingMaestro.length,
       totalEnRegion: listaConPerfil.length
     };
-  }, [datos, activos, pesosPrioridad, sueldoMinimo, orden, mostrarTodas, regionActiva, generoActivo, benchmarksDinamicosPorRegion]);
+  }, [
+    datos,
+    activos,
+    modoBalanceGeneral,
+    tieneCriteriosActivos,
+    prioridadesEfectivasParaMostrar,
+    pesosPrioridad,
+    sueldoMinimo,
+    orden,
+    mostrarTodas,
+    regionActiva,
+    generoActivo,
+    benchmarksDinamicosPorRegion
+  ]);
 
   const carrerasRestantes = Math.max(0, totalFiltradas - 10);
   const regionMostradaEnTarjeta = regionHover || regionActiva;
@@ -1040,14 +1121,15 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     setTimeout(() => setCopiadoRanking(false), 2200);
   };
 
-  // Construcción de Tablas del Ranking con Columnas Separadas por cada Prioridad (Cero textos largos con |)
+  // Construcción del Excel del Ranking con Coloreado Acotado (Solo las primeras 4 celdas en Oro/Plata/Bronce y Medallas Oro/Plata/Bronce en cada Prioridad)
   const construirTablasRanking = () => {
     const colsPrioCabeceras: string[] = [];
-    activos.forEach((idPref, idx) => {
+    prioridadesEfectivasParaMostrar.forEach((idPref, idx) => {
       const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
       const nomLimpio = (prefMeta?.corto || idPref).replace(/\s+/g, '_');
-      colsPrioCabeceras.push(`Prio${idx + 1}_${nomLimpio}_Lugar`);
-      colsPrioCabeceras.push(`Prio${idx + 1}_${nomLimpio}_Dato`);
+      const prefijo = modoBalanceGeneral ? `Pilar${idx + 1}` : `Prio${idx + 1}`;
+      colsPrioCabeceras.push(`${prefijo}_${nomLimpio}_Lugar`);
+      colsPrioCabeceras.push(`${prefijo}_${nomLimpio}_Dato`);
     });
 
     const cabeceras = [
@@ -1055,6 +1137,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       'CVE_Carrera',
       'Nombre_Carrera',
       'Afinidad_Global_Pct',
+      'Score_Balance_6_Pilares',
       'Salario_Mensual_MXN',
       'Prima_vs_Prepa_Pct',
       'Tendencia_Real',
@@ -1070,45 +1153,61 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
     const filas: ValorCeldaExcel[][] = listaOrdenadaCompleta.map((c: any) => {
       const pos = c.rankAfinidad;
-      const estiloPodio: EstiloCeldaExcel | undefined =
+      // Solo las primeras 4 columnas identificadoras reciben el color de podio (Oro, Plata, Bronce)
+      const estiloPodioIdentificador: EstiloCeldaExcel | undefined =
         pos === 1 ? 'gold' : pos === 2 ? 'silver' : pos === 3 ? 'bronze' : undefined;
 
-      const celda = (v: string | number): ValorCeldaExcel =>
-        estiloPodio ? { v, s: estiloPodio } : v;
+      const celdaId = (v: string | number): ValorCeldaExcel =>
+        estiloPodioIdentificador ? { v, s: estiloPodioIdentificador } : { v, s: 'bold' };
 
       const roiPub = calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false);
       const roiPriv = calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true);
 
       const celdasPrioridades: ValorCeldaExcel[] = [];
-      activos.forEach((_, idx) => {
+      prioridadesEfectivasParaMostrar.forEach((_, idx) => {
         const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
         if (itemP) {
-          const esLiderRubro = itemP.rankRubro === 1;
-          celdasPrioridades.push({
-            v: `#${itemP.rankRubro} de ${itemP.totalViables}`,
-            s: esLiderRubro ? 'winner' : estiloPodio
-          });
-          celdasPrioridades.push(celda(itemP.datoCorto || itemP.datoReal));
+          // Medallas de Oro (#1), Plata (#2) y Bronce (#3) propias de cada prioridad, idéntico a las pastillas web
+          let estiloRubro: EstiloCeldaExcel | undefined = undefined;
+          let prefijoMedalla = '';
+          if (itemP.rankRubro === 1) {
+            estiloRubro = 'gold';
+            prefijoMedalla = '🥇 ';
+          } else if (itemP.rankRubro === 2) {
+            estiloRubro = 'silver';
+            prefijoMedalla = '🥈 ';
+          } else if (itemP.rankRubro === 3) {
+            estiloRubro = 'bronze';
+            prefijoMedalla = '🥉 ';
+          }
+
+          celdasPrioridades.push(
+            estiloRubro
+              ? { v: `${prefijoMedalla}#${itemP.rankRubro} de ${itemP.totalViables}`, s: estiloRubro }
+              : `#${itemP.rankRubro} de ${itemP.totalViables}`
+          );
+          celdasPrioridades.push(itemP.datoCorto || itemP.datoReal);
         } else {
-          celdasPrioridades.push(celda('-'), celda('-'));
+          celdasPrioridades.push('-', '-');
         }
       });
 
       return [
-        celda(pos),
-        celda(c.cve_carrera),
-        celda(c.nombre_carrera),
-        celda(Number(c.matchScore.toFixed(1))),
-        celda(c.sueldo_esperado),
-        celda(c.premioVsPrepaPct),
-        celda(c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable'),
-        celda(roiPub ?? 'Negativo'),
-        celda(roiPriv ?? 'Negativo'),
-        celda(c.tasaCalidadOIT),
-        celda(Number(num(c.perfilActivo?.tasa_desempleo, 3.2).toFixed(1))),
-        celda(num(c.perfilActivo?.indice_saturacion_pct, 92)),
-        celda(Number((c.crudos?.movilidad ?? 50).toFixed(1))),
-        celda(100 - num(c.perfilActivo?.riesgo_ia_score, 40)),
+        celdaId(pos === 1 ? '🥇 #1' : pos === 2 ? '🥈 #2' : pos === 3 ? '🥉 #3' : `#${pos}`),
+        celdaId(c.cve_carrera),
+        celdaId(c.nombre_carrera),
+        celdaId(Number(c.matchScore.toFixed(1))),
+        { v: c.scoreBalance6Pilares, s: 'bold' },
+        { v: c.sueldo_esperado, s: 'bold' },
+        c.premioVsPrepaPct,
+        c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable',
+        roiPub ?? 'Negativo',
+        roiPriv ?? 'Negativo',
+        c.tasaCalidadOIT,
+        Number(num(c.perfilActivo?.tasa_desempleo, 3.2).toFixed(1)),
+        num(c.perfilActivo?.indice_saturacion_pct, 92),
+        Number((c.crudos?.movilidad ?? 50).toFixed(1)),
+        100 - num(c.perfilActivo?.riesgo_ia_score, 40),
         ...celdasPrioridades
       ];
     });
@@ -1122,22 +1221,31 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
     const filasParametros: ValorCeldaExcel[][] = [
       ['Macro-Región Económica', infoRegActiva.nombre, infoRegActiva.estados],
-      ['Perspectiva de Género', etiquetaGeneroCorto, `Sueldo Base Preparatoria: ${formatoMoneda(sueldoPrepaActual)}/mes`],
-      ['Piso Salarial Mensual Mínimo', sueldoMinimo, `${diferenciaSliderVsPrepaPct >= 0 ? `+${diferenciaSliderVsPrepaPct}%` : `${diferenciaSliderVsPrepaPct}%`} respecto a Preparatoria`],
-      ['Carreras que Cumplen el Filtro', totalFiltradas, `De ${totalEnRegion} carreras con muestra certificada en la región`],
-      ...activos.map((idPref, idx) => {
-        const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
-        const infoPeso = pesosPrioridad[idPref];
-        return [
-          `Prioridad #${idx + 1} (${infoPeso?.pesoPct || 0}% de peso)`,
-          prefMeta?.label || idPref,
-          prefMeta?.desc || ''
-        ];
-      })
+      ['Perspectiva de Género', etiquetaGeneroCorto, `Sueldo Base Preparatoria: ${formatoMoneda(sueldoPrepaActual)} / mes`],
+      ['Piso Salarial Mensual Mínimo', `${formatoMoneda(sueldoMinimo)} MXN / mes`, `${diferenciaSliderVsPrepaPct >= 0 ? `+${diferenciaSliderVsPrepaPct}%` : `${diferenciaSliderVsPrepaPct}%`} respecto a Preparatoria`],
+      ['Carreras que Cumplen el Filtro', `${totalFiltradas} de ${totalEnRegion} licenciaturas`, 'Muestra estadística certificada en la región y perfil seleccionados'],
+      [
+        'Modo de Ponderación Aplicado',
+        modoBalanceGeneral ? 'Balance General (Las 10 dimensiones por igual)' : `Por Orden de Importancia (${activos.length} prioridades)`,
+        modoBalanceGeneral
+          ? 'Evalúa de forma equitativa todas las dimensiones estructurales para encontrar la carrera más completa'
+          : 'Pondera según la tabla de pesos decrecientes que suma exactamente 100%'
+      ],
+      ...(!modoBalanceGeneral
+        ? activos.map((idPref, idx) => {
+            const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+            const infoPeso = pesosPrioridad[idPref];
+            return [
+              `Prioridad #${idx + 1} (${infoPeso?.pesoPct || 0}% de peso)`,
+              prefMeta?.label || idPref,
+              prefMeta?.desc || ''
+            ];
+          })
+        : [])
     ];
 
     descargarLibroExcelXLSX(
-      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}.xlsx`,
+      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}${modoBalanceGeneral ? '_BalanceGeneral' : ''}.xlsx`,
       [
         {
           nombre: '1_Ranking_Personalizado',
@@ -1157,7 +1265,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     if (listaOrdenadaCompleta.length === 0) return;
     const { cabeceras, filas } = construirTablasRanking();
     descargarCSVEstilizado(
-      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}.csv`,
+      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}${modoBalanceGeneral ? '_BalanceGeneral' : ''}.csv`,
       cabeceras,
       filas
     );
@@ -1187,7 +1295,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     setTimeout(() => setCopiadoVersus(false), 2200);
   };
 
-  // Construcción de Hojas para el Comparador Cara a Cara (Con celdas ganadoras en Verde ★ y Podio Oro/Plata/Bronce)
   const construirHojasVersus = () => {
     const conteoVictorias = new Array(carrerasEnVersus.length).fill(0);
 
@@ -1234,7 +1341,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       'Carrera_Lider_del_Rubro'
     ];
 
-    const filasPrioridadesActivas: ValorCeldaExcel[][] = activos.map((idPref, idx) => {
+    const filasPrioridadesActivas: ValorCeldaExcel[][] = prioridadesEfectivasParaMostrar.map((idPref, idx) => {
       const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
       const valsRank = carrerasEnVersus.map((c: any) => {
         const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
@@ -1252,8 +1359,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       });
 
       return [
-        '2. Prioridades Seleccionadas',
-        `Prioridad #${idx + 1}: ${prefMeta?.label || idPref}`,
+        '2. Prioridades Evaluadas',
+        `${modoBalanceGeneral ? `Dimensión #${idx + 1}` : `Prioridad #${idx + 1}`}: ${prefMeta?.label || idPref}`,
         ...celdasPrio,
         encontrarLider(valsRank, false, 900)
       ];
@@ -1271,7 +1378,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       ['1. Contexto y Trazabilidad', 'Macro-Región y Perfil Evaluado', ...carrerasEnVersus.map(() => `${infoRegActiva.nombre} (${etiquetaGeneroCorto})`), '-'],
       ['1. Contexto y Trazabilidad', 'Sueldo Base Preparatoria de Referencia', ...carrerasEnVersus.map(() => `${formatoMoneda(sueldoPrepaActual)} / mes`), '-'],
       registrarFilaNumerica('1. Contexto y Trazabilidad', 'Muestra Física Certificada INEGI', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.n_encuestados_reales, 0)), v => `${v} encuestados`, true),
-      registrarFilaNumerica('2. Ranking Global', 'Afinidad Global con tus Prioridades', carrerasEnVersus.map((c: any) => Number((c.matchScore ?? 50).toFixed(1))), v => `${v}%`, true),
+      registrarFilaNumerica('2. Ranking Global', 'Afinidad Global con tu Configuración', carrerasEnVersus.map((c: any) => Number((c.matchScore ?? 50).toFixed(1))), v => `${v}%`, true),
+      registrarFilaNumerica('2. Ranking Global', 'Score de Balance General (6 Pilares 0-100)', carrerasEnVersus.map((c: any) => Number(c.scoreBalance6Pilares ?? 55)), v => `${v} pts`, true),
       ...filasPrioridadesActivas,
       ...filasRadar,
       registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Salario Mensual Consolidado', carrerasEnVersus.map((c: any) => c.sueldo_esperado), v => `${formatoMoneda(v)} / mes`, true),
@@ -1304,11 +1412,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Arraigo Local sin Migrar de Estado', carrerasEnVersus.map((c: any) => c.pctArraigoLocal), v => `${v}%`, true)
     ];
 
-    // Calcular Podio Final por Conteo de Victorias (Oro, Plata y Bronce)
     const victoriasUnicas = Array.from(new Set(conteoVictorias)).sort((a, b) => b - a);
     const celdasPodioFinal: ValorCeldaExcel[] = conteoVictorias.map(v => {
       const posPodio = victoriasUnicas.indexOf(v) + 1;
-      const medalla = posPodio === 1 ? '1° LUGAR (ORO)' : posPodio === 2 ? '2° LUGAR (PLATA)' : '3° LUGAR (BRONCE)';
+      const medalla = posPodio === 1 ? '🥇 1° LUGAR (ORO)' : posPodio === 2 ? '🥈 2° LUGAR (PLATA)' : '🥉 3° LUGAR (BRONCE)';
       const estilo: EstiloCeldaExcel = posPodio === 1 ? 'gold' : posPodio === 2 ? 'silver' : 'bronze';
       return { v: `${medalla} — ${v} rubros ganados`, s: estilo };
     });
@@ -1320,7 +1427,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       encontrarLider(conteoVictorias, true)
     ]);
 
-    // Hoja 2: Comparativa Salarial en las 5 Macro-Regiones
     const regs = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
     const filasHoja2: ValorCeldaExcel[][] = regs.map(rKey => {
       const metaR = BENCHMARK_REGIONES_BASE[rKey];
@@ -1486,7 +1592,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               Paso {pasoWizard} de 4
             </span>
             <button
-              onClick={() => setModoVistaFiltros(activos.length > 0 ? 'colapsado' : 'expandido')}
+              onClick={() => setModoVistaFiltros(tieneCriteriosActivos ? 'colapsado' : 'expandido')}
               className="text-xs font-bold text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
             >
               Saltar guía y ver panel completo {'→'}
@@ -1680,27 +1786,54 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* PASO 4: SELECCIÓN DE HASTA 5 PRIORIDADES */}
+          {/* PASO 4: SELECCIÓN DE HASTA 5 PRIORIDADES O MODO BALANCE GENERAL */}
           {pasoWizard === 4 && (
             <div key="paso4" className="animate-in fade-in slide-in-from-right-4 duration-200">
-              <div className="flex items-start justify-between gap-2 mb-3">
+              <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
                 <div>
                   <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-1">
-                    4. Elige hasta {MAX_PRIORIDADES} prioridades en orden de importancia ({activos.length}/{MAX_PRIORIDADES})
+                    4. Elige hasta {MAX_PRIORIDADES} prioridades ({activos.length}/{MAX_PRIORIDADES}) o evalúa el Balance General
                   </h2>
                   <p className="text-xs md:text-sm text-slate-500">
-                    La primera que elijas tendrá el mayor peso en tu ecuación de afinidad; todas suman exactamente 100%.
+                    La primera que elijas tendrá el mayor peso; o activa <strong>Balance General</strong> para evaluar todas por igual.
                   </p>
                 </div>
-                {activos.length > 0 && (
+
+                <div className="flex items-center gap-2 shrink-0">
                   <button
-                    onClick={() => setActivos([])}
-                    className="text-xs font-bold text-slate-500 hover:text-rose-600 px-2.5 py-1 rounded-lg bg-slate-100 cursor-pointer shrink-0"
+                    onClick={activarModoBalanceGeneral}
+                    className={`inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
+                      modoBalanceGeneral
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                        : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                    }`}
                   >
-                    Limpiar
+                    <Compass className="w-3.5 h-3.5" />
+                    Balance General (Todo por igual)
                   </button>
-                )}
+
+                  {(activos.length > 0 || modoBalanceGeneral) && (
+                    <button
+                      onClick={() => {
+                        setActivos([]);
+                        setModoBalanceGeneral(false);
+                      }}
+                      className="text-xs font-bold text-slate-500 hover:text-rose-600 px-2.5 py-1.5 rounded-xl bg-slate-100 cursor-pointer"
+                    >
+                      Limpiar
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {modoBalanceGeneral && (
+                <div className="mb-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 rounded-xl text-xs text-emerald-950 animate-in fade-in duration-150">
+                  <Compass className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    <strong>Modo Balance General activo:</strong> Evaluando todas las dimensiones y los 6 pilares estructurales con el mismo peso para encontrar las carreras más completas y redondeadas.
+                  </span>
+                </div>
+              )}
 
               {alertaConflictoEcosistema && (
                 <div className="mb-3 flex items-center gap-2 bg-amber-50 border border-amber-200 px-3.5 py-2.5 rounded-xl text-xs text-amber-900 animate-in fade-in duration-150">
@@ -1772,16 +1905,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </button>
             ) : (
               <button
-                disabled={activos.length === 0}
+                disabled={!tieneCriteriosActivos}
                 onClick={() => setModoVistaFiltros('colapsado')}
                 className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs md:text-sm font-black transition-all ${
-                  activos.length > 0
+                  tieneCriteriosActivos
                     ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm cursor-pointer'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 }`}
               >
                 <Sparkles className="w-4 h-4" />
-                {activos.length > 0 ? `Ver mis ${totalFiltradas} carreras recomendadas` : 'Elige al menos 1 prioridad'}
+                {tieneCriteriosActivos ? `Ver mis ${totalFiltradas} carreras recomendadas` : 'Elige al menos 1 prioridad o Balance General'}
               </button>
             )}
           </div>
@@ -1820,20 +1953,30 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </button>
 
             <div className="flex flex-wrap items-center gap-1.5 pl-1 border-l border-slate-200">
-              {activos.map(idPref => {
-                const meta = PREFERENCIAS.find(p => p.id === idPref);
-                const peso = pesosPrioridad[idPref];
-                const estP = obtenerEstiloJerarquiaPrioridad(peso?.orden);
-                return (
-                  <button
-                    key={idPref}
-                    onClick={() => setModoVistaFiltros('expandido')}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${estP.badge}`}
-                  >
-                    <span className="font-black">#{peso?.orden}</span> {meta?.corto} ({peso?.pesoPct}%)
-                  </button>
-                );
-              })}
+              {modoBalanceGeneral ? (
+                <button
+                  onClick={() => setModoVistaFiltros('expandido')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-black bg-emerald-600 text-white cursor-pointer"
+                >
+                  <Compass className="w-3.5 h-3.5" />
+                  Balance General (Las 10 dimensiones por igual)
+                </button>
+              ) : (
+                activos.map(idPref => {
+                  const meta = PREFERENCIAS.find(p => p.id === idPref);
+                  const peso = pesosPrioridad[idPref];
+                  const estP = obtenerEstiloJerarquiaPrioridad(peso?.orden);
+                  return (
+                    <button
+                      key={idPref}
+                      onClick={() => setModoVistaFiltros('expandido')}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${estP.badge}`}
+                    >
+                      <span className="font-black">#{peso?.orden}</span> {meta?.corto} ({peso?.pesoPct}%)
+                    </button>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -1984,22 +2127,48 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <div>
                   <h2 className="font-black text-base text-slate-900">
-                    4. Elige hasta {MAX_PRIORIDADES} Prioridades en Orden de Importancia ({activos.length}/{MAX_PRIORIDADES})
+                    4. Elige hasta {MAX_PRIORIDADES} Prioridades ({activos.length}/{MAX_PRIORIDADES}) o Balance General
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Acotar tu elección a máximo {MAX_PRIORIDADES} valores evita diluir el puntaje y encuentra carreras verdaderamente especializadas.
+                    Elige hasta {MAX_PRIORIDADES} prioridades en orden de importancia, o evalúa todas por igual con <strong>Balance General</strong>.
                   </p>
                 </div>
 
-                {activos.length > 0 && (
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setActivos([])}
-                    className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 hover:text-rose-600 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-rose-50 transition-colors cursor-pointer"
+                    onClick={activarModoBalanceGeneral}
+                    className={`inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
+                      modoBalanceGeneral
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                        : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                    }`}
                   >
-                    <RotateCcw className="w-3.5 h-3.5" /> Reiniciar
+                    <Compass className="w-3.5 h-3.5" />
+                    Balance General (Todo por igual)
                   </button>
-                )}
+
+                  {tieneCriteriosActivos && (
+                    <button
+                      onClick={() => {
+                        setActivos([]);
+                        setModoBalanceGeneral(false);
+                      }}
+                      className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 hover:text-rose-600 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" /> Reiniciar
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {modoBalanceGeneral && (
+                <div className="mb-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 rounded-xl text-xs text-emerald-950">
+                  <Compass className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    <strong>Modo Balance General activo:</strong> Todas las dimensiones y los 6 pilares estructurales se evalúan con peso equitativo para mostrar las carreras mejor redondeadas.
+                  </span>
+                </div>
+              )}
 
               {alertaConflictoEcosistema && (
                 <div className="mb-3 flex items-center gap-2 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl text-xs text-amber-900">
@@ -2056,11 +2225,13 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
             <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
               <span className="text-[11px] text-slate-400">
-                {activos.length === 0
-                  ? 'Selecciona tu Prioridad #1 arriba para desplegar el Ranking.'
-                  : `Ponderación exacta del 100% distribuida en ${activos.length} ${activos.length === 1 ? 'criterio' : 'criterios'}.`}
+                {!tieneCriteriosActivos
+                  ? 'Selecciona tu Prioridad #1 o el botón Balance General arriba para desplegar el Ranking.'
+                  : modoBalanceGeneral
+                    ? 'Evaluando el equilibrio integral de las 10 dimensiones y los 6 pilares estructurales.'
+                    : `Ponderación exacta del 100% distribuida en ${activos.length} ${activos.length === 1 ? 'criterio' : 'criterios'}.`}
               </span>
-              {activos.length > 0 && (
+              {tieneCriteriosActivos && (
                 <button
                   onClick={() => setModoVistaFiltros('colapsado')}
                   className="px-4 py-1.5 rounded-xl bg-slate-900 text-white font-bold text-xs hover:bg-slate-800 cursor-pointer"
@@ -2077,14 +2248,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       {/* ========================================================================= */}
       {/* ZONA DE RESULTADOS DEL RANKING                                            */}
       {/* ========================================================================= */}
-      {activos.length > 0 && modoVistaFiltros !== 'wizard' && (
+      {tieneCriteriosActivos && modoVistaFiltros !== 'wizard' && (
         <div className="animate-in fade-in duration-200">
           
           <div className="flex flex-col md:flex-row md:items-center justify-between mb-5 gap-4">
             <div>
               <h2 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-blue-600" />
-                Ranking en {infoRegActiva.corto} ({etiquetaGeneroCorto})
+                {modoBalanceGeneral
+                  ? `Ranking de Balance General en ${infoRegActiva.corto} (${etiquetaGeneroCorto})`
+                  : `Ranking en ${infoRegActiva.corto} (${etiquetaGeneroCorto})`}
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 Posición competitiva exacta (<strong>#Lugar / {totalFiltradas}</strong>) y opción para comparar hasta <strong>{MAX_COMPARAR} carreras Cara a Cara</strong>.
@@ -2102,7 +2275,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
               <button
                 onClick={exportarRankingExcel}
-                title="Descargar Libro de Excel (.xlsx) con 2 Hojas, colores de podio y columnas separadas por prioridad"
+                title="Descargar Libro de Excel (.xlsx) con 2 Hojas, medallas Oro/Plata/Bronce por prioridad y ancho auto-ajustado"
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs transition-all cursor-pointer"
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -2130,6 +2303,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   className="bg-transparent border-none text-xs md:text-sm font-bold text-slate-800 focus:ring-0 cursor-pointer outline-none pr-2"
                 >
                   <option value="afinidad_desc">Mayor Afinidad (Top)</option>
+                  <option value="balance_desc">Mejor Balance General (6 Pilares)</option>
                   <option value="afinidad_asc">Menor Afinidad (Peores)</option>
                   <option value="salario_desc">Mayor Salario ($ a $)</option>
                   <option value="salario_asc">Menor Salario ($ a $)</option>
@@ -2264,6 +2438,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                             <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${capexInfo.clase}`}>
                               {capexInfo.corto}
                             </span>
+
+                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
+                              orden === 'balance_desc'
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'bg-blue-50 text-blue-700 border-blue-200'
+                            }`}>
+                              Balance 6P: {carrera.scoreBalance6Pilares} pts
+                            </span>
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
@@ -2307,7 +2489,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                                 >
                                   <div className="flex items-center justify-between gap-1.5 text-[11px] mb-1.5">
                                     <span className="font-black text-slate-800 truncate">
-                                      Prioridad #{item.orden} · {item.label}
+                                      {modoBalanceGeneral ? `Pilar · ${item.label}` : `Prioridad #${item.orden} · ${item.label}`}
                                     </span>
                                     <span
                                       title={`Posición #${item.rankRubro} de ${item.totalViables} carreras en ${item.label}`}
@@ -2338,7 +2520,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                       <div className="flex items-center justify-between lg:flex-col lg:items-end lg:justify-between gap-3 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0">
                         <div className="text-left lg:text-right">
                           <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">
-                            Afinidad (#{carrera.rankAfinidad})
+                            {modoBalanceGeneral ? `Balance (#${carrera.rankAfinidad})` : `Afinidad (#${carrera.rankAfinidad})`}
                           </p>
                           <p className={`font-black ${isPodium ? 'text-3xl md:text-4xl' : 'text-2xl md:text-3xl'} ${
                             isBottom3 ? 'text-rose-600' : 'text-blue-600'
@@ -2680,7 +2862,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                       label: 'Inversión Requerida en Equipo (CapEx)',
                       valores: carrerasEnVersus.map((c: any) => obtenerCapExCorto(c.cve_carrera).costoEquipo),
                       formato: (v: number) =>
-                        v === 18000 ? 'Básica (~$18,000 MXN)' : v === 42000 ? 'Media (~$42,000 MXN)' : 'Alta (~$85,000 MXN)',
+                        v === 18000 ? 'Básica ($18,000 MXN)' : v === 42000 ? 'Media ($42,000 MXN)' : 'Alta ($85,000 MXN)',
                       mejorAlto: false,
                       invalidoSiMayorIgualA: Infinity
                     },
@@ -2725,6 +2907,13 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                       formato: (v: number) => `${v}% un solo empleo`,
                       mejorAlto: true,
                       invalidoSiMayorIgualA: Infinity
+                    },
+                    {
+                      label: 'Balance General (6 Pilares 0–100)',
+                      valores: carrerasEnVersus.map((c: any) => Number(c.scoreBalance6Pilares ?? 55)),
+                      formato: (v: number) => `${v.toFixed(1)} pts`,
+                      mejorAlto: true,
+                      invalidoSiMayorIgualA: Infinity
                     }
                   ]).map((fila, rIdx) => {
                     const valoresValidos = fila.valores.filter((v: number) => v < fila.invalidoSiMayorIgualA);
@@ -2752,7 +2941,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                                 </span>
                                 {esGanador && (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-[10px] shrink-0">
-                                    <Trophy className="w-2.5 h-2.5 text-emerald-700" /> Líder
+                                    <Trophy className="w-2.5 h-3.5 text-emerald-700" /> Líder
                                   </span>
                                 )}
                               </div>
