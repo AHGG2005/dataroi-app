@@ -5,12 +5,13 @@ import Link from 'next/link';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
+  obtenerSemaforoScoreDataROI,
   ValorCeldaExcel
 } from '@/lib/excelReportGenerator';
 import {
   Search, Microscope, ShieldCheck, ChevronRight, SlidersHorizontal,
   TrendingUp, TrendingDown, Minus, Activity, Download, Share2, Check,
-  ArrowUpDown, FlaskConical, Users, Sparkles, FileSpreadsheet, Scale
+  ArrowUpDown, FlaskConical, Users, Sparkles, FileSpreadsheet
 } from 'lucide-react';
 
 export type CarreraDirectorioItem = {
@@ -29,7 +30,7 @@ export type CarreraDirectorioItem = {
   desempleo_pct: number;
   saturacion_pct: number;
   meritocracia_pct: number;
-  score_balance: number;
+  score_dataroi: number;
   pea_activa: number;
   n_encuestados: number;
   costo_capex: number;
@@ -40,10 +41,10 @@ export type CarreraDirectorioItem = {
   tendencia_codigo: 'crecimiento' | 'estable' | 'ajuste' | 'volatil';
 };
 
-type OrdenDirectorio = 'balance_desc' | 'salario_desc' | 'salario_asc' | 'saturacion_asc' | 'ia_asc' | 'alfabetico';
+type OrdenDirectorio = 'score_desc' | 'salario_desc' | 'salario_asc' | 'saturacion_asc' | 'ia_asc' | 'alfabetico';
 
 const ETIQUETAS_ORDEN_HUMANO: Record<OrdenDirectorio, string> = {
-  balance_desc: 'Mejor Balance General (6 Pilares)',
+  score_desc: 'Mayor Calificación DataROI (0–100)',
   salario_desc: 'Mayor Salario Mensual ($ a $)',
   salario_asc: 'Menor Salario Mensual ($ a $)',
   saturacion_asc: 'Menor Saturación de Egresados ANUIES',
@@ -53,6 +54,56 @@ const ETIQUETAS_ORDEN_HUMANO: Record<OrdenDirectorio, string> = {
 
 const formatoMoneda = (valor: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(valor || 0);
+
+function AnilloScoreDataROI({ score }: { score: number }) {
+  const sem = obtenerSemaforoScoreDataROI(score);
+  const r = 18;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, score));
+  const offset = circ - (pct / 100) * circ;
+
+  return (
+    <div
+      title={`Calificación Integral DataROI: ${score.toFixed(1)} / 100 (${sem.etiqueta})`}
+      className="flex items-center gap-2 shrink-0"
+    >
+      <div className="text-right hidden sm:block">
+        <span className="block text-[9.5px] font-black uppercase tracking-wider text-slate-400 leading-none">
+          Score DataROI
+        </span>
+        <span className={`block text-[11px] font-black ${sem.textClass} mt-0.5 leading-none`}>
+          {sem.etiqueta}
+        </span>
+      </div>
+      <div className="relative w-12 h-12 flex items-center justify-center shrink-0">
+        <svg className="w-12 h-12 -rotate-90" viewBox="0 0 44 44">
+          <circle
+            cx="22"
+            cy="22"
+            r={r}
+            fill="none"
+            stroke={sem.trackHex}
+            strokeWidth="4.2"
+          />
+          <circle
+            cx="22"
+            cy="22"
+            r={r}
+            fill="none"
+            stroke={sem.colorHex}
+            strokeWidth="4.2"
+            strokeLinecap="round"
+            strokeDasharray={circ}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+          <span className="text-xs font-black text-slate-900">{score.toFixed(1)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function BadgeTendenciaMini({ codigo, etiqueta }: { codigo: string; etiqueta: string }) {
   if (codigo === 'crecimiento') {
@@ -87,7 +138,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
   const [busqueda, setBusqueda] = useState('');
   const [filtroStem, setFiltroStem] = useState(false);
   const [filtroRiesgo, setFiltroRiesgo] = useState(false);
-  const [orden, setOrden] = useState<OrdenDirectorio>('salario_desc');
+  const [orden, setOrden] = useState<OrdenDirectorio>('score_desc');
   const [copiado, setCopiado] = useState(false);
 
   const mediaSalarialCatalogo = useMemo(() => {
@@ -115,8 +166,8 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
     });
 
     return [...filtradas].sort((a, b) => {
-      if (orden === 'balance_desc') {
-        if (b.score_balance !== a.score_balance) return b.score_balance - a.score_balance;
+      if (orden === 'score_desc') {
+        if (b.score_dataroi !== a.score_dataroi) return b.score_dataroi - a.score_dataroi;
         return b.sueldo_mensual - a.sueldo_mensual;
       }
       if (orden === 'salario_desc') return b.sueldo_mensual - a.sueldo_mensual;
@@ -127,14 +178,14 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
     });
   }, [busqueda, filtroStem, filtroRiesgo, orden, directorio]);
 
-  // Sin colores de Oro/Plata/Bronce en el Catálogo General (lectura limpia y neutra)
   const construirDatosExportacionCatalogo = () => {
     const cabeceras = [
       'Orden_Lista',
       'CVE_Carrera',
       'Nombre_Carrera',
       'Es_STEM',
-      'Score_Balance_6_Pilares_0_100',
+      'Score_DataROI_0_100',
+      'Grado_Viabilidad',
       'Salario_Mensual_MXN',
       'Prima_vs_Prepa_Pct',
       'Tendencia_2021_2026',
@@ -156,32 +207,36 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       'Muestra_Encuestados_INEGI'
     ];
 
-    const filas: ValorCeldaExcel[][] = carrerasFiltradas.map((c, idx) => [
-      idx + 1,
-      c.cve_carrera,
-      { v: c.nombre_carrera, s: 'bold' },
-      c.is_stem ? 'Sí' : 'No',
-      { v: c.score_balance, s: 'bold' },
-      { v: c.sueldo_mensual, s: 'bold' },
-      c.premio_prepa_pct,
-      c.tendencia_etiqueta,
-      c.sueldo_2022_2023,
-      c.sueldo_2025_2026,
-      c.cambio_real_pct,
-      c.crecimiento_anual_pct,
-      c.calidad_oit_pct,
-      c.formalidad_total_pct,
-      c.desempleo_pct,
-      c.saturacion_pct,
-      c.meritocracia_pct,
-      100 - c.riesgo_ia_score,
-      c.costo_capex,
-      c.roi_publica_anios,
-      c.roi_privada_anios,
-      c.sector_lider,
-      c.pea_activa,
-      c.n_encuestados
-    ]);
+    const filas: ValorCeldaExcel[][] = carrerasFiltradas.map((c, idx) => {
+      const sem = obtenerSemaforoScoreDataROI(c.score_dataroi);
+      return [
+        idx + 1,
+        c.cve_carrera,
+        { v: c.nombre_carrera, s: 'bold' },
+        c.is_stem ? 'Sí' : 'No',
+        { v: c.score_dataroi, s: sem.grado === 'A' ? 'winner' : sem.grado === 'C' ? 'warning' : 'bold' },
+        `Grado ${sem.grado} — ${sem.etiqueta}`,
+        { v: c.sueldo_mensual, s: 'bold' },
+        c.premio_prepa_pct,
+        c.tendencia_etiqueta,
+        c.sueldo_2022_2023,
+        c.sueldo_2025_2026,
+        c.cambio_real_pct,
+        c.crecimiento_anual_pct,
+        c.calidad_oit_pct,
+        c.formalidad_total_pct,
+        c.desempleo_pct,
+        c.saturacion_pct,
+        c.meritocracia_pct,
+        100 - c.riesgo_ia_score,
+        c.costo_capex,
+        c.roi_publica_anios,
+        c.roi_privada_anios,
+        c.sector_lider,
+        c.pea_activa,
+        c.n_encuestados
+      ];
+    });
 
     return { cabeceras, filas };
   };
@@ -226,7 +281,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       try {
         await navigator.share({
           title: 'DataROI México — Directorio Nacional de Carreras',
-          text: 'Consulta el retorno de inversión, salarios reales INEGI y riesgo IA de las 64 licenciaturas en México.',
+          text: 'Consulta la Calificación Integral DataROI, salarios reales INEGI y riesgo IA de las 64 licenciaturas en México.',
           url
         });
         return;
@@ -295,7 +350,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
               <div className="flex flex-wrap items-center gap-1.5 mt-1">
                 <button
                   onClick={exportarCatalogoExcel}
-                  title="Descargar libro de Excel (.xlsx) con 2 hojas y ancho de columna auto-ajustado"
+                  title="Descargar libro de Excel (.xlsx) con Score DataROI, alineación uniforme y auto-ancho"
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] cursor-pointer"
                 >
                   <FileSpreadsheet className="w-3 h-3" /> Excel
@@ -370,8 +425,8 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
               onChange={(e) => setOrden(e.target.value as OrdenDirectorio)}
               className="bg-transparent border-none text-xs font-bold text-slate-800 focus:ring-0 cursor-pointer outline-none"
             >
+              <option value="score_desc">Mayor Calificación DataROI (0–100)</option>
               <option value="salario_desc">Mayor Salario ($ a $)</option>
-              <option value="balance_desc">Mejor Balance General (6 Pilares)</option>
               <option value="salario_asc">Menor Salario ($ a $)</option>
               <option value="saturacion_asc">Menor Saturación ANUIES</option>
               <option value="ia_asc">Mayor Blindaje ante IA</option>
@@ -381,13 +436,26 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
         </div>
       </div>
 
-      {/* CONTADOR */}
-      <div className="mb-4 flex items-center justify-between text-xs text-slate-500 font-bold px-1">
+      {/* CONTADOR Y LEYENDA DEL SEMÁFORO DATAROI */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 font-bold px-1">
         <span>Mostrando {carrerasFiltradas.length} de {directorio.length} carreras certificadas</span>
-        <span>Referencia Nacional Base Preparatoria: $10,608 / mes</span>
+        <div className="flex flex-wrap items-center gap-3 text-[11px]">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
+            <strong>70–100:</strong> Sobresaliente
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+            <strong>56–69:</strong> Viable
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-600" />
+            <strong>{'<56'}:</strong> En Riesgo
+          </span>
+        </div>
       </div>
 
-      {/* CUADRÍCULA DE TARJETAS */}
+      {/* CUADRÍCULA DE TARJETAS CON ANILLO CIRCULAR SEMÁFORO */}
       {carrerasFiltradas.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {carrerasFiltradas.map((carrera) => {
@@ -399,29 +467,33 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                 className="group bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:shadow-md hover:border-blue-400 transition-all flex flex-col justify-between"
               >
                 <div>
-                  <div className="flex items-center justify-between gap-2 mb-3">
-                    <div className="flex items-center gap-1.5">
-                      <span className="bg-slate-100 text-slate-700 text-[11px] font-mono font-bold px-2 py-0.5 rounded-md border border-slate-200">
-                        CVE: {carrera.cve_carrera}
-                      </span>
-                      {carrera.is_stem && (
-                        <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold px-2 py-0.5 rounded-md inline-flex items-center gap-1">
-                          <Microscope className="w-3 h-3" /> STEM
+                  <div className="flex items-start justify-between gap-3 mb-2.5">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                        <span className="bg-slate-100 text-slate-700 text-[11px] font-mono font-bold px-2 py-0.5 rounded-md border border-slate-200">
+                          CVE: {carrera.cve_carrera}
                         </span>
-                      )}
+                        {carrera.is_stem && (
+                          <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                            <Microscope className="w-3 h-3" /> STEM
+                          </span>
+                        )}
+                        <BadgeTendenciaMini
+                          codigo={carrera.tendencia_codigo}
+                          etiqueta={carrera.tendencia_etiqueta}
+                        />
+                      </div>
+
+                      <h2 className="text-base md:text-lg font-black text-slate-900 group-hover:text-blue-600 transition-colors leading-snug">
+                        {carrera.nombre_carrera}
+                      </h2>
                     </div>
 
-                    <BadgeTendenciaMini
-                      codigo={carrera.tendencia_codigo}
-                      etiqueta={carrera.tendencia_etiqueta}
-                    />
+                    {/* Anillo Circular de Calificación Integral DataROI */}
+                    <AnilloScoreDataROI score={carrera.score_dataroi} />
                   </div>
 
-                  <h2 className="text-base md:text-lg font-black text-slate-900 group-hover:text-blue-600 transition-colors leading-snug mb-3">
-                    {carrera.nombre_carrera}
-                  </h2>
-
-                  <div className="flex items-baseline justify-between gap-2 pt-2 border-t border-slate-100">
+                  <div className="flex items-baseline justify-between gap-2 pt-2.5 mt-2 border-t border-slate-100">
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
                         Salario Consolidado
@@ -452,19 +524,19 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                       <span className="text-slate-400 block text-[10px]">Saturación</span>
                       <strong className="text-slate-800 font-black">{carrera.saturacion_pct}%</strong>
                     </div>
-                    <div className="bg-blue-50/60 p-2 rounded-lg border border-blue-100">
-                      <span className="text-blue-600 font-bold block text-[10px]">Balance 6P</span>
-                      <strong className="text-blue-700 font-black">{carrera.score_balance} pts</strong>
+                    <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
+                      <span className="text-slate-400 block text-[10px]">Blindaje IA</span>
+                      <strong className="text-slate-800 font-black">{blindajeIA}%</strong>
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between text-xs font-bold text-slate-500 group-hover:text-blue-600">
                     <span className="flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5" />
-                      PEA: {carrera.pea_activa.toLocaleString('es-MX')} · IA: {blindajeIA}% blindaje
+                      PEA: {carrera.pea_activa.toLocaleString('es-MX')} ocupados
                     </span>
                     <span className="inline-flex items-center gap-1">
-                      Abrir <ChevronRight className="w-4 h-4" />
+                      Abrir dashboard <ChevronRight className="w-4 h-4" />
                     </span>
                   </div>
                 </div>

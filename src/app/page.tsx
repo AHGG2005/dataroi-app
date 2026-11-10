@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import { supabase } from '@/lib/supabase';
+import { calcularScoreDataROIUniversal } from '@/lib/excelReportGenerator';
 import DirectorioClient, { CarreraDirectorioItem } from '@/components/DirectorioClient';
 import { Loader2 } from 'lucide-react';
 
@@ -231,22 +232,15 @@ async function DirectorioCargador() {
     const pAfor = Number(sat.pct_afore || 55);
     const pPlur = Number(sat.pct_pluriempleo || 5.6);
     const pDesa = Number(sat.pct_desarraigo || 2.7);
-    const pHo = Number(sat.pct_home_office || 3.7);
-    const pMicr = Number(sat.pct_micro || 28);
     const pPyme = Number(sat.pct_pyme || 30);
     const pCorp = Number(sat.pct_corp || 12);
-    const pMt = Number(sat.pct_medio_tiempo || 14);
     const pSind = Number(sat.pct_sindicato || 15);
     const pNep = Number(sat.pct_nepotismo || 37.2);
     const priv = Number(sat.indice_privilegio || 2.80);
+    const riesgoIA = Number(sat.riesgo_ia_score ?? 40);
 
     const calidadOitPct = Number((((Math.min(pCont, pAfor) * 0.70 + pCont * 0.30) * (1 - pPlur / 200))).toFixed(1));
     const formalidadTotalPct = Number((pCont * 0.45 + pAgui * 0.30 + pAfor * 0.25).toFixed(1));
-
-    // Cálculo de los 6 Pilares Estructurales y del Score de Balance General (0-100)
-    const p1Sal = Math.round(Math.max(15, Math.min(100, ((sueldoMensual - 9500) / (22000 - 9500)) * 100)));
-    const p2Form = Math.round(formalidadTotalPct);
-    const p3Emp = Math.round(Math.max(10, Math.min(100, 100 - desempleoPct * 8.0)) * 0.60 + Math.max(10, Math.min(100, 168 - saturacionPct)) * 0.40);
 
     const diffEst = priv - 2.80;
     const penElit = diffEst > 0.05 ? (diffEst - 0.05) * 110 : diffEst * 35;
@@ -254,27 +248,39 @@ async function DirectorioCargador() {
     const apContr = Math.max(10, Math.min(95, 100 - (pNep + pSind * 0.22)));
     const saltoSc = Math.max(0, Math.min(100, ((sueldoMensual - SUELDO_PREPA_NAC) / SUELDO_PREPA_NAC) * 100));
     const impAsc = saltoSc * 0.45 + calidadOitPct * 0.35 + Math.min(100, pCorp * 2.2 + pPyme * 0.6) * 0.20;
-    const rawMov = Math.max(12, Math.min(96, apContr * 0.40 + impAsc * 0.35 + incOrig * 0.25));
-    const p4Mer = Math.round(rawMov);
-
-    const p5Aut = Math.round(Math.max(15, Math.min(100, Math.min(100, pHo * 5.0) * 0.40 + Math.min(100, pMicr * 1.5) * 0.35 + Math.min(100, pMt * 2.0) * 0.25)));
-    const p6Est = Math.round(Math.max(10, Math.min(100, 100 - pPlur * 5.0)) * 0.35 + Math.max(10, Math.min(100, 100 - pDesa * 6.5)) * 0.30 + pCont * 0.35);
-
-    const scoreBalance = Number((p1Sal * 0.22 + p2Form * 0.18 + p3Emp * 0.22 + p4Mer * 0.16 + p5Aut * 0.10 + p6Est * 0.12).toFixed(1));
+    const rawMov = Number(Math.max(12, Math.min(96, apContr * 0.40 + impAsc * 0.35 + incOrig * 0.25)).toFixed(1));
 
     const tendencia = clasificarTendenciaNacional(filas);
     const premioVsPrepaPct = Number((((sueldoMensual - SUELDO_PREPA_NAC) / SUELDO_PREPA_NAC) * 100).toFixed(1));
 
+    // Score DataROI Universal (0 a 100)
+    const evalScore = calcularScoreDataROIUniversal({
+      Prima_vs_Prepa_Pct: premioVsPrepaPct,
+      Desempleo_Abierto_Pct: desempleoPct,
+      Saturacion_ANUIES_Pct: saturacionPct,
+      Empleo_Calidad_OIT_Pct: calidadOitPct,
+      Formalidad_Total_Pct: formalidadTotalPct,
+      Meritocracia_Pct: rawMov,
+      Blindaje_IA_Pct: 100 - riesgoIA,
+      Cambio_Real_PostPandemia_Pct: tendencia.cambioRealPct,
+      Tendencia_Codigo: tendencia.codigo,
+      Empleo_Unico_Pct: Math.max(0, 100 - pPlur),
+      Arraigo_Local_Pct: Math.max(0, 100 - pDesa)
+    });
+
+    const semestresBase = cve === '091100' ? 12 : 9;
     const capex = obtenerCostoCapEx(cve);
+    const invPub = semestresBase * 1800 + 8500 + capex;
+    const invPrivMedia = semestresBase * (6500 * 5 + 6500) + 22000 + capex;
     const bonoAnual = (sueldoMensual - SUELDO_PREPA_NAC) * 12;
-    const roiPub = bonoAnual > 0 ? Number(((32000 + capex) / bonoAnual).toFixed(1)) : 99.9;
-    const roiPriv = bonoAnual > 0 ? Number(((340000 + capex) / bonoAnual).toFixed(1)) : 99.9;
+    const roiPub = bonoAnual > 0 ? Number((invPub / bonoAnual).toFixed(1)) : 99.9;
+    const roiPriv = bonoAnual > 0 ? Number((invPrivMedia / bonoAnual).toFixed(1)) : 99.9;
 
     directorioAumentado.push({
       cve_carrera: cve,
       nombre_carrera: carrera.nombre_carrera,
       is_stem: isStem,
-      riesgo_ia_score: Number(sat.riesgo_ia_score ?? 40),
+      riesgo_ia_score: riesgoIA,
       sueldo_mensual: sueldoMensual,
       premio_prepa_pct: premioVsPrepaPct,
       sueldo_2022_2023: tendencia.sueldoBase22_23,
@@ -285,8 +291,8 @@ async function DirectorioCargador() {
       formalidad_total_pct: formalidadTotalPct,
       desempleo_pct: desempleoPct,
       saturacion_pct: saturacionPct,
-      meritocracia_pct: Number(rawMov.toFixed(1)),
-      score_balance: scoreBalance,
+      meritocracia_pct: rawMov,
+      score_dataroi: evalScore.score,
       pea_activa: peaActiva,
       n_encuestados: Number(sat.n_encuestados_reales || 0),
       costo_capex: capex,

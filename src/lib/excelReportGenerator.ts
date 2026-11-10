@@ -1,5 +1,5 @@
 // src/lib/excelReportGenerator.ts
-// Motor Nativo OpenXML (.xlsx Multi-Hoja con Estilos, Semáforo y Alineación Uniforme) + Exportador CSV RFC 4180
+// Motor Nativo OpenXML (.xlsx Multi-Hoja con Alineación Par/Impar Idéntica) + Exportador CSV RFC 4180 + Score DataROI Universal
 
 export type EstiloCeldaExcel =
   | 'default'
@@ -11,7 +11,8 @@ export type EstiloCeldaExcel =
   | 'bronze'
   | 'section'
   | 'zebra'
-  | 'bold';
+  | 'bold'
+  | 'bold_zebra';
 
 export interface CeldaExcelObj {
   v: string | number | null | undefined;
@@ -24,6 +25,129 @@ export interface HojaExcelConfig {
   nombre: string;
   cabeceras: string[];
   filas: ValorCeldaExcel[][];
+}
+
+// ============================================================================
+// 0. MOTOR MATEMÁTICO UNIFICADO: CALIFICACIÓN INTEGRAL DATAROI (0 A 100)
+// ============================================================================
+export interface ParametrosScoreDataROI {
+  Prima_vs_Prepa_Pct: number;
+  Desempleo_Abierto_Pct: number;
+  Saturacion_ANUIES_Pct: number;
+  Empleo_Calidad_OIT_Pct: number;
+  Formalidad_Total_Pct: number;
+  Meritocracia_Pct: number;
+  Blindaje_IA_Pct: number;
+  Cambio_Real_PostPandemia_Pct?: number;
+  Tendencia_Codigo?: string;
+  Empleo_Unico_Pct?: number;
+  Arraigo_Local_Pct?: number;
+}
+
+export interface ResultadoScoreDataROI {
+  score: number;
+  pilares: {
+    retornoSalarial: number;
+    empleabilidad: number;
+    calidadOIT: number;
+    meritocracia: number;
+    blindajeFuturo: number;
+    estabilidadVida: number;
+  };
+}
+
+export function calcularScoreDataROIUniversal(p: ParametrosScoreDataROI): ResultadoScoreDataROI {
+  const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val));
+
+  // 1. Retorno Salarial (25%): Basado en Prima Salarial vs Preparatoria (intrínseco al mercado laboral)
+  const pRetorno = Math.round(clamp(((p.Prima_vs_Prepa_Pct - 5.0) / (95.0 - 5.0)) * 100, 15, 98));
+
+  // 2. Empleabilidad Real (20%): 55% Bajo Desempleo + 45% Baja Saturación ANUIES
+  const subDesemp = clamp(100 - p.Desempleo_Abierto_Pct * 7.5, 15, 98);
+  const subSat = clamp(155 - p.Saturacion_ANUIES_Pct * 0.65, 10, 98);
+  const pEmpleo = Math.round(subDesemp * 0.55 + subSat * 0.45);
+
+  // 3. Calidad Formal OIT (20%): Tasa de Empleo de Calidad OIT respaldada por Formalidad Total
+  const pCalidad = Math.round(clamp((p.Empleo_Calidad_OIT_Pct / 72.0) * 100, 20, 98));
+
+  // 4. Apertura y Meritocracia (15%): Índice Chetty/CEEY (bajo nepotismo + inclusión socioeconómica)
+  const pMerito = Math.round(clamp((p.Meritocracia_Pct / 76.0) * 100, 20, 98));
+
+  // 5. Blindaje IA y Tendencia (10%): 65% Resiliencia Humana ante IA + 35% Impulso Salarial Post-Pandemia
+  const cambioReal =
+    typeof p.Cambio_Real_PostPandemia_Pct === 'number'
+      ? p.Cambio_Real_PostPandemia_Pct
+      : p.Tendencia_Codigo === 'crecimiento'
+        ? 9.0
+        : p.Tendencia_Codigo === 'ajuste'
+          ? -5.0
+          : 2.0;
+  const subTend = clamp(50 + cambioReal * 3.0, 20, 98);
+  const pFuturo = Math.round(clamp(p.Blindaje_IA_Pct, 10, 98) * 0.65 + subTend * 0.35);
+
+  // 6. Estabilidad de Vida (10%): Empleo Único sin Pluriempleo + Arraigo Local + Cobertura Formal
+  const empUnico = typeof p.Empleo_Unico_Pct === 'number' ? p.Empleo_Unico_Pct : 94.0;
+  const arraigo = typeof p.Arraigo_Local_Pct === 'number' ? p.Arraigo_Local_Pct : 97.0;
+  const pEstabilidad = Math.round(
+    clamp(empUnico * 0.35 + arraigo * 0.25 + clamp(p.Formalidad_Total_Pct * 1.15, 25, 96) * 0.40, 25, 98)
+  );
+
+  const score = Number(
+    (
+      pRetorno * 0.25 +
+      pEmpleo * 0.20 +
+      pCalidad * 0.20 +
+      pMerito * 0.15 +
+      pFuturo * 0.10 +
+      pEstabilidad * 0.10
+    ).toFixed(1)
+  );
+
+  return {
+    score,
+    pilares: {
+      retornoSalarial: pRetorno,
+      empleabilidad: pEmpleo,
+      calidadOIT: pCalidad,
+      meritocracia: pMerito,
+      blindajeFuturo: pFuturo,
+      estabilidadVida: pEstabilidad
+    }
+  };
+}
+
+export function obtenerSemaforoScoreDataROI(score: number) {
+  if (score >= 70.0) {
+    return {
+      grado: 'A',
+      etiqueta: 'Sobresaliente',
+      colorHex: '#059669',
+      trackHex: '#D1FAE5',
+      textClass: 'text-emerald-700',
+      bgBadgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+      ringBgClass: 'bg-emerald-50/60 border-emerald-200'
+    };
+  }
+  if (score >= 56.0) {
+    return {
+      grado: 'B',
+      etiqueta: 'Viable',
+      colorHex: '#D97706',
+      trackHex: '#FEF3C7',
+      textClass: 'text-amber-700',
+      bgBadgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+      ringBgClass: 'bg-amber-50/60 border-amber-200'
+    };
+  }
+  return {
+    grado: 'C',
+    etiqueta: 'En Riesgo',
+    colorHex: '#E11D48',
+    trackHex: '#FFE4E6',
+    textClass: 'text-rose-700',
+    bgBadgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
+    ringBgClass: 'bg-rose-50/60 border-rose-200'
+  };
 }
 
 // ============================================================================
@@ -61,19 +185,22 @@ export function descargarCSVEstilizado(
 }
 
 // ============================================================================
-// 2. GENERADOR NATIVO DE LIBROS DE EXCEL (.XLSX MULTI-HOJA CON COLORES)
+// 2. GENERADOR NATIVO DE LIBROS DE EXCEL (.XLSX MULTI-HOJA CON ALINEACIÓN UNIFORME)
 // ============================================================================
+// Nota crítica OpenXML: el índice 0 se reserva para el estilo Normal base de Excel.
+// Todas las celdas de datos usan índices >= 1 para que Excel respete siempre <alignment horizontal="left" vertical="center"/>.
 const STYLE_INDEX_MAP: Record<EstiloCeldaExcel, number> = {
-  default: 0,
-  header: 1,
-  winner: 2,
-  gold: 3,
-  silver: 4,
-  bronze: 5,
-  section: 6,
-  zebra: 7,
-  bold: 8,
-  warning: 9
+  default: 1,
+  header: 2,
+  winner: 3,
+  gold: 4,
+  silver: 5,
+  bronze: 6,
+  section: 7,
+  zebra: 8,
+  bold: 9,
+  bold_zebra: 10,
+  warning: 11
 };
 
 const AMP = String.fromCharCode(38);
@@ -107,14 +234,15 @@ function construirStylesXml(): string {
     <font><b/><sz val="10.5"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF065F46"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF92400E"/><name val="Calibri"/></font>
-    <font><b/><sz val="10"/><color rgb="FF1E293B"/><name val="Calibri"/></font>
+    <font><b/><sz val="10"/><color rgb="FF0F172A"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF9A3412"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF1E3A8A"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF9F1239"/><name val="Calibri"/></font>
   </fonts>
-  <fills count="10">
+  <fills count="11">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FF0F172A"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FFD1FAE5"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill>
@@ -137,18 +265,23 @@ function construirStylesXml(): string {
   <cellStyleXfs count="1">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
   </cellStyleXfs>
-  <cellXfs count="10">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="4" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="5" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="6" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="0" fillId="8" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="7" fillId="9" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+  <cellXfs count="12">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="5" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="6" fillId="8" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="9" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="9" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="7" fillId="10" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
   </cellXfs>
+  <cellStyles count="1">
+    <cellStyle name="Normal" xfId="0" builtinId="0"/>
+  </cellStyles>
 </styleSheet>`;
 }
 
@@ -179,25 +312,37 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
 
   const rowsXml: string[] = [];
 
+  // Fila 1: Cabeceras (s="2" -> header)
   const celdasHeader = hoja.cabeceras
     .map((cab, cIdx) => {
       const ref = `${colIndexToLetter(cIdx)}1`;
-      return `<c r="${ref}" t="inlineStr" s="1"><is><t>${escapeXml(cab)}</t></is></c>`;
+      return `<c r="${ref}" t="inlineStr" s="${STYLE_INDEX_MAP.header}"><is><t>${escapeXml(cab)}</t></is></c>`;
     })
     .join('');
   rowsXml.push(`<row r="1" ht="23" customHeight="1">${celdasHeader}</row>`);
 
+  // Filas de datos con alineación idéntica en pares e impares
   hoja.filas.forEach((fila, rIdx) => {
     const numFila = rIdx + 2;
-    const estiloDefaultFila: EstiloCeldaExcel = rIdx % 2 === 1 ? 'zebra' : 'default';
+    const esFilaCebra = rIdx % 2 === 1;
+    const estiloDefaultFila: EstiloCeldaExcel = esFilaCebra ? 'zebra' : 'default';
 
     const celdasFila = fila
       .map((celda, cIdx) => {
         const ref = `${colIndexToLetter(cIdx)}${numFila}`;
         const esObj = celda !== null && typeof celda === 'object' && 'v' in celda;
         const rawVal = esObj ? (celda as CeldaExcelObj).v : celda;
-        const estilo = esObj && (celda as CeldaExcelObj).s ? (celda as CeldaExcelObj).s! : estiloDefaultFila;
-        const sIdx = STYLE_INDEX_MAP[estilo] ?? 0;
+        let estilo: EstiloCeldaExcel =
+          esObj && (celda as CeldaExcelObj).s ? (celda as CeldaExcelObj).s! : estiloDefaultFila;
+
+        // Si la celda pide 'default', respetamos la franja cebra; si pide 'bold' en fila cebra, usamos 'bold_zebra'
+        if (estilo === 'default' && esFilaCebra) {
+          estilo = 'zebra';
+        } else if (estilo === 'bold' && esFilaCebra) {
+          estilo = 'bold_zebra';
+        }
+
+        const sIdx = STYLE_INDEX_MAP[estilo] ?? STYLE_INDEX_MAP.default;
 
         if (typeof rawVal === 'number' && Number.isFinite(rawVal)) {
           return `<c r="${ref}" t="n" s="${sIdx}"><v>${rawVal}</v></c>`;
@@ -206,7 +351,7 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
       })
       .join('');
 
-    rowsXml.push(`<row r="${numFila}" ht="19.5" customHeight="1">${celdasFila}</row>`);
+    rowsXml.push(`<row r="${numFila}" ht="20" customHeight="1">${celdasFila}</row>`);
   });
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

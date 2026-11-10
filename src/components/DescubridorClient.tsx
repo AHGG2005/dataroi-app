@@ -6,6 +6,8 @@ import { descargarComparativaVersusPDF } from '@/lib/pdfReportGenerator';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
+  calcularScoreDataROIUniversal,
+  obtenerSemaforoScoreDataROI,
   ValorCeldaExcel,
   EstiloCeldaExcel
 } from '@/lib/excelReportGenerator';
@@ -22,16 +24,17 @@ import {
   ArrowUpDown, ChevronDown, ChevronUp, AlertTriangle,
   MapPin, Users, Landmark, RotateCcw, Info, Anchor,
   SlidersHorizontal, Wand2, X, Check, BarChart3, Compass,
-  Share2, Download, Printer, FlaskConical, FileSpreadsheet
+  Share2, Download, Printer, FlaskConical, FileSpreadsheet, Target
 } from 'lucide-react';
 
-type CriterioOrden = 'afinidad_desc' | 'balance_desc' | 'afinidad_asc' | 'salario_desc' | 'salario_asc';
+type ModoEvaluacionRanking = 'calificacion' | 'afinidad';
+type CriterioOrden = 'principal_desc' | 'principal_asc' | 'salario_desc' | 'salario_asc';
 type CodigoGenero = 0 | 1 | 2; // 0 = Total, 1 = Hombres, 2 = Mujeres
 type ModoVistaFiltros = 'wizard' | 'colapsado' | 'expandido';
 
 const MAX_PRIORIDADES = 5;
 const MAX_COMPARAR = 3;
-const STORAGE_KEY_DESCUBRIDOR = 'dataroi_descubridor_state_v1';
+const STORAGE_KEY_DESCUBRIDOR = 'dataroi_descubridor_state_v2';
 
 const TABLA_PESOS_EXACTOS: Record<number, number[]> = {
   1: [100],
@@ -238,6 +241,16 @@ const PREFERENCIAS = [
   { id: 'publico', label: 'Sector Público y Gremial', corto: 'Sector Público', icon: <Landmark className="w-4 h-4" />, desc: 'Plazas en gobierno, educación/salud pública y respaldo sindical.' }
 ];
 
+// Los 6 Pilares Universales para el Modo de Calificación Integral DataROI (0–100)
+const PILARES_CALIFICACION_UNIVERSAL = [
+  { id: 'pilar_retorno', label: 'Retorno Salarial (25%)', corto: 'Retorno Salarial' },
+  { id: 'pilar_empleo', label: 'Empleabilidad Real (20%)', corto: 'Empleabilidad' },
+  { id: 'pilar_calidad', label: 'Calidad Formal OIT (20%)', corto: 'Calidad OIT' },
+  { id: 'pilar_merito', label: 'Apertura y Mérito (15%)', corto: 'Meritocracia' },
+  { id: 'pilar_futuro', label: 'Blindaje IA y Futuro (10%)', corto: 'Blindaje y Futuro' },
+  { id: 'pilar_estabilidad', label: 'Estabilidad de Vida (10%)', corto: 'Estabilidad' }
+] as const;
+
 const IDS_PREFERENCIAS_VALIDAS = new Set(PREFERENCIAS.map(p => p.id));
 
 const formatoMoneda = (valor: number) =>
@@ -267,9 +280,13 @@ function obtenerCapExCorto(cve: string) {
   return { nivel: 1, costoEquipo: 18000, etiqueta: 'Equipo Básico ($18k)', corto: 'Equipo Básico', clase: 'bg-slate-100 text-slate-600 border-slate-200' };
 }
 
+// Sincronizado al 100% con el modelo mexicano del Dashboard (Medicina 12 semestres, demás 9 semestres)
 function calcularAniosRetornoRapido(sueldoCarrera: number, sueldoPrepa: number, cve: string, esPrivada: boolean) {
+  const semestres = cve === '091100' ? 12 : 9;
   const capex = obtenerCapExCorto(cve);
-  const inversionTotal = (esPrivada ? 340000 : 32000) + capex.costoEquipo;
+  const inversionTotal = esPrivada
+    ? semestres * (6500 * 6) + 22000 + capex.costoEquipo
+    : semestres * 1800 + 8500 + capex.costoEquipo;
   const bonoAnual = (sueldoCarrera - sueldoPrepa) * 12;
   if (bonoAnual <= 0) return null;
   return Number((inversionTotal / bonoAnual).toFixed(1));
@@ -283,6 +300,82 @@ function obtenerSectorDominante(p: any) {
     { label: 'Gobierno', val: num(p?.pct_gobierno, 0) }
   ].sort((a, b) => b.val - a.val);
   return `${sectores[0].val.toFixed(1)}% ${sectores[0].label}`;
+}
+
+function AnilloScoreDataROIGrande({
+  score,
+  rank,
+  compacto = false
+}: {
+  score: number;
+  rank?: number;
+  compacto?: boolean;
+}) {
+  const sem = obtenerSemaforoScoreDataROI(score);
+  const r = compacto ? 16 : 24;
+  const dim = compacto ? 40 : 60;
+  const strokeW = compacto ? 3.8 : 5.2;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, score));
+  const offset = circ - (pct / 100) * circ;
+
+  if (compacto) {
+    return (
+      <div
+        title={`Score DataROI: ${score.toFixed(1)}/100 (${sem.etiqueta})`}
+        className="relative w-10 h-10 flex items-center justify-center shrink-0"
+      >
+        <svg className="w-10 h-10 -rotate-90" viewBox={`0 0 ${dim} ${dim}`}>
+          <circle cx={dim / 2} cy={dim / 2} r={r} fill="none" stroke={sem.trackHex} strokeWidth={strokeW} />
+          <circle
+            cx={dim / 2}
+            cy={dim / 2}
+            r={r}
+            fill="none"
+            stroke={sem.colorHex}
+            strokeWidth={strokeW}
+            strokeLinecap="round"
+            strokeDasharray={circ}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <span className="absolute text-[10.5px] font-black text-slate-900">{score.toFixed(1)}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="text-left lg:text-right">
+        <span className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
+          {rank ? `Calificación (#${rank})` : 'Score DataROI'}
+        </span>
+        <span className={`block text-xs font-black ${sem.textClass} mt-0.5`}>
+          Grado {sem.grado} · {sem.etiqueta}
+        </span>
+      </div>
+      <div className="relative w-15 h-15 flex items-center justify-center shrink-0">
+        <svg className="w-15 h-15 -rotate-90" viewBox="0 0 60 60">
+          <circle cx="30" cy="30" r={r} fill="none" stroke={sem.trackHex} strokeWidth={strokeW} />
+          <circle
+            cx="30"
+            cy="30"
+            r={r}
+            fill="none"
+            stroke={sem.colorHex}
+            strokeWidth={strokeW}
+            strokeLinecap="round"
+            strokeDasharray={circ}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+          <span className="text-sm font-black text-slate-900">{score.toFixed(1)}</span>
+          <span className="text-[9px] font-bold text-slate-400">/100</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function BadgeTendencia({ codigo, etiqueta }: { codigo?: string; etiqueta?: string }) {
@@ -423,9 +516,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   const [regionHover, setRegionHover] = useState<string | null>(null);
   const [generoActivo, setGeneroActivo] = useState<CodigoGenero>(0);
 
+  const [modoEvaluacion, setModoEvaluacion] = useState<ModoEvaluacionRanking>('calificacion');
   const [activos, setActivos] = useState<string[]>([]);
-  const [modoBalanceGeneral, setModoBalanceGeneral] = useState<boolean>(false);
-  const [orden, setOrden] = useState<CriterioOrden>('afinidad_desc');
+  const [orden, setOrden] = useState<CriterioOrden>('principal_desc');
   const [mostrarTodas, setMostrarTodas] = useState(false);
 
   const [modoVistaFiltros, setModoVistaFiltros] = useState<ModoVistaFiltros>('wizard');
@@ -501,7 +594,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       .filter(s => s > 0);
 
     if (sueldos.length === 0) {
-      return { minSueldoCatalogo: pisoPrepaFloor, maxSueldoCatalogo: 21000, sueldoSugerido: pisoPrepaFloor + 500 };
+      return { minSueldoCatalogo: pisoPrepaFloor, maxSueldoCatalogo: 21000, sueldoSugerido: pisoPrepaFloor };
     }
 
     const minReal = Math.min(...sueldos);
@@ -517,18 +610,19 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     };
   }, [datos, regionActiva, generoActivo, benchmarksDinamicosPorRegion]);
 
-  const [sueldoMinimo, setSueldoMinimo] = useState<number>(11500);
+  const [sueldoMinimo, setSueldoMinimo] = useState<number>(10500);
 
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const regUrl = params.get('region');
       const genUrl = params.get('genero');
+      const modoUrl = params.get('modo');
       const sueldoUrl = params.get('sueldo');
       const prioUrl = params.get('prio');
       const compUrl = params.get('comparar');
 
-      const tieneParamsUrl = Boolean(regUrl || genUrl || sueldoUrl || prioUrl || compUrl);
+      const tieneParamsUrl = Boolean(regUrl || genUrl || modoUrl || sueldoUrl || prioUrl || compUrl);
 
       if (tieneParamsUrl) {
         let regInicial = 'nacional';
@@ -542,18 +636,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         else if (genUrl === 'hombres' || genUrl === '1') genInicial = 1;
         setGeneroActivo(genInicial);
 
-        if (sueldoUrl && Number(sueldoUrl) >= 7000) {
+        if (sueldoUrl && Number(sueldoUrl) >= 6000) {
           setSueldoMinimo(Number(sueldoUrl));
         } else {
           const prepaRef = BENCHMARK_REGIONES_BASE[regInicial]?.sueldo_prepa[genInicial] || 10500;
-          setSueldoMinimo(Math.ceil(prepaRef / 500) * 500);
+          setSueldoMinimo(Math.floor(prepaRef / 500) * 500);
         }
 
-        if (prioUrl === 'balance_general') {
-          setModoBalanceGeneral(true);
-          setActivos([]);
-          setModoVistaFiltros('colapsado');
-        } else if (prioUrl) {
+        if (prioUrl && prioUrl !== 'calificacion') {
           const listaPrio = prioUrl
             .split(',')
             .map(s => s.trim())
@@ -561,9 +651,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             .slice(0, MAX_PRIORIDADES);
           if (listaPrio.length > 0) {
             setActivos(listaPrio);
-            setModoBalanceGeneral(false);
+            setModoEvaluacion('afinidad');
             setModoVistaFiltros('colapsado');
           }
+        } else if (modoUrl === 'calificacion' || prioUrl === 'calificacion') {
+          setModoEvaluacion('calificacion');
+          setModoVistaFiltros('colapsado');
         }
 
         if (compUrl) {
@@ -576,9 +669,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
           if (listaComp.length > 0) {
             setCarrerasCompararCves(listaComp);
-            if (!prioUrl) {
-              setModoBalanceGeneral(true);
-            }
             setModoVistaFiltros('colapsado');
             if (listaComp.length >= 2) {
               setModalVersusAbierto(true);
@@ -595,18 +685,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           if (parsed.generoActivo === 0 || parsed.generoActivo === 1 || parsed.generoActivo === 2) {
             setGeneroActivo(parsed.generoActivo);
           }
-          if (typeof parsed.sueldoMinimo === 'number' && parsed.sueldoMinimo >= 7000) {
+          if (typeof parsed.sueldoMinimo === 'number' && parsed.sueldoMinimo >= 6000) {
             setSueldoMinimo(parsed.sueldoMinimo);
           }
-          if (parsed.modoBalanceGeneral) {
-            setModoBalanceGeneral(true);
-            setActivos([]);
-            setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
-          } else if (Array.isArray(parsed.activos) && parsed.activos.length > 0) {
+          if (parsed.modoEvaluacion === 'afinidad' && Array.isArray(parsed.activos) && parsed.activos.length > 0) {
+            setModoEvaluacion('afinidad');
             setActivos(parsed.activos.slice(0, MAX_PRIORIDADES));
             setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
-          } else if (parsed.modoVistaFiltros === 'expandido') {
-            setModoVistaFiltros('expandido');
+          } else if (parsed.modoEvaluacion === 'calificacion' && parsed.modoVistaFiltros !== 'wizard') {
+            setModoEvaluacion('calificacion');
+            setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
           }
         } else {
           setSueldoMinimo(sueldoSugerido);
@@ -627,8 +715,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           regionActiva,
           generoActivo,
           sueldoMinimo,
+          modoEvaluacion,
           activos,
-          modoBalanceGeneral,
           modoVistaFiltros
         })
       );
@@ -636,13 +724,17 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const url = new URL(window.location.href);
       url.searchParams.set('region', regionActiva);
       url.searchParams.set('genero', generoActivo === 2 ? 'mujeres' : generoActivo === 1 ? 'hombres' : 'total');
-      url.searchParams.set('sueldo', String(sueldoMinimo));
-      if (modoBalanceGeneral) {
-        url.searchParams.set('prio', 'balance_general');
-      } else if (activos.length > 0) {
-        url.searchParams.set('prio', activos.join(','));
+      url.searchParams.set('modo', modoEvaluacion);
+      if (modoEvaluacion === 'afinidad') {
+        url.searchParams.set('sueldo', String(sueldoMinimo));
+        if (activos.length > 0) {
+          url.searchParams.set('prio', activos.join(','));
+        } else {
+          url.searchParams.delete('prio');
+        }
       } else {
         url.searchParams.delete('prio');
+        url.searchParams.delete('sueldo');
       }
       if (carrerasCompararCves.length > 0) {
         url.searchParams.set('comparar', carrerasCompararCves.join(','));
@@ -653,7 +745,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     } catch {
       // Ignorar errores en modo privado
     }
-  }, [hidratado, regionActiva, generoActivo, sueldoMinimo, activos, modoBalanceGeneral, modoVistaFiltros, carrerasCompararCves]);
+  }, [hidratado, regionActiva, generoActivo, sueldoMinimo, modoEvaluacion, activos, modoVistaFiltros, carrerasCompararCves]);
 
   const cambiarRegionConCalibracion = (nuevaReg: string) => {
     setRegionActiva(nuevaReg);
@@ -669,21 +761,15 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
   useEffect(() => {
     setMostrarTodas(false);
-  }, [activos, modoBalanceGeneral, sueldoMinimo, orden, regionActiva, generoActivo]);
+  }, [activos, modoEvaluacion, sueldoMinimo, orden, regionActiva, generoActivo]);
 
   const togglePreferencia = (id: string) => {
-    setModoBalanceGeneral(false);
+    setModoEvaluacion('afinidad');
     setActivos(prev => {
       if (prev.includes(id)) return prev.filter(p => p !== id);
       if (prev.length >= MAX_PRIORIDADES) return prev;
       return [...prev, id];
     });
-  };
-
-  const activarModoBalanceGeneral = () => {
-    setActivos([]);
-    setModoBalanceGeneral(true);
-    setOrden('afinidad_desc');
   };
 
   const toggleCarreraComparar = (e: React.MouseEvent, cve: string) => {
@@ -713,21 +799,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   }, [activos]);
 
   const alertaConflictoEcosistema = useMemo(() => {
+    if (modoEvaluacion !== 'afinidad') return false;
     const tieneCorp = activos.includes('corporativo');
     const tieneIndep = activos.includes('emprendimiento');
     const tienePub = activos.includes('publico');
     return (tieneCorp && tieneIndep) || (tieneCorp && tienePub) || (tieneIndep && tienePub);
-  }, [activos]);
+  }, [modoEvaluacion, activos]);
 
-  const tieneCriteriosActivos = activos.length > 0 || modoBalanceGeneral;
-
-  // Prioridades que se muestran como columnas y pastillas (si está en Balance General muestra los 5 pilares nucleares con peso igual)
-  const prioridadesEfectivasParaMostrar = useMemo(() => {
-    if (modoBalanceGeneral) {
-      return ['empleabilidad', 'formalidad', 'movilidad', 'ia', 'balance'];
-    }
-    return activos;
-  }, [modoBalanceGeneral, activos]);
+  const tieneResultadosActivos = modoEvaluacion === 'calificacion' || activos.length > 0;
 
   const { rankingVisible, rankingCompleto, listaOrdenadaCompleta, totalFiltradas, totalEnRegion } = useMemo(() => {
     const infoReg = benchmarksDinamicosPorRegion[regionActiva] || BENCHMARK_REGIONES_BASE.nacional;
@@ -813,17 +892,19 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         pContrato * 0.35
       );
 
-      // Score de Balance General (6 Pilares Estructurales)
-      const scoreBalance6Pilares = Number(
-        (
-          radarSalario * 0.22 +
-          radarFormalidad * 0.18 +
-          radarEmpleo * 0.22 +
-          radarMerito * 0.16 +
-          radarAutonomia * 0.10 +
-          radarEstabilidad * 0.12
-        ).toFixed(1)
-      );
+      // Cálculo de la Calificación Integral DataROI (0 a 100) con la función universal
+      const evalUniversal = calcularScoreDataROIUniversal({
+        Prima_vs_Prepa_Pct: premioVsPrepaPct,
+        Desempleo_Abierto_Pct: desempleo,
+        Saturacion_ANUIES_Pct: saturacion,
+        Empleo_Calidad_OIT_Pct: tasaCalidadOIT,
+        Formalidad_Total_Pct: tasaFormalidadTotal,
+        Meritocracia_Pct: Number(rawMovilidad.toFixed(1)),
+        Blindaje_IA_Pct: rawIA,
+        Tendencia_Codigo: p.tendencia_codigo || carrera.tendencia_codigo || 'estable',
+        Empleo_Unico_Pct: pctEmpleoUnico,
+        Arraigo_Local_Pct: pctArraigoLocal
+      });
 
       return {
         ...carrera,
@@ -835,7 +916,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         paridadSalarialPct,
         pctEmpleoUnico,
         pctArraigoLocal,
-        scoreBalance6Pilares,
+        scoreDataROI: evalUniversal.score,
+        pilaresScoreUniversal: evalUniversal.pilares,
         pilaresRadar: {
           Salario: radarSalario,
           Formalidad: radarFormalidad,
@@ -854,15 +936,25 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           equidad: rawEquidad,
           ia: rawIA,
           balance: rawBalance,
-          publico: rawPublico
+          publico: rawPublico,
+          pilar_retorno: evalUniversal.pilares.retornoSalarial + premioVsPrepaPct * 0.001,
+          pilar_empleo: evalUniversal.pilares.empleabilidad + rawEmpleabilidad * 0.001,
+          pilar_calidad: evalUniversal.pilares.calidadOIT + tasaCalidadOIT * 0.001,
+          pilar_merito: evalUniversal.pilares.meritocracia + rawMovilidad * 0.001,
+          pilar_futuro: evalUniversal.pilares.blindajeFuturo + rawIA * 0.001,
+          pilar_estabilidad: evalUniversal.pilares.estabilidadVida + rawBalance * 0.001
         }
       };
     });
 
-    const filtroSueldo = listaConPerfil.filter(c => c.sueldo_esperado >= sueldoMinimo);
+    // En modo 'calificacion' se evalúan todas las carreras certificadas de la región; en 'afinidad' se aplica el piso salarial
+    const filtroSueldo = modoEvaluacion === 'calificacion'
+      ? listaConPerfil
+      : listaConPerfil.filter(c => c.sueldo_esperado >= sueldoMinimo);
+
     const totalViables = filtroSueldo.length;
 
-    if (!tieneCriteriosActivos || totalViables === 0) {
+    if (!tieneResultadosActivos || totalViables === 0) {
       return {
         rankingVisible: [],
         rankingCompleto: listaConPerfil,
@@ -872,11 +964,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       };
     }
 
-    const dims = ['empleabilidad', 'formalidad', 'corporativo', 'emprendimiento', 'remoto', 'movilidad', 'equidad', 'ia', 'balance', 'publico'] as const;
+    const todasDims = [
+      'empleabilidad', 'formalidad', 'corporativo', 'emprendimiento', 'remoto',
+      'movilidad', 'equidad', 'ia', 'balance', 'publico',
+      'pilar_retorno', 'pilar_empleo', 'pilar_calidad', 'pilar_merito', 'pilar_futuro', 'pilar_estabilidad'
+    ] as const;
+
     const scoresPorDim: Record<string, Record<string, number>> = {};
     const rankPorDim: Record<string, Record<string, number>> = {};
 
-    dims.forEach(dim => {
+    todasDims.forEach(dim => {
       scoresPorDim[dim] = {};
       rankPorDim[dim] = {};
 
@@ -919,6 +1016,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       }[] = [];
 
       const sinContactosPct = Math.max(10, Math.round(100 - num(p.pct_nepotismo, 37)));
+      const tendTexto = p.tendencia_salarial || carrera.tendencia_salarial || 'Estable';
 
       const datoRealPorDim: Record<string, string> = {
         empleabilidad: `Desempleo ${num(p.tasa_desempleo, 0).toFixed(1)}% · Saturación ${num(p.indice_saturacion_pct, 100)}%`,
@@ -930,7 +1028,13 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         equidad: `${carrera.paridadSalarialPct}% Paridad Salarial · ${num(p.pct_materno ?? p.pct_materno_estructural, 23).toFixed(0)}% Lic. Parental`,
         ia: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje Humano ante IA`,
         balance: `${carrera.pctEmpleoUnico}% Empleo Único · ${carrera.pctArraigoLocal}% Arraigo Local`,
-        publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gobierno · ${num(p.pct_sindicato, 0).toFixed(1)}% Sindicato`
+        publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gobierno · ${num(p.pct_sindicato, 0).toFixed(1)}% Sindicato`,
+        pilar_retorno: `${formatoMoneda(carrera.sueldo_esperado)}/mes (${carrera.premioVsPrepaPct >= 0 ? `+${carrera.premioVsPrepaPct}%` : `${carrera.premioVsPrepaPct}%`} vs. Prepa)`,
+        pilar_empleo: `Desempleo ${num(p.tasa_desempleo, 0).toFixed(1)}% · Saturación ${num(p.indice_saturacion_pct, 100)}%`,
+        pilar_calidad: `${carrera.tasaCalidadOIT}% Calidad OIT (${carrera.tasaFormalidadTotal}% Formalidad)`,
+        pilar_merito: `${carrera.crudos.movilidad.toFixed(1)}% Mérito (${sinContactosPct}% Sin Contactos)`,
+        pilar_futuro: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje IA · ${tendTexto}`,
+        pilar_estabilidad: `${carrera.pctEmpleoUnico}% Empleo Único · ${carrera.pctArraigoLocal}% Arraigo`
       };
 
       const datoCortoPorDim: Record<string, string> = {
@@ -943,25 +1047,35 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         equidad: `${carrera.paridadSalarialPct}% Paridad / ${num(p.pct_materno ?? p.pct_materno_estructural, 23).toFixed(0)}% Parental`,
         ia: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje IA`,
         balance: `${carrera.pctEmpleoUnico}% Único / ${carrera.pctArraigoLocal}% Arraigo`,
-        publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gob / ${num(p.pct_sindicato, 0).toFixed(1)}% Sind`
+        publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gob / ${num(p.pct_sindicato, 0).toFixed(1)}% Sind`,
+        pilar_retorno: `${formatoMoneda(carrera.sueldo_esperado)} (${carrera.premioVsPrepaPct >= 0 ? `+${carrera.premioVsPrepaPct}%` : `${carrera.premioVsPrepaPct}%`})`,
+        pilar_empleo: `Desemp ${num(p.tasa_desempleo, 0).toFixed(1)}% / Sat ${num(p.indice_saturacion_pct, 100)}%`,
+        pilar_calidad: `${carrera.tasaCalidadOIT}% Calidad OIT`,
+        pilar_merito: `${carrera.crudos.movilidad.toFixed(1)}% Mérito`,
+        pilar_futuro: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% IA · ${tendTexto}`,
+        pilar_estabilidad: `${carrera.pctEmpleoUnico}% Único / ${carrera.pctArraigoLocal}% Arraigo`
       };
 
-      if (modoBalanceGeneral) {
-        // En Modo Balance General: Pondera por igual las 10 dimensiones + Score de Salario (Carrera Mejor Redondeada)
-        const suma10Dims = dims.reduce((acc, dKey) => acc + (scoresPorDim[dKey]?.[carrera.cve_carrera] ?? 50), 0) / dims.length;
-        matchScoreExacto = suma10Dims * 0.55 + carrera.scoreBalance6Pilares * 0.45;
+      if (modoEvaluacion === 'calificacion') {
+        matchScoreExacto = carrera.scoreDataROI;
 
-        prioridadesEfectivasParaMostrar.forEach((idPref, idx) => {
-          const scoreDim = scoresPorDim[idPref]?.[carrera.cve_carrera] ?? 50;
-          const posRubro = rankPorDim[idPref]?.[carrera.cve_carrera] ?? totalViables;
-          const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+        PILARES_CALIFICACION_UNIVERSAL.forEach((pilarMeta, idx) => {
+          const scorePilar =
+            pilarMeta.id === 'pilar_retorno' ? carrera.pilaresScoreUniversal.retornoSalarial :
+            pilarMeta.id === 'pilar_empleo' ? carrera.pilaresScoreUniversal.empleabilidad :
+            pilarMeta.id === 'pilar_calidad' ? carrera.pilaresScoreUniversal.calidadOIT :
+            pilarMeta.id === 'pilar_merito' ? carrera.pilaresScoreUniversal.meritocracia :
+            pilarMeta.id === 'pilar_futuro' ? carrera.pilaresScoreUniversal.blindajeFuturo :
+            carrera.pilaresScoreUniversal.estabilidadVida;
+
+          const posRubro = rankPorDim[pilarMeta.id]?.[carrera.cve_carrera] ?? totalViables;
           desglosePrioridades.push({
-            idPref,
+            idPref: pilarMeta.id,
             orden: idx + 1,
-            label: prefMeta?.corto || idPref,
-            datoReal: datoRealPorDim[idPref] || '',
-            datoCorto: datoCortoPorDim[idPref] || '',
-            score: Math.round(scoreDim),
+            label: pilarMeta.label,
+            datoReal: datoRealPorDim[pilarMeta.id] || '',
+            datoCorto: datoCortoPorDim[pilarMeta.id] || '',
+            score: Math.round(scorePilar),
             rankRubro: posRubro,
             totalViables
           });
@@ -1004,24 +1118,22 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     let ultimoMostrado = 100.1;
     const rankingMaestro = ordenadosPorExactitud.map((item, idx) => {
       let redondeado = Number(item.matchScoreExacto.toFixed(1));
-      if (redondeado >= ultimoMostrado) {
-        redondeado = Number(Math.max(5.0, ultimoMostrado - 0.1).toFixed(1));
+      if (modoEvaluacion === 'afinidad') {
+        if (redondeado >= ultimoMostrado) {
+          redondeado = Number(Math.max(5.0, ultimoMostrado - 0.1).toFixed(1));
+        }
+        ultimoMostrado = redondeado;
       }
-      ultimoMostrado = redondeado;
       return {
         ...item,
-        matchScore: redondeado,
+        matchScore: modoEvaluacion === 'calificacion' ? item.scoreDataROI : redondeado,
         rankAfinidad: idx + 1
       };
     });
 
     const listaOrdenada = [...rankingMaestro].sort((a, b) => {
-      if (orden === 'afinidad_desc') return a.rankAfinidad - b.rankAfinidad;
-      if (orden === 'balance_desc') {
-        if (b.scoreBalance6Pilares !== a.scoreBalance6Pilares) return b.scoreBalance6Pilares - a.scoreBalance6Pilares;
-        return a.rankAfinidad - b.rankAfinidad;
-      }
-      if (orden === 'afinidad_asc') return b.rankAfinidad - a.rankAfinidad;
+      if (orden === 'principal_desc') return a.rankAfinidad - b.rankAfinidad;
+      if (orden === 'principal_asc') return b.rankAfinidad - a.rankAfinidad;
       if (orden === 'salario_desc') {
         if (b.sueldo_esperado !== a.sueldo_esperado) return b.sueldo_esperado - a.sueldo_esperado;
         return a.rankAfinidad - b.rankAfinidad;
@@ -1045,9 +1157,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   }, [
     datos,
     activos,
-    modoBalanceGeneral,
-    tieneCriteriosActivos,
-    prioridadesEfectivasParaMostrar,
+    modoEvaluacion,
+    tieneResultadosActivos,
     pesosPrioridad,
     sueldoMinimo,
     orden,
@@ -1108,7 +1219,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       try {
         await navigator.share({
           title: `DataROI — Ranking en ${infoRegActiva.corto} (${etiquetaGeneroCorto})`,
-          text: `Mira mi ranking personalizado de carreras en ${infoRegActiva.nombre} con DataROI.`,
+          text: `Consulta el ranking de carreras en ${infoRegActiva.nombre} con DataROI.`,
           url
         });
         return;
@@ -1121,23 +1232,30 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     setTimeout(() => setCopiadoRanking(false), 2200);
   };
 
-  // Construcción del Excel del Ranking con Coloreado Acotado (Solo las primeras 4 celdas en Oro/Plata/Bronce y Medallas Oro/Plata/Bronce en cada Prioridad)
+  // Construcción de Tablas del Ranking para Excel y CSV
   const construirTablasRanking = () => {
-    const colsPrioCabeceras: string[] = [];
-    prioridadesEfectivasParaMostrar.forEach((idPref, idx) => {
-      const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
-      const nomLimpio = (prefMeta?.corto || idPref).replace(/\s+/g, '_');
-      const prefijo = modoBalanceGeneral ? `Pilar${idx + 1}` : `Prio${idx + 1}`;
-      colsPrioCabeceras.push(`${prefijo}_${nomLimpio}_Lugar`);
-      colsPrioCabeceras.push(`${prefijo}_${nomLimpio}_Dato`);
-    });
+    const colsRubrosCabeceras: string[] = [];
+    if (modoEvaluacion === 'calificacion') {
+      PILARES_CALIFICACION_UNIVERSAL.forEach((p, idx) => {
+        const nomLimpio = p.corto.replace(/\s+/g, '_');
+        colsRubrosCabeceras.push(`Pilar${idx + 1}_${nomLimpio}_Lugar`);
+        colsRubrosCabeceras.push(`Pilar${idx + 1}_${nomLimpio}_Dato`);
+      });
+    } else {
+      activos.forEach((idPref, idx) => {
+        const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+        const nomLimpio = (prefMeta?.corto || idPref).replace(/\s+/g, '_');
+        colsRubrosCabeceras.push(`Prio${idx + 1}_${nomLimpio}_Lugar`);
+        colsRubrosCabeceras.push(`Prio${idx + 1}_${nomLimpio}_Dato`);
+      });
+    }
 
     const cabeceras = [
-      'Lugar_Afinidad',
+      'Lugar_Ranking',
       'CVE_Carrera',
       'Nombre_Carrera',
-      'Afinidad_Global_Pct',
-      'Score_Balance_6_Pilares',
+      modoEvaluacion === 'calificacion' ? 'Score_DataROI_0_100' : 'Afinidad_Personal_Pct',
+      ...(modoEvaluacion === 'afinidad' ? ['Score_DataROI_0_100'] : ['Grado_Viabilidad_DataROI']),
       'Salario_Mensual_MXN',
       'Prima_vs_Prepa_Pct',
       'Tendencia_Real',
@@ -1148,26 +1266,27 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       'Saturacion_ANUIES_Pct',
       'Meritocracia_Pct',
       'Blindaje_IA_Pct',
-      ...colsPrioCabeceras
+      ...colsRubrosCabeceras
     ];
+
+    const numRubros = modoEvaluacion === 'calificacion' ? PILARES_CALIFICACION_UNIVERSAL.length : activos.length;
 
     const filas: ValorCeldaExcel[][] = listaOrdenadaCompleta.map((c: any) => {
       const pos = c.rankAfinidad;
-      // Solo las primeras 4 columnas identificadoras reciben el color de podio (Oro, Plata, Bronce)
       const estiloPodioIdentificador: EstiloCeldaExcel | undefined =
         pos === 1 ? 'gold' : pos === 2 ? 'silver' : pos === 3 ? 'bronze' : undefined;
 
       const celdaId = (v: string | number): ValorCeldaExcel =>
         estiloPodioIdentificador ? { v, s: estiloPodioIdentificador } : { v, s: 'bold' };
 
+      const sem = obtenerSemaforoScoreDataROI(c.scoreDataROI);
       const roiPub = calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false);
       const roiPriv = calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true);
 
       const celdasPrioridades: ValorCeldaExcel[] = [];
-      prioridadesEfectivasParaMostrar.forEach((_, idx) => {
+      for (let idx = 0; idx < numRubros; idx++) {
         const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
         if (itemP) {
-          // Medallas de Oro (#1), Plata (#2) y Bronce (#3) propias de cada prioridad, idéntico a las pastillas web
           let estiloRubro: EstiloCeldaExcel | undefined = undefined;
           let prefijoMedalla = '';
           if (itemP.rankRubro === 1) {
@@ -1190,14 +1309,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         } else {
           celdasPrioridades.push('-', '-');
         }
-      });
+      }
 
       return [
         celdaId(pos === 1 ? '🥇 #1' : pos === 2 ? '🥈 #2' : pos === 3 ? '🥉 #3' : `#${pos}`),
         celdaId(c.cve_carrera),
         celdaId(c.nombre_carrera),
         celdaId(Number(c.matchScore.toFixed(1))),
-        { v: c.scoreBalance6Pilares, s: 'bold' },
+        modoEvaluacion === 'afinidad'
+          ? { v: c.scoreDataROI, s: sem.grado === 'A' ? 'winner' : sem.grado === 'C' ? 'warning' : 'bold' }
+          : { v: `Grado ${sem.grado} — ${sem.etiqueta}`, s: sem.grado === 'A' ? 'winner' : sem.grado === 'C' ? 'warning' : 'default' },
         { v: c.sueldo_esperado, s: 'bold' },
         c.premioVsPrepaPct,
         c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable',
@@ -1222,16 +1343,23 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     const filasParametros: ValorCeldaExcel[][] = [
       ['Macro-Región Económica', infoRegActiva.nombre, infoRegActiva.estados],
       ['Perspectiva de Género', etiquetaGeneroCorto, `Sueldo Base Preparatoria: ${formatoMoneda(sueldoPrepaActual)} / mes`],
-      ['Piso Salarial Mensual Mínimo', `${formatoMoneda(sueldoMinimo)} MXN / mes`, `${diferenciaSliderVsPrepaPct >= 0 ? `+${diferenciaSliderVsPrepaPct}%` : `${diferenciaSliderVsPrepaPct}%`} respecto a Preparatoria`],
-      ['Carreras que Cumplen el Filtro', `${totalFiltradas} de ${totalEnRegion} licenciaturas`, 'Muestra estadística certificada en la región y perfil seleccionados'],
       [
-        'Modo de Ponderación Aplicado',
-        modoBalanceGeneral ? 'Balance General (Las 10 dimensiones por igual)' : `Por Orden de Importancia (${activos.length} prioridades)`,
-        modoBalanceGeneral
-          ? 'Evalúa de forma equitativa todas las dimensiones estructurales para encontrar la carrera más completa'
-          : 'Pondera según la tabla de pesos decrecientes que suma exactamente 100%'
+        'Modo de Evaluación Activo',
+        modoEvaluacion === 'calificacion'
+          ? 'Calificación Integral DataROI (0 a 100 pts)'
+          : `Afinidad Personal (${activos.length} prioridades seleccionadas)`,
+        modoEvaluacion === 'calificacion'
+          ? 'Evalúa objetivamente los 6 Pilares Universales (25% Retorno, 20% Empleo, 20% Calidad OIT, 15% Mérito, 10% Blindaje IA, 10% Estabilidad)'
+          : 'Pondera según tus prioridades personales elegidas en orden de importancia (suma 100%)'
       ],
-      ...(!modoBalanceGeneral
+      [
+        'Carreras Evaluadas en la Región',
+        `${totalFiltradas} de ${totalEnRegion} licenciaturas`,
+        modoEvaluacion === 'calificacion'
+          ? 'Todas las licenciaturas con muestra estadística certificada en la región y género'
+          : `Filtradas por piso salarial mínimo de ${formatoMoneda(sueldoMinimo)} / mes`
+      ],
+      ...(modoEvaluacion === 'afinidad'
         ? activos.map((idPref, idx) => {
             const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
             const infoPeso = pesosPrioridad[idPref];
@@ -1245,15 +1373,15 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     ];
 
     descargarLibroExcelXLSX(
-      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}${modoBalanceGeneral ? '_BalanceGeneral' : ''}.xlsx`,
+      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}_${modoEvaluacion === 'calificacion' ? 'ScoreDataROI' : 'Afinidad'}.xlsx`,
       [
         {
-          nombre: '1_Ranking_Personalizado',
+          nombre: '1_Ranking_DataROI',
           cabeceras,
           filas
         },
         {
-          nombre: '2_Parametros_Simulacion',
+          nombre: '2_Parametros_Evaluacion',
           cabeceras: ['Parametro_de_Decision', 'Valor_Seleccionado', 'Explicacion_y_Referencia'],
           filas: filasParametros
         }
@@ -1265,7 +1393,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     if (listaOrdenadaCompleta.length === 0) return;
     const { cabeceras, filas } = construirTablasRanking();
     descargarCSVEstilizado(
-      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}${modoBalanceGeneral ? '_BalanceGeneral' : ''}.csv`,
+      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}_${modoEvaluacion === 'calificacion' ? 'ScoreDataROI' : 'Afinidad'}.csv`,
       cabeceras,
       filas
     );
@@ -1275,6 +1403,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     const url = new URL(window.location.href);
     url.searchParams.set('region', regionActiva);
     url.searchParams.set('genero', queryGeneroParam);
+    url.searchParams.set('modo', modoEvaluacion);
     url.searchParams.set('comparar', carrerasCompararCves.join(','));
     const linkFinal = url.toString().replace(/%2C/gi, ',');
 
@@ -1341,30 +1470,33 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       'Carrera_Lider_del_Rubro'
     ];
 
-    const filasPrioridadesActivas: ValorCeldaExcel[][] = prioridadesEfectivasParaMostrar.map((idPref, idx) => {
-      const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
-      const valsRank = carrerasEnVersus.map((c: any) => {
-        const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
-        return itemP ? itemP.rankRubro : 999;
-      });
-      const mejorRank = Math.min(...valsRank);
+    const filasPrioridadesActivas: ValorCeldaExcel[][] =
+      modoEvaluacion === 'afinidad' && activos.length > 0
+        ? activos.map((idPref, idx) => {
+            const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
+            const valsRank = carrerasEnVersus.map((c: any) => {
+              const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
+              return itemP ? itemP.rankRubro : 999;
+            });
+            const mejorRank = Math.min(...valsRank);
 
-      const celdasPrio: ValorCeldaExcel[] = carrerasEnVersus.map((c: any, cIdx) => {
-        const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
-        if (!itemP) return '-';
-        const gana = valsRank[cIdx] === mejorRank && mejorRank < 900;
-        if (gana) conteoVictorias[cIdx] += 1;
-        const txt = `#${itemP.rankRubro} de ${itemP.totalViables} (${itemP.datoCorto || itemP.datoReal})`;
-        return gana ? { v: `★ ${txt}`, s: 'winner' } : txt;
-      });
+            const celdasPrio: ValorCeldaExcel[] = carrerasEnVersus.map((c: any, cIdx) => {
+              const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
+              if (!itemP) return '-';
+              const gana = valsRank[cIdx] === mejorRank && mejorRank < 900;
+              if (gana) conteoVictorias[cIdx] += 1;
+              const txt = `#${itemP.rankRubro} de ${itemP.totalViables} (${itemP.datoCorto || itemP.datoReal})`;
+              return gana ? { v: `★ ${txt}`, s: 'winner' } : txt;
+            });
 
-      return [
-        '2. Prioridades Evaluadas',
-        `${modoBalanceGeneral ? `Dimensión #${idx + 1}` : `Prioridad #${idx + 1}`}: ${prefMeta?.label || idPref}`,
-        ...celdasPrio,
-        encontrarLider(valsRank, false, 900)
-      ];
-    });
+            return [
+              '2. Prioridades Seleccionadas',
+              `Prioridad #${idx + 1}: ${prefMeta?.label || idPref}`,
+              ...celdasPrio,
+              encontrarLider(valsRank, false, 900)
+            ];
+          })
+        : [];
 
     const ejesRadar = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Autonomía', 'Estabilidad'] as const;
     const filasRadar: ValorCeldaExcel[][] = ejesRadar.map(eje => {
@@ -1375,16 +1507,18 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     const fmtAnios = (v: number) => (v >= 900 ? 'Retorno negativo' : v === 1 ? '1 año' : `${v} años`);
 
     const filasHoja1: ValorCeldaExcel[][] = [
-      ['1. Contexto y Trazabilidad', 'Macro-Región y Perfil Evaluado', ...carrerasEnVersus.map(() => `${infoRegActiva.nombre} (${etiquetaGeneroCorto})`), '-'],
-      ['1. Contexto y Trazabilidad', 'Sueldo Base Preparatoria de Referencia', ...carrerasEnVersus.map(() => `${formatoMoneda(sueldoPrepaActual)} / mes`), '-'],
+      ['1. Contexto y Trazabilidad', 'Macro-Región y Perfil Evaluado', ...carrerasEnVersus.map(() => `${infoRegActiva.nombre} (${etiquetaGeneroCorto})`), 'Contexto Activo'],
+      ['1. Contexto y Trazabilidad', 'Sueldo Base Preparatoria de Referencia', ...carrerasEnVersus.map(() => `${formatoMoneda(sueldoPrepaActual)} / mes`), 'Referencia Regional'],
       registrarFilaNumerica('1. Contexto y Trazabilidad', 'Muestra Física Certificada INEGI', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.n_encuestados_reales, 0)), v => `${v} encuestados`, true),
-      registrarFilaNumerica('2. Ranking Global', 'Afinidad Global con tu Configuración', carrerasEnVersus.map((c: any) => Number((c.matchScore ?? 50).toFixed(1))), v => `${v}%`, true),
-      registrarFilaNumerica('2. Ranking Global', 'Score de Balance General (6 Pilares 0-100)', carrerasEnVersus.map((c: any) => Number(c.scoreBalance6Pilares ?? 55)), v => `${v} pts`, true),
+      registrarFilaNumerica('2. Calificación Global', 'Calificación Integral DataROI (0 a 100)', carrerasEnVersus.map((c: any) => Number(c.scoreDataROI ?? 60)), v => `${v.toFixed(1)} / 100 pts`, true),
+      ...(modoEvaluacion === 'afinidad' && activos.length > 0
+        ? [registrarFilaNumerica('2. Calificación Global', 'Afinidad Personal con tus Prioridades (%)', carrerasEnVersus.map((c: any) => Number((c.matchScore ?? 50).toFixed(1))), v => `${v}%`, true)]
+        : []),
       ...filasPrioridadesActivas,
       ...filasRadar,
       registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Salario Mensual Consolidado', carrerasEnVersus.map((c: any) => c.sueldo_esperado), v => `${formatoMoneda(v)} / mes`, true),
       registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Prima Salarial vs. Preparatoria', carrerasEnVersus.map((c: any) => c.premioVsPrepaPct), v => `${v >= 0 ? `+${v}%` : `${v}%`} vs. Prepa`, true),
-      ['4. Salario y Retorno (ROI)', 'Tendencia Salarial Real (2021–2026)', ...carrerasEnVersus.map((c: any) => c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable'), '-'],
+      ['4. Salario y Retorno (ROI)', 'Tendencia Salarial Real (2021–2026)', ...carrerasEnVersus.map((c: any) => c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable'), 'Trayectoria INPC'],
       registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Retorno Inversión Univ. Pública', carrerasEnVersus.map((c: any) => calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false) ?? 999), fmtAnios, false, 900),
       registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Retorno Inversión Univ. Privada Media', carrerasEnVersus.map((c: any) => calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true) ?? 999), fmtAnios, false, 900),
       registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Inversión Requerida en Equipo (CapEx)', carrerasEnVersus.map((c: any) => obtenerCapExCorto(c.cve_carrera).costoEquipo), v => formatoMoneda(v), false),
@@ -1392,7 +1526,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Formalidad Laboral Total', carrerasEnVersus.map((c: any) => c.tasaFormalidadTotal), v => `${v}%`, true),
       registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Tasa de Desempleo Abierto', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.tasa_desempleo, 3.5)), v => `${v.toFixed(1)}%`, false),
       registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Índice de Saturación ANUIES', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_saturacion_pct, 100)), v => `${v}%`, false),
-      ['5. Calidad y Mercado Laboral', 'Sector Empleador Dominante', ...carrerasEnVersus.map((c: any) => obtenerSectorDominante(c.perfilActivo)), '-'],
+      ['5. Calidad y Mercado Laboral', 'Sector Empleador Dominante', ...carrerasEnVersus.map((c: any) => obtenerSectorDominante(c.perfilActivo)), 'Composición INEGI'],
       registrarFilaNumerica('5. Ecosistema Empleador', 'Inserción en Grandes Corporativos', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_corp, 0)), v => `${v.toFixed(1)}%`, true),
       registrarFilaNumerica('5. Ecosistema Empleador', 'Inserción en PYMEs', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_pyme, 0)), v => `${v.toFixed(1)}%`, true),
       registrarFilaNumerica('5. Ecosistema Empleador', 'Práctica Independiente / Microempresa', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_micro, 0)), v => `${v.toFixed(1)}%`, true),
@@ -1509,6 +1643,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         return {
           cve_carrera: c.cve_carrera,
           nombre_carrera: c.nombre_carrera,
+          scoreDataROI: c.scoreDataROI,
           sueldo_esperado: c.sueldo_esperado,
           premioVsPrepaPct: c.premioVsPrepaPct,
           roiPublica: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false),
@@ -1536,10 +1671,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       <div className="no-print mb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight">
-            Descubridor de Carreras
+            Descubridor y Ranking Regional
           </h1>
           <p className="text-xs md:text-sm text-slate-500 mt-1">
-            Encuentra las licenciaturas con mayor retorno y afinidad según tu región, perfil y prioridades.
+            Evalúa las licenciaturas por su <strong>Calificación Integral DataROI (0–100)</strong> o personaliza tu búsqueda con hasta <strong>5 prioridades de afinidad</strong>.
           </p>
         </div>
 
@@ -1574,7 +1709,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 }`}
               >
                 <SlidersHorizontal className="w-3.5 h-3.5" />
-                {modoVistaFiltros === 'expandido' ? 'Contraer filtros' : 'Editar filtros'}
+                {modoVistaFiltros === 'expandido' ? 'Contraer panel' : 'Configurar región / prioridades'}
               </button>
             </>
           )}
@@ -1582,27 +1717,27 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       </div>
 
       {/* ========================================================================= */}
-      {/* MODO 1: ASISTENTE PASO A PASO (WIZARD PROGRESIVO CON FADE-IN)              */}
+      {/* MODO 1: ASISTENTE PASO A PASO (CON BIFURCACIÓN EN EL PASO 3)             */}
       {/* ========================================================================= */}
       {modoVistaFiltros === 'wizard' && (
         <div className="no-print bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-8 max-w-3xl mx-auto mb-8 animate-in fade-in duration-200">
           
           <div className="flex items-center justify-between gap-2 mb-4">
             <span className="text-xs font-black uppercase tracking-wider text-blue-600">
-              Paso {pasoWizard} de 4
+              Paso {pasoWizard} de {modoEvaluacion === 'calificacion' ? 3 : 4}
             </span>
             <button
-              onClick={() => setModoVistaFiltros(tieneCriteriosActivos ? 'colapsado' : 'expandido')}
+              onClick={() => setModoVistaFiltros('colapsado')}
               className="text-xs font-bold text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
             >
-              Saltar guía y ver panel completo {'→'}
+              Ir directo al Ranking General {'→'}
             </button>
           </div>
 
           <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden mb-6">
             <div
               className="h-full bg-blue-600 rounded-full transition-all duration-300"
-              style={{ width: `${(pasoWizard / 4) * 100}%` }}
+              style={{ width: `${(pasoWizard / (modoEvaluacion === 'calificacion' ? 3 : 4)) * 100}%` }}
             />
           </div>
 
@@ -1736,33 +1871,102 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* PASO 3: META SALARIAL MENSUAL */}
+          {/* PASO 3: BIFURCACIÓN PRINCIPAL (CALIFICACIÓN INTEGRAL 0-100 VS. AFINIDAD PERSONAL) */}
           {pasoWizard === 3 && (
             <div key="paso3" className="animate-in fade-in slide-in-from-right-4 duration-200">
               <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-1">
-                3. ¿Cuál es tu piso salarial mensual esperado?
+                3. ¿Cómo deseas evaluar las carreras en {infoRegActiva.corto}?
               </h2>
-              <p className="text-xs md:text-sm text-slate-500 mb-6">
-                Descartaremos del ranking cualquier carrera cuyo sueldo consolidado en {infoRegActiva.corto} esté por debajo de tu meta.
+              <p className="text-xs md:text-sm text-slate-500 mb-5">
+                Elige si quieres ver el <strong>Ranking General por Calificación Integral (0–100)</strong> o personalizar tu búsqueda eligiendo un piso salarial y hasta <strong>5 prioridades personales</strong>.
               </p>
 
-              <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200/80 text-center mb-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                  Sueldo Mensual Mínimo
-                </span>
-                <div className="text-4xl md:text-5xl font-black text-emerald-600 my-2">
-                  {formatoMoneda(sueldoMinimo)}
-                  <span className="text-sm font-bold text-slate-400 ml-1">/ mes</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button
+                  onClick={() => {
+                    setModoEvaluacion('calificacion');
+                    setModoVistaFiltros('colapsado');
+                  }}
+                  className={`text-left p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                    modoEvaluacion === 'calificacion'
+                      ? 'border-emerald-600 bg-emerald-50/40 ring-2 ring-emerald-600/15 shadow-xs'
+                      : 'border-slate-200 hover:border-emerald-400 bg-white'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="p-2.5 rounded-xl bg-emerald-600 text-white">
+                        <Trophy className="w-5 h-5" />
+                      </div>
+                      <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                        Visión Integral Objetiva
+                      </span>
+                    </div>
+                    <h3 className="text-lg font-black text-slate-900 mb-1.5">
+                      Ranking General por Calificación DataROI (0–100)
+                    </h3>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Clasifica las <strong>{totalEnRegion} carreras</strong> de {infoRegActiva.corto} según su solidez integral en los <strong>6 Pilares Universales</strong> (Retorno salarial, Empleabilidad, Calidad OIT, Mérito, Blindaje IA y Estabilidad) con semáforo Verde, Amarillo y Rojo.
+                    </p>
+                  </div>
+                  <div className="mt-5 pt-3 border-t border-emerald-200/70 flex items-center justify-between text-xs font-black text-emerald-700">
+                    <span>Abrir Ranking General ahora</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setModoEvaluacion('afinidad');
+                    setPasoWizard(4);
+                  }}
+                  className={`text-left p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                    modoEvaluacion === 'afinidad'
+                      ? 'border-blue-600 bg-blue-50/40 ring-2 ring-blue-600/15 shadow-xs'
+                      : 'border-slate-200 hover:border-blue-400 bg-white'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="p-2.5 rounded-xl bg-blue-600 text-white">
+                        <Target className="w-5 h-5" />
+                      </div>
+                      <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                        A tu Medida (% Match)
+                      </span>
+                    </div>
+                    <h3 className="text-lg font-black text-slate-900 mb-1.5">
+                      Descubridor por Afinidad Personal (Tus 5 Prioridades)
+                    </h3>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Fija tu meta salarial mínima y selecciona de <strong>1 a 5 prioridades</strong> específicas (ej. <em>Trabajo Remoto</em>, <em>Sector Público</em>, <em>Independencia</em> o <em>Corporativo</em>) para encontrar las carreras que mejor se adaptan a ti.
+                    </p>
+                  </div>
+                  <div className="mt-5 pt-3 border-t border-slate-200/70 flex items-center justify-between text-xs font-black text-blue-600">
+                    <span>Configurar mis prioridades</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* PASO 4: PISO SALARIAL + SELECCIÓN DE HASTA 5 PRIORIDADES (MODO AFINIDAD) */}
+          {pasoWizard === 4 && (
+            <div key="paso4" className="animate-in fade-in slide-in-from-right-4 duration-200">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 mb-5">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                  <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                    <Banknote className="w-4 h-4 text-emerald-600" />
+                    Piso Salarial Mensual Mínimo en {infoRegActiva.corto}:
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl font-black text-emerald-600">{formatoMoneda(sueldoMinimo)}/mes</span>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                      {diferenciaSliderVsPrepaPct >= 0 ? `+${diferenciaSliderVsPrepaPct}%` : `${diferenciaSliderVsPrepaPct}%`} vs. Prepa
+                    </span>
+                  </div>
                 </div>
-
-                <span className={`inline-block text-xs font-bold px-3 py-1 rounded-full mb-5 ${
-                  diferenciaSliderVsPrepaPct >= 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
-                }`}>
-                  {diferenciaSliderVsPrepaPct >= 0
-                    ? `+${diferenciaSliderVsPrepaPct}% por encima del sueldo de Preparatoria (${formatoMoneda(sueldoPrepaActual)})`
-                    : `${diferenciaSliderVsPrepaPct}% respecto al sueldo de Preparatoria (${formatoMoneda(sueldoPrepaActual)})`}
-                </span>
-
                 <input
                   type="range"
                   min={minSueldoCatalogo}
@@ -1770,70 +1974,33 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   step="500"
                   value={sueldoMinimo}
                   onChange={(e) => setSueldoMinimo(Number(e.target.value))}
-                  className="w-full h-2.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
                 />
-                <div className="flex justify-between text-xs text-slate-400 mt-2 font-mono">
+                <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono">
                   <span>Mín: {formatoMoneda(minSueldoCatalogo)}</span>
-                  <span>Ref. Prepa: {formatoMoneda(sueldoPrepaActual)}</span>
+                  <span>Prepa: {formatoMoneda(sueldoPrepaActual)} · Cumplen: {totalFiltradas}/{totalEnRegion} carreras</span>
                   <span>Máx: {formatoMoneda(maxSueldoCatalogo)}+</span>
                 </div>
               </div>
 
-              <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 flex items-center justify-between text-xs text-blue-950">
-                <span className="font-medium">Carreras con muestra certificada que cumplen este piso salarial:</span>
-                <span className="font-black text-sm text-blue-700">{totalFiltradas} de {totalEnRegion} carreras</span>
-              </div>
-            </div>
-          )}
-
-          {/* PASO 4: SELECCIÓN DE HASTA 5 PRIORIDADES O MODO BALANCE GENERAL */}
-          {pasoWizard === 4 && (
-            <div key="paso4" className="animate-in fade-in slide-in-from-right-4 duration-200">
-              <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
+              <div className="flex items-start justify-between gap-2 mb-3">
                 <div>
-                  <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-1">
-                    4. Elige hasta {MAX_PRIORIDADES} prioridades ({activos.length}/{MAX_PRIORIDADES}) o evalúa el Balance General
+                  <h2 className="text-lg md:text-xl font-black text-slate-900 mb-0.5">
+                    Elige de 1 a {MAX_PRIORIDADES} prioridades en orden de importancia ({activos.length}/{MAX_PRIORIDADES})
                   </h2>
-                  <p className="text-xs md:text-sm text-slate-500">
-                    La primera que elijas tendrá el mayor peso; o activa <strong>Balance General</strong> para evaluar todas por igual.
+                  <p className="text-xs text-slate-500">
+                    La primera que elijas tendrá el mayor peso en tu ecuación de afinidad; todas suman exactamente 100%.
                   </p>
                 </div>
-
-                <div className="flex items-center gap-2 shrink-0">
+                {activos.length > 0 && (
                   <button
-                    onClick={activarModoBalanceGeneral}
-                    className={`inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
-                      modoBalanceGeneral
-                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
-                        : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-                    }`}
+                    onClick={() => setActivos([])}
+                    className="text-xs font-bold text-slate-500 hover:text-rose-600 px-2.5 py-1 rounded-lg bg-slate-100 cursor-pointer shrink-0"
                   >
-                    <Compass className="w-3.5 h-3.5" />
-                    Balance General (Todo por igual)
+                    Limpiar
                   </button>
-
-                  {(activos.length > 0 || modoBalanceGeneral) && (
-                    <button
-                      onClick={() => {
-                        setActivos([]);
-                        setModoBalanceGeneral(false);
-                      }}
-                      className="text-xs font-bold text-slate-500 hover:text-rose-600 px-2.5 py-1.5 rounded-xl bg-slate-100 cursor-pointer"
-                    >
-                      Limpiar
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
-
-              {modoBalanceGeneral && (
-                <div className="mb-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 rounded-xl text-xs text-emerald-950 animate-in fade-in duration-150">
-                  <Compass className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>
-                    <strong>Modo Balance General activo:</strong> Evaluando todas las dimensiones y los 6 pilares estructurales con el mismo peso para encontrar las carreras más completas y redondeadas.
-                  </span>
-                </div>
-              )}
 
               {alertaConflictoEcosistema && (
                 <div className="mb-3 flex items-center gap-2 bg-amber-50 border border-amber-200 px-3.5 py-2.5 rounded-xl text-xs text-amber-900 animate-in fade-in duration-150">
@@ -1844,7 +2011,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 my-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 my-3">
                 {PREFERENCIAS.map((pref) => {
                   const isActive = activos.includes(pref.id);
                   const infoPeso = pesosPrioridad[pref.id];
@@ -1896,25 +2063,39 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               <div />
             )}
 
-            {pasoWizard < 4 ? (
+            {pasoWizard < 3 ? (
               <button
                 onClick={() => setPasoWizard(p => p + 1)}
                 className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs md:text-sm font-black text-white shadow-xs transition-all cursor-pointer"
               >
                 Siguiente paso <ChevronRight className="w-4 h-4" />
               </button>
+            ) : pasoWizard === 3 ? (
+              <button
+                onClick={() => {
+                  setModoEvaluacion('calificacion');
+                  setModoVistaFiltros('colapsado');
+                }}
+                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs md:text-sm font-black text-white shadow-sm transition-all cursor-pointer"
+              >
+                <Trophy className="w-4 h-4" />
+                Ver Ranking General DataROI (0–100)
+              </button>
             ) : (
               <button
-                disabled={!tieneCriteriosActivos}
-                onClick={() => setModoVistaFiltros('colapsado')}
+                disabled={activos.length === 0}
+                onClick={() => {
+                  setModoEvaluacion('afinidad');
+                  setModoVistaFiltros('colapsado');
+                }}
                 className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs md:text-sm font-black transition-all ${
-                  tieneCriteriosActivos
+                  activos.length > 0
                     ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm cursor-pointer'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 }`}
               >
                 <Sparkles className="w-4 h-4" />
-                {tieneCriteriosActivos ? `Ver mis ${totalFiltradas} carreras recomendadas` : 'Elige al menos 1 prioridad o Balance General'}
+                {activos.length > 0 ? `Ver mis ${totalFiltradas} carreras por Afinidad` : 'Elige al menos 1 prioridad'}
               </button>
             )}
           </div>
@@ -1923,11 +2104,42 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       )}
 
       {/* ========================================================================= */}
-      {/* MODO 2: CINTA COMPACTA COLAPSADA                                          */}
+      {/* MODO 2: CINTA COMPACTA COLAPSADA CON SWITCH DE MODO                       */}
       {/* ========================================================================= */}
       {modoVistaFiltros === 'colapsado' && (
         <div className="no-print bg-white rounded-2xl border border-slate-200 shadow-xs p-3.5 mb-6 flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-150">
           <div className="flex flex-wrap items-center gap-2">
+            {/* Switch Principal: Calificación Integral (0-100) vs. Afinidad Personal (% Match) */}
+            <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+              <button
+                onClick={() => setModoEvaluacion('calificacion')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                  modoEvaluacion === 'calificacion'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Trophy className="w-3.5 h-3.5" />
+                Calificación DataROI (0–100)
+              </button>
+              <button
+                onClick={() => {
+                  setModoEvaluacion('afinidad');
+                  if (activos.length === 0) {
+                    setModoVistaFiltros('expandido');
+                  }
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                  modoEvaluacion === 'afinidad'
+                    ? 'bg-blue-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Target className="w-3.5 h-3.5" />
+                Por Afinidad ({activos.length}/{MAX_PRIORIDADES})
+              </button>
+            </div>
+
             <button
               onClick={() => setModoVistaFiltros('expandido')}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-blue-50 text-xs font-bold text-slate-800 border border-slate-200/80 transition-colors cursor-pointer"
@@ -1944,47 +2156,41 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               <span>{etiquetaGeneroCorto}</span>
             </button>
 
-            <button
-              onClick={() => setModoVistaFiltros('expandido')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 text-xs font-black text-emerald-800 border border-emerald-200 transition-colors cursor-pointer"
-            >
-              <Banknote className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Mín. {formatoMoneda(sueldoMinimo)}/mes</span>
-            </button>
-
-            <div className="flex flex-wrap items-center gap-1.5 pl-1 border-l border-slate-200">
-              {modoBalanceGeneral ? (
+            {modoEvaluacion === 'afinidad' && (
+              <>
                 <button
                   onClick={() => setModoVistaFiltros('expandido')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-black bg-emerald-600 text-white cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 text-xs font-black text-emerald-800 border border-emerald-200 transition-colors cursor-pointer"
                 >
-                  <Compass className="w-3.5 h-3.5" />
-                  Balance General (Las 10 dimensiones por igual)
+                  <Banknote className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Mín. {formatoMoneda(sueldoMinimo)}/mes</span>
                 </button>
-              ) : (
-                activos.map(idPref => {
-                  const meta = PREFERENCIAS.find(p => p.id === idPref);
-                  const peso = pesosPrioridad[idPref];
-                  const estP = obtenerEstiloJerarquiaPrioridad(peso?.orden);
-                  return (
-                    <button
-                      key={idPref}
-                      onClick={() => setModoVistaFiltros('expandido')}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${estP.badge}`}
-                    >
-                      <span className="font-black">#{peso?.orden}</span> {meta?.corto} ({peso?.pesoPct}%)
-                    </button>
-                  );
-                })
-              )}
-            </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 pl-1 border-l border-slate-200">
+                  {activos.map(idPref => {
+                    const meta = PREFERENCIAS.find(p => p.id === idPref);
+                    const peso = pesosPrioridad[idPref];
+                    const estP = obtenerEstiloJerarquiaPrioridad(peso?.orden);
+                    return (
+                      <button
+                        key={idPref}
+                        onClick={() => setModoVistaFiltros('expandido')}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${estP.badge}`}
+                      >
+                        <span className="font-black">#{peso?.orden}</span> {meta?.corto} ({peso?.pesoPct}%)
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
 
           <button
             onClick={() => setModoVistaFiltros('expandido')}
             className="text-xs font-bold text-blue-600 hover:underline inline-flex items-center gap-1 cursor-pointer ml-auto"
           >
-            Modificar criterios <ChevronDown className="w-3.5 h-3.5" />
+            Cambiar región o prioridades <ChevronDown className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
@@ -2084,89 +2290,98 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 </div>
               </div>
 
-              <div className="pt-3.5 border-t border-slate-100">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-black text-sm text-slate-900 flex items-center gap-2">
-                    <Banknote className="w-4 h-4 text-emerald-600" />
-                    3. Piso Salarial Mensual
-                  </span>
-                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${
-                    diferenciaSliderVsPrepaPct >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
-                  }`}>
-                    {diferenciaSliderVsPrepaPct >= 0
-                      ? `Piso: +${diferenciaSliderVsPrepaPct}% sobre Prepa`
-                      : `Piso: ${diferenciaSliderVsPrepaPct}% vs. Prepa`}
-                  </span>
-                </div>
+              {modoEvaluacion === 'afinidad' && (
+                <div className="pt-3.5 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-black text-sm text-slate-900 flex items-center gap-2">
+                      <Banknote className="w-4 h-4 text-emerald-600" />
+                      3. Piso Salarial Mensual
+                    </span>
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${
+                      diferenciaSliderVsPrepaPct >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      {diferenciaSliderVsPrepaPct >= 0
+                        ? `Piso: +${diferenciaSliderVsPrepaPct}% sobre Prepa`
+                        : `Piso: ${diferenciaSliderVsPrepaPct}% vs. Prepa`}
+                    </span>
+                  </div>
 
-                <div className="text-2xl font-black text-emerald-600 my-1.5">
-                  {formatoMoneda(sueldoMinimo)}
-                  <span className="text-xs font-bold text-slate-400 ml-1">/ mes mínimo</span>
-                </div>
+                  <div className="text-2xl font-black text-emerald-600 my-1.5">
+                    {formatoMoneda(sueldoMinimo)}
+                    <span className="text-xs font-bold text-slate-400 ml-1">/ mes mínimo</span>
+                  </div>
 
-                <input
-                  type="range"
-                  min={minSueldoCatalogo}
-                  max={maxSueldoCatalogo}
-                  step="500"
-                  value={sueldoMinimo}
-                  onChange={(e) => setSueldoMinimo(Number(e.target.value))}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
-                />
-                <div className="flex justify-between text-[11px] text-slate-400 mt-1.5 font-mono">
-                  <span>{formatoMoneda(minSueldoCatalogo)}</span>
-                  <span>Ref. Prepa: {formatoMoneda(sueldoPrepaActual)}</span>
-                  <span>{formatoMoneda(maxSueldoCatalogo)}+</span>
+                  <input
+                    type="range"
+                    min={minSueldoCatalogo}
+                    max={maxSueldoCatalogo}
+                    step="500"
+                    value={sueldoMinimo}
+                    onChange={(e) => setSueldoMinimo(Number(e.target.value))}
+                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                  />
+                  <div className="flex justify-between text-[11px] text-slate-400 mt-1.5 font-mono">
+                    <span>{formatoMoneda(minSueldoCatalogo)}</span>
+                    <span>Ref. Prepa: {formatoMoneda(sueldoPrepaActual)}</span>
+                    <span>{formatoMoneda(maxSueldoCatalogo)}+</span>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
 
           <div className="lg:col-span-7 flex flex-col justify-between bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
             <div>
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              {/* Conmutador Superior en el Panel Derecho */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3.5 mb-3.5 border-b border-slate-100">
                 <div>
+                  <span className="text-[11px] font-black uppercase tracking-wider text-blue-600 block">
+                    Método de Evaluación
+                  </span>
                   <h2 className="font-black text-base text-slate-900">
-                    4. Elige hasta {MAX_PRIORIDADES} Prioridades ({activos.length}/{MAX_PRIORIDADES}) o Balance General
+                    {modoEvaluacion === 'calificacion'
+                      ? 'Ranking General por Calificación DataROI (0–100)'
+                      : `Descubridor por Afinidad Personal (${activos.length}/${MAX_PRIORIDADES} prioridades)`}
                   </h2>
-                  <p className="text-xs text-slate-500">
-                    Elige hasta {MAX_PRIORIDADES} prioridades en orden de importancia, o evalúa todas por igual con <strong>Balance General</strong>.
-                  </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
                   <button
-                    onClick={activarModoBalanceGeneral}
-                    className={`inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
-                      modoBalanceGeneral
-                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
-                        : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                    onClick={() => setModoEvaluacion('calificacion')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                      modoEvaluacion === 'calificacion'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    <Compass className="w-3.5 h-3.5" />
-                    Balance General (Todo por igual)
+                    <Trophy className="w-3.5 h-3.5" />
+                    Calificación (0–100)
                   </button>
-
-                  {tieneCriteriosActivos && (
-                    <button
-                      onClick={() => {
-                        setActivos([]);
-                        setModoBalanceGeneral(false);
-                      }}
-                      className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 hover:text-rose-600 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 transition-colors cursor-pointer"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" /> Reiniciar
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setModoEvaluacion('afinidad')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                      modoEvaluacion === 'afinidad'
+                        ? 'bg-blue-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Target className="w-3.5 h-3.5" />
+                    Por Afinidad (% Match)
+                  </button>
                 </div>
               </div>
 
-              {modoBalanceGeneral && (
-                <div className="mb-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 rounded-xl text-xs text-emerald-950">
-                  <Compass className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>
-                    <strong>Modo Balance General activo:</strong> Todas las dimensiones y los 6 pilares estructurales se evalúan con peso equitativo para mostrar las carreras mejor redondeadas.
-                  </span>
+              {modoEvaluacion === 'calificacion' && (
+                <div className="mb-3.5 p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-950 flex items-start gap-2.5">
+                  <Trophy className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block font-black mb-0.5">
+                      Modo Calificación Integral DataROI (0–100) activo:
+                    </strong>
+                    <span>
+                      Evalúa todas las carreras de {infoRegActiva.corto} sin sesgo de preferencias individuales mediante los <strong>6 Pilares Universales</strong> (25% Retorno Salarial, 20% Empleabilidad, 20% Calidad OIT, 15% Mérito, 10% Blindaje IA y 10% Estabilidad). Si prefieres personalizar por tus gustos, haz clic en cualquiera de las 10 tarjetas de abajo.
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -2179,31 +2394,45 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-2.5 mt-3">
+              <div className="flex items-center justify-between text-xs mb-2">
+                <span className="font-bold text-slate-600">
+                  Prioridades para el Modo Afinidad ({activos.length}/{MAX_PRIORIDADES}):
+                </span>
+                {activos.length > 0 && (
+                  <button
+                    onClick={() => setActivos([])}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-rose-600 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Limpiar prioridades
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
                 {PREFERENCIAS.map((pref) => {
-                  const isActive = activos.includes(pref.id);
+                  const isActive = modoEvaluacion === 'afinidad' && activos.includes(pref.id);
                   const infoPeso = pesosPrioridad[pref.id];
-                  const bloqueadaPorTope = !isActive && activos.length >= MAX_PRIORIDADES;
-                  const estilo = obtenerEstiloJerarquiaPrioridad(infoPeso?.orden);
+                  const bloqueadaPorTope = modoEvaluacion === 'afinidad' && !isActive && activos.length >= MAX_PRIORIDADES;
+                  const estilo = obtenerEstiloJerarquiaPrioridad(isActive ? infoPeso?.orden : undefined);
 
                   return (
                     <button
                       key={pref.id}
                       onClick={() => togglePreferencia(pref.id)}
                       disabled={bloqueadaPorTope}
-                      className={`text-left p-3.5 rounded-xl border-2 transition-all duration-150 flex flex-col justify-between relative ${
+                      className={`text-left p-3 rounded-xl border-2 transition-all duration-150 flex flex-col justify-between relative ${
                         bloqueadaPorTope
                           ? 'border-slate-100 bg-slate-50/50 opacity-45 cursor-not-allowed'
                           : `${estilo.btn} cursor-pointer`
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-2 w-full mb-1.5">
-                        <div className={`p-2 rounded-lg shrink-0 transition-colors ${estilo.icono}`}>
+                      <div className="flex items-start justify-between gap-2 w-full mb-1">
+                        <div className={`p-1.5 rounded-lg shrink-0 transition-colors ${estilo.icono}`}>
                           {pref.icon}
                         </div>
 
                         {isActive && infoPeso && (
-                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wide shrink-0 ${estilo.badge}`}>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-black tracking-wide shrink-0 ${estilo.badge}`}>
                             Prioridad #{infoPeso.orden} · {infoPeso.pesoPct}%
                           </span>
                         )}
@@ -2225,13 +2454,13 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
             <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
               <span className="text-[11px] text-slate-400">
-                {!tieneCriteriosActivos
-                  ? 'Selecciona tu Prioridad #1 o el botón Balance General arriba para desplegar el Ranking.'
-                  : modoBalanceGeneral
-                    ? 'Evaluando el equilibrio integral de las 10 dimensiones y los 6 pilares estructurales.'
+                {modoEvaluacion === 'calificacion'
+                  ? `Evaluando las ${totalFiltradas} carreras certificadas con el Score DataROI (0–100).`
+                  : activos.length === 0
+                    ? 'Selecciona al menos 1 prioridad o cambia a Calificación (0–100).'
                     : `Ponderación exacta del 100% distribuida en ${activos.length} ${activos.length === 1 ? 'criterio' : 'criterios'}.`}
               </span>
-              {tieneCriteriosActivos && (
+              {tieneResultadosActivos && (
                 <button
                   onClick={() => setModoVistaFiltros('colapsado')}
                   className="px-4 py-1.5 rounded-xl bg-slate-900 text-white font-bold text-xs hover:bg-slate-800 cursor-pointer"
@@ -2248,19 +2477,28 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       {/* ========================================================================= */}
       {/* ZONA DE RESULTADOS DEL RANKING                                            */}
       {/* ========================================================================= */}
-      {tieneCriteriosActivos && modoVistaFiltros !== 'wizard' && (
+      {tieneResultadosActivos && modoVistaFiltros !== 'wizard' && (
         <div className="animate-in fade-in duration-200">
           
           <div className="flex flex-col md:flex-row md:items-center justify-between mb-5 gap-4">
             <div>
               <h2 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-blue-600" />
-                {modoBalanceGeneral
-                  ? `Ranking de Balance General en ${infoRegActiva.corto} (${etiquetaGeneroCorto})`
-                  : `Ranking en ${infoRegActiva.corto} (${etiquetaGeneroCorto})`}
+                {modoEvaluacion === 'calificacion' ? (
+                  <>
+                    <Trophy className="w-5 h-5 text-emerald-600" />
+                    Ranking General por Calificación DataROI en {infoRegActiva.corto} ({etiquetaGeneroCorto})
+                  </>
+                ) : (
+                  <>
+                    <Target className="w-5 h-5 text-blue-600" />
+                    Ranking por Afinidad Personal en {infoRegActiva.corto} ({etiquetaGeneroCorto})
+                  </>
+                )}
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Posición competitiva exacta (<strong>#Lugar / {totalFiltradas}</strong>) y opción para comparar hasta <strong>{MAX_COMPARAR} carreras Cara a Cara</strong>.
+                {modoEvaluacion === 'calificacion'
+                  ? `Evaluación objetiva de las ${totalFiltradas} carreras en los 6 Pilares Universales (0–100) con opción de comparar hasta ${MAX_COMPARAR} Cara a Cara.`
+                  : `Posición competitiva según tus prioridades (#Lugar / ${totalFiltradas}) y opción de comparar hasta ${MAX_COMPARAR} carreras Cara a Cara.`}
               </p>
             </div>
 
@@ -2275,7 +2513,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
               <button
                 onClick={exportarRankingExcel}
-                title="Descargar Libro de Excel (.xlsx) con 2 Hojas, medallas Oro/Plata/Bronce por prioridad y ancho auto-ajustado"
+                title="Descargar Libro de Excel (.xlsx) con 2 Hojas, medallas Oro/Plata/Bronce y alineación uniforme"
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs transition-all cursor-pointer"
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -2284,7 +2522,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
               <button
                 onClick={exportarRankingCSV}
-                title="Descargar tabla en formato CSV limpio con columnas separadas por prioridad"
+                title="Descargar tabla en formato CSV limpio"
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5 text-blue-600" />
@@ -2302,9 +2540,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   onChange={(e) => setOrden(e.target.value as CriterioOrden)}
                   className="bg-transparent border-none text-xs md:text-sm font-bold text-slate-800 focus:ring-0 cursor-pointer outline-none pr-2"
                 >
-                  <option value="afinidad_desc">Mayor Afinidad (Top)</option>
-                  <option value="balance_desc">Mejor Balance General (6 Pilares)</option>
-                  <option value="afinidad_asc">Menor Afinidad (Peores)</option>
+                  <option value="principal_desc">
+                    {modoEvaluacion === 'calificacion' ? 'Mayor Calificación DataROI (Top)' : 'Mayor Afinidad Personal (Top)'}
+                  </option>
+                  <option value="principal_asc">
+                    {modoEvaluacion === 'calificacion' ? 'Menor Calificación DataROI' : 'Menor Afinidad Personal'}
+                  </option>
                   <option value="salario_desc">Mayor Salario ($ a $)</option>
                   <option value="salario_asc">Menor Salario ($ a $)</option>
                 </select>
@@ -2333,11 +2574,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 const isSilver = carrera.rankAfinidad === 2;
                 const isBronze = carrera.rankAfinidad === 3;
                 const isPodium = isGold || isSilver || isBronze;
-                const isBottom3 = orden === 'afinidad_asc' && totalFiltradas > 5 && carrera.rankAfinidad > totalFiltradas - 3;
+                const isBottom3 = orden === 'principal_asc' && totalFiltradas > 5 && carrera.rankAfinidad > totalFiltradas - 3;
 
                 const enComparador = carrerasCompararCves.includes(carrera.cve_carrera);
                 const topeComparador = !enComparador && carrerasCompararCves.length >= MAX_COMPARAR;
                 const capexInfo = obtenerCapExCorto(carrera.cve_carrera);
+                const semScore = obtenerSemaforoScoreDataROI(carrera.scoreDataROI);
 
                 let borderClass = "border-slate-200 hover:border-blue-400";
                 let badgeColor = "bg-slate-100 text-slate-700";
@@ -2406,9 +2648,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                             <h3 className={`font-black tracking-tight ${isPodium ? 'text-lg md:text-xl text-slate-900' : 'text-base md:text-lg text-slate-800'}`}>
                               {carrera.nombre_carrera}
                             </h3>
-                            {isPodium && orden !== 'afinidad_desc' && (
+                            {isPodium && orden !== 'principal_desc' && (
                               <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-100 text-amber-800">
-                                Top #{carrera.rankAfinidad} Match
+                                Top #{carrera.rankAfinidad}
                               </span>
                             )}
                           </div>
@@ -2439,13 +2681,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                               {capexInfo.corto}
                             </span>
 
-                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
-                              orden === 'balance_desc'
-                                ? 'bg-blue-600 text-white border-blue-600'
-                                : 'bg-blue-50 text-blue-700 border-blue-200'
-                            }`}>
-                              Balance 6P: {carrera.scoreBalance6Pilares} pts
-                            </span>
+                            {/* Si está en modo Afinidad, mostramos también su Score DataROI con su color de semáforo */}
+                            {modoEvaluacion === 'afinidad' && (
+                              <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${semScore.bgBadgeClass}`}>
+                                Score DataROI: {carrera.scoreDataROI}/100 ({semScore.etiqueta})
+                              </span>
+                            )}
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
@@ -2489,7 +2730,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                                 >
                                   <div className="flex items-center justify-between gap-1.5 text-[11px] mb-1.5">
                                     <span className="font-black text-slate-800 truncate">
-                                      {modoBalanceGeneral ? `Pilar · ${item.label}` : `Prioridad #${item.orden} · ${item.label}`}
+                                      {modoEvaluacion === 'calificacion' ? item.label : `Prioridad #${item.orden} · ${item.label}`}
                                     </span>
                                     <span
                                       title={`Posición #${item.rankRubro} de ${item.totalViables} carreras en ${item.label}`}
@@ -2517,17 +2758,22 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                         </div>
                       </div>
 
+                      {/* Columna Derecha: Anillo Circular Semáforo (en modo Calificación) o % Match (en modo Afinidad) */}
                       <div className="flex items-center justify-between lg:flex-col lg:items-end lg:justify-between gap-3 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0">
-                        <div className="text-left lg:text-right">
-                          <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">
-                            {modoBalanceGeneral ? `Balance (#${carrera.rankAfinidad})` : `Afinidad (#${carrera.rankAfinidad})`}
-                          </p>
-                          <p className={`font-black ${isPodium ? 'text-3xl md:text-4xl' : 'text-2xl md:text-3xl'} ${
-                            isBottom3 ? 'text-rose-600' : 'text-blue-600'
-                          }`}>
-                            {carrera.matchScore.toFixed(1)}%
-                          </p>
-                        </div>
+                        {modoEvaluacion === 'calificacion' ? (
+                          <AnilloScoreDataROIGrande score={carrera.scoreDataROI} rank={carrera.rankAfinidad} />
+                        ) : (
+                          <div className="text-left lg:text-right">
+                            <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">
+                              Afinidad (#{carrera.rankAfinidad})
+                            </p>
+                            <p className={`font-black ${isPodium ? 'text-3xl md:text-4xl' : 'text-2xl md:text-3xl'} ${
+                              isBottom3 ? 'text-rose-600' : 'text-blue-600'
+                            }`}>
+                              {carrera.matchScore.toFixed(1)}%
+                            </p>
+                          </div>
+                        )}
 
                         <div className="no-print flex items-center gap-2">
                           <button
@@ -2630,7 +2876,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL EJECUTIVO DE COMPARACIÓN CARA A CARA (CON EXCEL, CSV Y PDF)         */}
+      {/* MODAL EJECUTIVO DE COMPARACIÓN CARA A CARA (CON ANILLO SCORE DATAROI)     */}
       {/* ========================================================================= */}
       {modalVersusAbierto && carrerasEnVersus.length >= 2 && (
         <div className="versus-print-modal fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
@@ -2642,7 +2888,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   Comparador Ejecutivo Cara a Cara · {infoRegActiva.corto} ({etiquetaGeneroCorto})
                 </span>
                 <h2 className="text-xl md:text-2xl font-black text-slate-900">
-                  Contraste Directo de Indicadores y Retorno de Inversión
+                  Contraste Directo de Calificación DataROI, Indicadores y Retorno
                 </h2>
               </div>
 
@@ -2709,7 +2955,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </div>
             </div>
 
-            {/* BLOQUE VISUAL SUPERIOR */}
+            {/* BLOQUE VISUAL SUPERIOR CON ANILLO CIRCULAR SCORE DATAROI EN CADA CARRERA */}
             <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6 my-6 items-center bg-slate-50 p-5 rounded-2xl border border-slate-200/80">
               <div className="lg:col-span-5 space-y-3">
                 <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
@@ -2727,7 +2973,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 </h3>
                 <p className="text-xs text-slate-500 leading-relaxed">
                   {vistaGraficoVersus === 'radar'
-                    ? `Las líneas de alto contraste y los vértices marcados muestran qué carrera envuelve a las demás en ${infoRegActiva.nombre}.`
+                    ? `Las líneas de alto contraste y el anillo de calificación muestran qué carrera envuelve a las demás en ${infoRegActiva.nombre}.`
                     : 'Contrasta cuánto paga cada una de las carreras seleccionadas a lo largo de las 5 macro-regiones económicas del país.'}
                 </p>
 
@@ -2735,20 +2981,23 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   {carrerasEnVersus.map((c: any, idx: number) => (
                     <div
                       key={c.cve_carrera}
-                      className={`p-3 rounded-xl border flex items-start justify-between gap-3 ${COLORES_VERSUS[idx]?.light}`}
+                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${COLORES_VERSUS[idx]?.light}`}
                     >
                       <div className="flex items-start gap-2.5 min-w-0">
                         <span
-                          className="w-3.5 h-3.5 rounded-full shrink-0 mt-0.5 shadow-2xs"
+                          className="w-3.5 h-3.5 rounded-full shrink-0 mt-1 shadow-2xs"
                           style={{ backgroundColor: COLORES_VERSUS[idx]?.hex }}
                         />
-                        <span className="text-xs font-black text-slate-900 leading-snug">
-                          {c.nombre_carrera}
-                        </span>
+                        <div className="min-w-0">
+                          <span className="text-xs font-black text-slate-900 leading-snug block">
+                            {c.nombre_carrera}
+                          </span>
+                          <span className="text-[11px] font-black text-emerald-700">
+                            {formatoMoneda(c.sueldo_esperado)}/mes ({c.premioVsPrepaPct >= 0 ? `+${c.premioVsPrepaPct}%` : `${c.premioVsPrepaPct}%`} vs. Prepa)
+                          </span>
+                        </div>
                       </div>
-                      <span className="text-xs font-black text-slate-900 bg-white/80 px-2 py-0.5 rounded-md border border-slate-200/60 shrink-0">
-                        {formatoMoneda(c.sueldo_esperado)}/mes
-                      </span>
+                      <AnilloScoreDataROIGrande score={c.scoreDataROI ?? 60} compacto />
                     </div>
                   ))}
                 </div>
@@ -2824,6 +3073,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-xs">
                   {([
+                    {
+                      label: 'Calificación Integral DataROI (0–100)',
+                      valores: carrerasEnVersus.map((c: any) => Number(c.scoreDataROI ?? 60)),
+                      formato: (v: number) => {
+                        const s = obtenerSemaforoScoreDataROI(v);
+                        return `${v.toFixed(1)} / 100 (${s.etiqueta})`;
+                      },
+                      mejorAlto: true,
+                      invalidoSiMayorIgualA: Infinity
+                    },
                     {
                       label: 'Salario Mensual Consolidado',
                       valores: carrerasEnVersus.map((c: any) => c.sueldo_esperado),
@@ -2907,13 +3166,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                       formato: (v: number) => `${v}% un solo empleo`,
                       mejorAlto: true,
                       invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Balance General (6 Pilares 0–100)',
-                      valores: carrerasEnVersus.map((c: any) => Number(c.scoreBalance6Pilares ?? 55)),
-                      formato: (v: number) => `${v.toFixed(1)} pts`,
-                      mejorAlto: true,
-                      invalidoSiMayorIgualA: Infinity
                     }
                   ]).map((fila, rIdx) => {
                     const valoresValidos = fila.valores.filter((v: number) => v < fila.invalidoSiMayorIgualA);
@@ -2941,7 +3193,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                                 </span>
                                 {esGanador && (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-[10px] shrink-0">
-                                    <Trophy className="w-2.5 h-3.5 text-emerald-700" /> Líder
+                                    <Trophy className="w-2.5 h-2.5 text-emerald-700" /> Líder
                                   </span>
                                 )}
                               </div>

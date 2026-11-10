@@ -1,5 +1,5 @@
 // src/lib/pdfReportGenerator.ts
-// Motor Vectorial Nativo PDF 1.4 de Alta Fidelidad (Con Curvas de Bézier, Opacidad /ExtGState, Mosaico Bento y Rieles Divergentes)
+// Motor Vectorial Nativo PDF 1.4 de Alta Fidelidad (Con Score DataROI 0-100, Curvas de Bézier, Opacidad /ExtGState, Mosaico Bento y Rieles Divergentes)
 
 const CP1252_EXTRA_MAP: Record<number, number> = {
   0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85,
@@ -331,6 +331,9 @@ export interface ReporteCarreraPDFPayload {
   nEncuestados: number;
   capexEtiqueta: string;
   riesgoIA: number;
+  scoreDataROI?: number;
+  etiquetaScoreDataROI?: string;
+  lugarScoreRegion?: string;
   sueldoActivo: number;
   sueldoPrepa: number;
   premioVsPrepaPct: number;
@@ -353,6 +356,7 @@ export interface ReporteCarreraPDFPayload {
   aniosRetornoTexto: string;
   semaforoROI: string;
   gananciaNeta10Anios: number;
+  supuestoROICorto?: string;
   topPros: string[];
   topContras: string[];
   serieAnual: { anio: number; sueldoLic: number | null; sueldoPrepa: number | null }[];
@@ -402,8 +406,18 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
 
   p1.roundedRect(24, 16, 794, 52, 10, C_DARK);
   p1.text('DATAROI MÉXICO · REPORTE EJECUTIVO DE AUDITORÍA UNIVERSITARIA (ENOE INEGI + ANUIES)', 38, 25, 8.2, true, [0.58, 0.77, 0.99]);
-  p1.text(`${d.nombre_carrera} (CVE: ${d.cve_carrera})`, 38, 39, 13.8, true, C_WHITE);
-  p1.text(`Región: ${d.regionNombre}  |  Perfil: ${d.perfilEtiqueta}  |  Muestra INEGI: ${d.nEncuestados} encuestados  |  ${d.capexEtiqueta}  |  Riesgo IA: ${d.riesgoIA}%`, 38, 54, 8.2, false, [0.82, 0.86, 0.92]);
+  p1.text(`${d.nombre_carrera} (CVE: ${d.cve_carrera})`, 38, 39, 13.5, true, C_WHITE);
+  const scoreTxtHeader = d.scoreDataROI != null
+    ? `  |  Calificación DataROI: ${d.scoreDataROI}/100 (${d.etiquetaScoreDataROI || 'Auditada'}${d.lugarScoreRegion ? ` · ${d.lugarScoreRegion}` : ''})`
+    : '';
+  p1.text(
+    `Región: ${d.regionNombre}  |  Perfil: ${d.perfilEtiqueta}  |  Muestra: ${d.nEncuestados} enc.  |  Riesgo IA: ${d.riesgoIA}%${scoreTxtHeader}`,
+    38,
+    54,
+    7.9,
+    false,
+    [0.82, 0.86, 0.92]
+  );
   p1.text('PÁGINA 1 / 2', 804, 26, 8.5, true, [0.58, 0.77, 0.99], 'right');
 
   const kpiW = 192;
@@ -433,7 +447,14 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
   p1.text('TIEMPO DE RECUPERACIÓN (ROI)', xK4 + 10, 84, 7.3, true, C_SLATE);
   p1.text(d.aniosRetornoTexto, xK4 + 10, 98, 15, true, C_DARK);
   p1.text(d.semaforoROI, xK4 + 10, 119, 8, true, d.gananciaNeta10Anios >= 0 ? C_EMERALD : C_ROSE);
-  p1.text(`Inversión: ${fmtMoney(d.inversionTotalROI)} | Neto 10a: ${fmtMoney(d.gananciaNeta10Anios)}`, xK4 + 10, 131, 7.1, false, C_SLATE);
+  p1.text(
+    d.supuestoROICorto || `Inv. Bolsillo: ${fmtMoney(d.inversionTotalROI)} | Neto 10a: ${fmtMoney(d.gananciaNeta10Anios)}`,
+    xK4 + 10,
+    131,
+    6.9,
+    false,
+    C_SLATE
+  );
 
   // FILA 2: Diagnóstico Ejecutivo Redondeado
   p1.roundedRect(24, 152, 794, 134, 10, C_WHITE, C_BORDER);
@@ -859,6 +880,7 @@ export interface ComparativaVersusPDFPayload {
   carreras: {
     cve_carrera: string;
     nombre_carrera: string;
+    scoreDataROI?: number;
     sueldo_esperado: number;
     premioVsPrepaPct: number;
     roiPublica: number | null;
@@ -883,7 +905,7 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
 
   p.roundedRect(24, 18, 794, 46, 10, C_DARK);
   p.text(`COMPARADOR EJECUTIVO CARA A CARA · ${v.regionCorto.toUpperCase()} (${v.perfilEtiqueta.toUpperCase()})`, 36, 26, 8.5, true, [0.58, 0.77, 0.99]);
-  p.text('Contraste Directo de Indicadores, Huella de 6 Pilares y Retorno de Inversión', 36, 40, 13.5, true, C_WHITE);
+  p.text('Contraste Directo de Indicadores, Calificación DataROI (0-100) y Retorno de Inversión', 36, 40, 13.5, true, C_WHITE);
   p.text('DATAROI MÉXICO', 804, 34, 9, true, [0.58, 0.77, 0.99], 'right');
 
   const coloresRGB: RGB[] = [C_BLUE, C_PURPLE, C_ORANGE];
@@ -899,7 +921,15 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
     lines.forEach((ln, li) => {
       p.text(ln, 54, yLeg + 7 + li * 9.5, 7.3, true, C_DARK);
     });
-    p.text(`${fmtMoney(c.sueldo_esperado)}/mes (${c.premioVsPrepaPct >= 0 ? `+${c.premioVsPrepaPct}%` : `${c.premioVsPrepaPct}%`} vs Prepa)`, 54, yLeg + 30, 7.0, true, coloresRGB[idx]);
+    const txtScore = c.scoreDataROI != null ? ` · Score: ${c.scoreDataROI}/100` : '';
+    p.text(
+      `${fmtMoney(c.sueldo_esperado)}/mes (${c.premioVsPrepaPct >= 0 ? `+${c.premioVsPrepaPct}%` : `${c.premioVsPrepaPct}%`})${txtScore}`,
+      54,
+      yLeg + 30,
+      6.7,
+      true,
+      coloresRGB[idx]
+    );
     yLeg += 52;
   });
 
@@ -991,6 +1021,13 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
 
   const filasTabla = [
     {
+      label: 'Calificación Integral DataROI (0–100)',
+      vals: v.carreras.map(c => Number(c.scoreDataROI ?? 60)),
+      fmt: (n: number) => `${n.toFixed(1)} / 100 pts`,
+      mejorAlto: true,
+      invalido: Infinity
+    },
+    {
       label: 'Salario Mensual Consolidado',
       vals: v.carreras.map(c => c.sueldo_esperado),
       fmt: (n: number) => `${fmtMoney(n)} / mes`,
@@ -1057,13 +1094,6 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
       label: 'Blindaje Humano ante IA',
       vals: v.carreras.map(c => c.blindajeIA),
       fmt: (n: number) => `${n}% blindaje`,
-      mejorAlto: true,
-      invalido: Infinity
-    },
-    {
-      label: 'Empleo Único (Sin Pluriempleo)',
-      vals: v.carreras.map(c => c.empleoUnicoPct),
-      fmt: (n: number) => `${n}% un solo empleo`,
       mejorAlto: true,
       invalido: Infinity
     }

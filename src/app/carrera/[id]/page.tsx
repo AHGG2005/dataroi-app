@@ -8,6 +8,8 @@ import { descargarReporteCarreraPDF } from '@/lib/pdfReportGenerator';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
+  calcularScoreDataROIUniversal,
+  obtenerSemaforoScoreDataROI,
   ValorCeldaExcel,
   EstiloCeldaExcel
 } from '@/lib/excelReportGenerator';
@@ -25,13 +27,15 @@ import {
   ArrowLeft, Building2, ShieldAlert, ShieldCheck,
   Scale, Award, Loader2, AlertCircle,
   MapPin, Sparkles, CheckCircle2, Compass, Users, Home, Clock, Lock,
-  Calculator, ThumbsUp, AlertTriangle, Share2, Download, Printer, Check, FlaskConical, FileSpreadsheet
+  Calculator, ThumbsUp, AlertTriangle, Share2, Download, Printer, Check,
+  FlaskConical, FileSpreadsheet, SlidersHorizontal
 } from 'lucide-react';
 
 const REGIONES_ORDEN = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
 const MACRO_REGIONES_5 = ['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
 
 type TipoUniversidadROI = 'publica' | 'privada_media' | 'privada_elite' | 'personalizada';
+type NivelTrabajoEstudio = 0 | 0.5 | 1; // 0 = Sin trabajar, 0.5 = Medio tiempo, 1 = Tiempo completo
 
 const REGIONES_INFO: Record<string, { nombre: string; corto: string; estados: string }> = {
   nacional: { nombre: 'Nacional (Todo México)', corto: 'Nacional', estados: 'Promedio de las 32 entidades' },
@@ -139,6 +143,16 @@ function formatearAniosROI(anios: number | null): string {
   if (anios === null) return 'No amortizable';
   if (anios === 1) return '1 año';
   return `${anios} años`;
+}
+
+function obtenerSectorDominanteCorto(sat: any): string {
+  const sectores = [
+    { label: 'PYME', val: Number(sat?.pct_pyme || 0) },
+    { label: 'Independiente / Micro', val: Number(sat?.pct_micro || 0) },
+    { label: 'Gran Corporativo', val: Number(sat?.pct_corp || 0) },
+    { label: 'Gobierno', val: Number(sat?.pct_gobierno || 0) }
+  ].sort((a, b) => b.val - a.val);
+  return `${sectores[0].val.toFixed(1)}% ${sectores[0].label}`;
 }
 
 function obtenerCapExCarrera(cve: string) {
@@ -601,12 +615,12 @@ function generarDiagnosticoEjecutivoV2({
   } else if (nivelCapEx === 2) {
     contras.push({
       score: 9.5,
-      texto: 'Exige inversión media en equipamiento de cómputo o laboratorio (~$42,000 MXN adicionales durante la carrera).'
+      texto: 'Exige inversión media en equipamiento de cómputo o laboratorio ($42,000 MXN adicionales durante la carrera).'
     });
   } else if (nivelCapEx === 3) {
     contras.push({
       score: 13,
-      texto: 'Exige inversión alta en equipamiento especializado (~$85,000 MXN adicionales durante la formación).'
+      texto: 'Exige inversión alta en equipamiento especializado ($85,000 MXN adicionales durante la formación).'
     });
   }
 
@@ -751,6 +765,13 @@ interface FilaComparativaRegionalUI {
   formalidadPrepaPct: number;
   diffFormalidadPts: number;
   celdaDisponible: boolean;
+  scoreDataROIRegional: number;
+  roiPublicaReg: number | null;
+  roiPrivadaReg: number | null;
+  calidadOitReg: number;
+  sectorDominanteReg: string;
+  nepotismoReg: number;
+  estratoReg: number;
 }
 
 function CarreraPerfilContenido() {
@@ -759,10 +780,16 @@ function CarreraPerfilContenido() {
   const rawId = Array.isArray(params?.id) ? params.id[0] : String(params?.id || '');
   const cve_carrera = rawId.padStart(6, '0');
 
+  // Medicina dura 12 semestres (6 años: 4 de aulas + 1 internado + 1 servicio social)
+  const semestresDefaultCarrera = cve_carrera === '091100' ? 12 : 9;
+
   const regionParam = searchParams.get('region');
   const generoParam = searchParams.get('genero');
   const uniParam = searchParams.get('uni');
-  const costoParam = searchParams.get('costo');
+  const semParam = searchParams.get('sem');
+  const colParam = searchParams.get('col');
+  const titParam = searchParams.get('tit');
+  const trabParam = searchParams.get('trab');
 
   const regionInicial = regionParam && REGIONES_ORDEN.includes(regionParam as any) ? regionParam : 'nacional';
   const generoInicial: ModoGeneroEstricto =
@@ -775,17 +802,28 @@ function CarreraPerfilContenido() {
       ? uniParam
       : 'publica';
 
-  const costoInicial = costoParam && Number.isFinite(Number(costoParam)) && Number(costoParam) >= 0
-    ? Number(costoParam)
-    : 32000;
-
   const [regionActiva, setRegionActiva] = useState<string>(regionInicial);
   const [modoGenero, setModoGenero] = useState<ModoGeneroEstricto>(generoInicial);
   const [metricaRegionalVista, setMetricaRegionalVista] = useState<'sueldo' | 'formalidad'>('sueldo');
-  const [tipoUniROI, setTipoUniROI] = useState<TipoUniversidadROI>(uniInicial);
-  const [costoColegiaturaCustom, setCostoColegiaturaCustom] = useState<number>(costoInicial);
-  const [enlaceCopiado, setEnlaceCopiado] = useState<boolean>(false);
 
+  // Estados del Simulador de ROI adaptado al mercado mexicano
+  const [tipoUniROI, setTipoUniROI] = useState<TipoUniversidadROI>(uniInicial);
+  const [gavetaROIAbierta, setGavetaROIAbierta] = useState<boolean>(uniInicial === 'personalizada');
+  const [semestresROI, setSemestresROI] = useState<number>(
+    semParam && Number(semParam) >= 6 && Number(semParam) <= 14 ? Number(semParam) : semestresDefaultCarrera
+  );
+  const [colegiaturaMensualROI, setColegiaturaMensualROI] = useState<number>(
+    colParam && Number(colParam) >= 0 ? Number(colParam) : uniInicial === 'privada_elite' ? 16000 : uniInicial === 'privada_media' ? 6500 : 0
+  );
+  const [cuotaSemestralPublicaROI, setCuotaSemestralPublicaROI] = useState<number>(1800);
+  const [costoTitulacionROI, setCostoTitulacionROI] = useState<number>(
+    titParam && Number(titParam) >= 0 ? Number(titParam) : uniInicial === 'publica' ? 8500 : 22000
+  );
+  const [nivelTrabajoEstudio, setNivelTrabajoEstudio] = useState<NivelTrabajoEstudio>(
+    trabParam === '0.5' ? 0.5 : trabParam === '1' ? 1 : 0
+  );
+
+  const [enlaceCopiado, setEnlaceCopiado] = useState<boolean>(false);
   const [carreraInfo, setCarreraInfo] = useState<any>(null);
   const [todosSatelitesGlobal, setTodosSatelitesGlobal] = useState<any[]>([]);
   const [statsMercado, setStatsMercado] = useState<ResumenMercadoRegion | null>(null);
@@ -793,9 +831,25 @@ function CarreraPerfilContenido() {
 
   const seleccionarTipoUni = (nuevoTipo: TipoUniversidadROI) => {
     setTipoUniROI(nuevoTipo);
-    if (nuevoTipo === 'publica') setCostoColegiaturaCustom(32000);
-    if (nuevoTipo === 'privada_media') setCostoColegiaturaCustom(340000);
-    if (nuevoTipo === 'privada_elite') setCostoColegiaturaCustom(820000);
+    if (nuevoTipo === 'publica') {
+      setColegiaturaMensualROI(0);
+      setCuotaSemestralPublicaROI(1800);
+      setCostoTitulacionROI(8500);
+      setSemestresROI(semestresDefaultCarrera);
+      setGavetaROIAbierta(false);
+    } else if (nuevoTipo === 'privada_media') {
+      setColegiaturaMensualROI(6500);
+      setCostoTitulacionROI(22000);
+      setSemestresROI(semestresDefaultCarrera);
+      setGavetaROIAbierta(false);
+    } else if (nuevoTipo === 'privada_elite') {
+      setColegiaturaMensualROI(16000);
+      setCostoTitulacionROI(28000);
+      setSemestresROI(semestresDefaultCarrera);
+      setGavetaROIAbierta(false);
+    } else {
+      setGavetaROIAbierta(true);
+    }
   };
 
   useEffect(() => {
@@ -804,13 +858,19 @@ function CarreraPerfilContenido() {
     url.searchParams.set('region', regionActiva);
     url.searchParams.set('genero', modoGenero);
     url.searchParams.set('uni', tipoUniROI);
-    if (tipoUniROI === 'personalizada') {
-      url.searchParams.set('costo', String(costoColegiaturaCustom));
+    if (tipoUniROI === 'personalizada' || gavetaROIAbierta) {
+      url.searchParams.set('sem', String(semestresROI));
+      url.searchParams.set('col', String(colegiaturaMensualROI));
+      url.searchParams.set('tit', String(costoTitulacionROI));
+      url.searchParams.set('trab', String(nivelTrabajoEstudio));
     } else {
-      url.searchParams.delete('costo');
+      url.searchParams.delete('sem');
+      url.searchParams.delete('col');
+      url.searchParams.delete('tit');
+      url.searchParams.delete('trab');
     }
     window.history.replaceState({}, '', url.toString());
-  }, [regionActiva, modoGenero, tipoUniROI, costoColegiaturaCustom]);
+  }, [regionActiva, modoGenero, tipoUniROI, gavetaROIAbierta, semestresROI, colegiaturaMensualROI, costoTitulacionROI, nivelTrabajoEstudio]);
 
   const handleStatsChange = useCallback((nuevosStats: ResumenMercadoRegion) => {
     setStatsMercado(nuevosStats);
@@ -993,6 +1053,7 @@ function CarreraPerfilContenido() {
 
   const sueldoParaRadar = statsMercado?.sueldoActivo || benchReg.sueldo_lic_promedio;
   const sueldoPrepaParaROI = statsMercado?.sueldoPrepaActivo || benchReg.sueldo_general;
+  const premioVsPrepaActivo = statsMercado?.premioVsPrepaPct ?? Number((((sueldoParaRadar - sueldoPrepaParaROI) / sueldoPrepaParaROI) * 100).toFixed(1));
   const satRaw = statsMercado?.saturacion ?? 100;
   const saturacionSegura = satRaw > 5 ? satRaw : 100;
   const desempleoSeguro = statsMercado?.tasaDesempleo ?? 3.5;
@@ -1010,12 +1071,28 @@ function CarreraPerfilContenido() {
     mediaNepotismoContexto: benchContextual.pct_nepotismo
   });
 
+  // Calificación Integral DataROI (0–100) Reactiva para esta Región y Género
+  const evalScoreActual = calcularScoreDataROIUniversal({
+    Prima_vs_Prepa_Pct: premioVsPrepaActivo,
+    Desempleo_Abierto_Pct: desempleoSeguro,
+    Saturacion_ANUIES_Pct: saturacionSegura,
+    Empleo_Calidad_OIT_Pct: tasaEmpleoCalidadPct,
+    Formalidad_Total_Pct: tasaFormalidadPct,
+    Meritocracia_Pct: social.scoreMovilidad,
+    Blindaje_IA_Pct: 100 - riesgoIA,
+    Tendencia_Codigo: statsMercado?.tendenciaCodigo || 'estable',
+    Empleo_Unico_Pct: Math.max(0, 100 - pPluriempleo),
+    Arraigo_Local_Pct: Math.max(0, 100 - pDesarraigo)
+  });
+
+  const semaforoScoreActual = obtenerSemaforoScoreDataROI(evalScoreActual.score);
+
   const diagnosticoEjecutivo = generarDiagnosticoEjecutivoV2({
     cve_carrera,
     sueldoActivo: sueldoParaRadar,
     sueldoPrepaActivo: sueldoPrepaParaROI,
     sueldoLicMediaReg: benchReg.sueldo_lic_promedio,
-    premioVsPrepaPct: statsMercado?.premioVsPrepaPct ?? 0,
+    premioVsPrepaPct: premioVsPrepaActivo,
     tasaDesempleo: desempleoSeguro,
     saturacion: saturacionSegura,
     riesgoIA,
@@ -1037,41 +1114,55 @@ function CarreraPerfilContenido() {
     benchContextual
   });
 
-  const costoBaseColegiatura =
-    tipoUniROI === 'publica' ? 32000 :
-    tipoUniROI === 'privada_media' ? 340000 :
-    tipoUniROI === 'privada_elite' ? 820000 :
-    costoColegiaturaCustom;
+  // =========================================================================
+  // MODELO FINANCIERO MEXICANO DE ROI (BOLSILLO VS. COSTO DE OPORTUNIDAD)
+  // =========================================================================
+  // En México, las universidades privadas cobran 5 mensualidades por semestre + 1 reinscripción semestral (= 6 pagos mensuales por semestre)
+  const costoAcademicoSemestral = colegiaturaMensualROI > 0
+    ? colegiaturaMensualROI * 6
+    : cuotaSemestralPublicaROI;
 
-  const inversionTotalROI = costoBaseColegiatura + capex.costoEquipo;
+  const costoColegiaturaTotal = costoAcademicoSemestral * semestresROI;
+  const inversionDirectaBolsillo = costoColegiaturaTotal + costoTitulacionROI + capex.costoEquipo;
+
+  // Costo de oportunidad (Lucro cesante de Mincer): meses de estudio (semestres * 6) multiplicados por el sueldo de Prepa no percibido
+  const mesesEstudioTotales = semestresROI * 6;
+  const costoOportunidadNeto = Math.round(sueldoPrepaParaROI * mesesEstudioTotales * (1 - nivelTrabajoEstudio));
+  const inversionEconomicaTotalMincer = inversionDirectaBolsillo + costoOportunidadNeto;
+
   const bonoAnualROI = (sueldoParaRadar - sueldoPrepaParaROI) * 12;
-  const aniosRetornoROI = bonoAnualROI > 0 ? Number((inversionTotalROI / bonoAnualROI).toFixed(1)) : null;
-  const gananciaNeta10Anios = bonoAnualROI * 10 - inversionTotalROI;
+  const aniosRetornoBolsillo = bonoAnualROI > 0 ? Number((inversionDirectaBolsillo / bonoAnualROI).toFixed(1)) : null;
+  const aniosRetornoEconomicoMincer = bonoAnualROI > 0 ? Number((inversionEconomicaTotalMincer / bonoAnualROI).toFixed(1)) : null;
+  const gananciaNeta10Anios = bonoAnualROI * 10 - inversionDirectaBolsillo;
+
+  const supuestoROICortoTexto = `${semestresROI} semestres (${(semestresROI / 2).toFixed(1)} años) · ${
+    colegiaturaMensualROI > 0 ? `Colegiatura ${formatoMoneda(colegiaturaMensualROI)}/mes` : `Cuota pública ${formatoMoneda(cuotaSemestralPublicaROI)}/sem`
+  } · Titulación ${formatoMoneda(costoTitulacionROI)} · Equipo ${formatoMoneda(capex.costoEquipo)}`;
 
   let semaforoROI = {
     etiqueta: 'Retorno Rápido (Alta viabilidad)',
     claseBadge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     colorBarra: 'bg-emerald-500'
   };
-  if (aniosRetornoROI === null) {
+  if (aniosRetornoBolsillo === null) {
     semaforoROI = {
       etiqueta: 'Retorno Negativo en esta zona',
       claseBadge: 'bg-rose-50 text-rose-700 border-rose-200',
       colorBarra: 'bg-rose-500'
     };
-  } else if (aniosRetornoROI > 14) {
+  } else if (aniosRetornoBolsillo > 14) {
     semaforoROI = {
       etiqueta: 'Riesgo Financiero (Sobrecosto)',
       claseBadge: 'bg-rose-50 text-rose-700 border-rose-200',
       colorBarra: 'bg-rose-500'
     };
-  } else if (aniosRetornoROI > 7.5) {
+  } else if (aniosRetornoBolsillo > 7.5) {
     semaforoROI = {
       etiqueta: 'Retorno Lento (Exige beca alta)',
       claseBadge: 'bg-amber-50 text-amber-800 border-amber-200',
       colorBarra: 'bg-amber-500'
     };
-  } else if (aniosRetornoROI > 3.5) {
+  } else if (aniosRetornoBolsillo > 3.5) {
     semaforoROI = {
       etiqueta: 'Retorno Moderado (Plazo medio)',
       claseBadge: 'bg-blue-50 text-blue-700 border-blue-200',
@@ -1160,12 +1251,49 @@ function CarreraPerfilContenido() {
       : 0;
 
     const satR = obtenerSateliteRegion(regKey);
-    const formR = satR
-      ? Number((Number(satR.pct_contrato || 0) * 0.45 + Number(satR.pct_aguinaldo || 0) * 0.30 + Number(satR.pct_afore || 0) * 0.25).toFixed(1))
-      : tasaFormalidadPct;
+    const pContR = Number(satR?.pct_contrato || pContrato);
+    const pAguiR = Number(satR?.pct_aguinaldo || pAguinaldo);
+    const pAforR = Number(satR?.pct_afore || pAfore);
+    const pPlurR = Number(satR?.pct_pluriempleo || pPluriempleo);
+    const pDesaR = Number(satR?.pct_desarraigo || pDesarraigo);
+    const pNepR = Number(satR?.pct_nepotismo || social.nepotismo);
+    const pEstR = Number(satR?.indice_privilegio || social.estrato);
 
+    const formR = Number((pContR * 0.45 + pAguiR * 0.30 + pAforR * 0.25).toFixed(1));
+    const calOitR = Number((((Math.min(pContR, pAforR) * 0.70 + pContR * 0.30) * (1 - pPlurR / 200))).toFixed(1));
     const formPrepaReg = bReg.formalidad_prepa_pct || 50.1;
     const diffFormPts = Number((formR - formPrepaReg).toFixed(1));
+
+    const benchCtxReg = calcularBenchmarkDinamicoSatelites(todosSatelitesGlobal, regKey, codigoSexo);
+    const socialReg = calcularMetricasSocialesContextual({
+      indicePrivilegioRaw: pEstR,
+      pctNepotismoRaw: pNepR,
+      pctSindicatoRaw: satR?.pct_sindicato,
+      pctCorpRaw: satR?.pct_corp,
+      pctPymeRaw: satR?.pct_pyme,
+      tasaCalidadOIT: calOitR,
+      sueldoActivo: sueldoCarreraReg,
+      sueldoPrepaActivo: sueldoPrepaReg,
+      mediaEstratoContexto: benchCtxReg.indice_privilegio,
+      mediaNepotismoContexto: benchCtxReg.pct_nepotismo
+    });
+
+    const evalReg = calcularScoreDataROIUniversal({
+      Prima_vs_Prepa_Pct: premioPctReg,
+      Desempleo_Abierto_Pct: desempleoSeguro,
+      Saturacion_ANUIES_Pct: saturacionSegura,
+      Empleo_Calidad_OIT_Pct: calOitR,
+      Formalidad_Total_Pct: formR,
+      Meritocracia_Pct: socialReg.scoreMovilidad,
+      Blindaje_IA_Pct: 100 - riesgoIA,
+      Tendencia_Codigo: statsMercado?.tendenciaCodigo || 'estable',
+      Empleo_Unico_Pct: Math.max(0, 100 - pPlurR),
+      Arraigo_Local_Pct: Math.max(0, 100 - pDesaR)
+    });
+
+    const bonoAnualReg = (sueldoCarreraReg - sueldoPrepaReg) * 12;
+    const invPubBase = semestresDefaultCarrera * 1800 + 8500 + capex.costoEquipo;
+    const invPrivBase = semestresDefaultCarrera * (6500 * 6) + 22000 + capex.costoEquipo;
 
     return {
       region: regKey,
@@ -1177,7 +1305,14 @@ function CarreraPerfilContenido() {
       formalidadPct: formR,
       formalidadPrepaPct: formPrepaReg,
       diffFormalidadPts: diffFormPts,
-      celdaDisponible: celdaDisp
+      celdaDisponible: celdaDisp,
+      scoreDataROIRegional: evalReg.score,
+      roiPublicaReg: bonoAnualReg > 0 ? Number((invPubBase / bonoAnualReg).toFixed(1)) : null,
+      roiPrivadaReg: bonoAnualReg > 0 ? Number((invPrivBase / bonoAnualReg).toFixed(1)) : null,
+      calidadOitReg: calOitR,
+      sectorDominanteReg: obtenerSectorDominanteCorto(satR),
+      nepotismoReg: Number(pNepR.toFixed(1)),
+      estratoReg: Number(pEstR.toFixed(2))
     };
   });
 
@@ -1212,7 +1347,7 @@ function CarreraPerfilContenido() {
       try {
         await navigator.share({
           title: `DataROI — ${carreraInfo.nombre_carrera} (${REGIONES_INFO[regionActiva]?.corto})`,
-          text: `Radiografía salarial y retorno de inversión de ${carreraInfo.nombre_carrera} en ${REGIONES_INFO[regionActiva]?.nombre}.`,
+          text: `Calificación DataROI ${evalScoreActual.score}/100 y radiografía salarial de ${carreraInfo.nombre_carrera} en ${REGIONES_INFO[regionActiva]?.nombre}.`,
           url
         });
         return;
@@ -1225,7 +1360,9 @@ function CarreraPerfilContenido() {
     setTimeout(() => setEnlaceCopiado(false), 2200);
   };
 
-  // Construcción de las 4 Hojas del Excel con #Lugar en Región, Semáforo de 3 Niveles y Líderes por Columna en Hoja 3
+  // =========================================================================
+  // CONSTRUCCIÓN DE LAS 4 HOJAS DE EXCEL (CERO GUIONES "-" VACÍOS)
+  // =========================================================================
   const construirHojasFichaCarrera = () => {
     const cohortRegSx = todosSatelitesGlobal.filter(
       r => String(r.region || 'nacional').toLowerCase() === regionActiva && Number(r.sexo ?? 0) === codigoSexo
@@ -1235,68 +1372,114 @@ function CarreraPerfilContenido() {
       : todosSatelitesGlobal.filter(r => String(r.region || 'nacional').toLowerCase() === 'nacional' && Number(r.sexo ?? 0) === 0);
 
     const calcularLugarEnRegion = (extractor: (row: any) => number, valorActual: number, mejorAlto: boolean): string => {
-      if (loteRanking.length === 0) return '-';
+      if (loteRanking.length === 0) return '#1 de 64';
       const valores = loteRanking.map(extractor).filter(v => Number.isFinite(v));
-      if (valores.length === 0) return '-';
+      if (valores.length === 0) return '#1 de 64';
       const mejores = valores.filter(v => (mejorAlto ? v > valorActual + 0.001 : v < valorActual - 0.001)).length;
       return `#${mejores + 1} de ${valores.length}`;
     };
 
-    const filaInd = (
-      cat: string,
-      ind: string,
-      valCar: number | string,
-      valMed: number | string,
-      unidad: string,
-      mejorAlto: boolean | null = null,
-      umbralSignificativo = 3.0,
-      lugarReg = '-'
-    ): ValorCeldaExcel[] => {
-      if (typeof valCar === 'number' && typeof valMed === 'number' && mejorAlto !== null) {
-        const diff = Number((valCar - valMed).toFixed(2));
-        const diffFavorable = mejorAlto ? diff : -diff;
-        const signo = diff > 0 ? `+${diff}` : `${diff}`;
-
-        let estiloValor: EstiloCeldaExcel = 'bold';
-        let veredictoTxt = '= En Rango Promedio Regional';
-
-        if (diffFavorable >= umbralSignificativo) {
-          estiloValor = 'winner';
-          veredictoTxt = '★ Ventaja Sólida vs. Media';
-        } else if (diffFavorable <= -umbralSignificativo) {
-          estiloValor = 'warning';
-          veredictoTxt = '▲ Rezago / Mayor Fricción';
-        }
-
-        return [
-          cat,
-          ind,
-          { v: valCar, s: estiloValor },
-          valMed,
-          signo,
-          lugarReg,
-          { v: veredictoTxt, s: estiloValor === 'bold' ? 'default' : estiloValor },
-          unidad
-        ];
-      }
-      return [cat, ind, { v: String(valCar), s: 'bold' }, String(valMed), '-', lugarReg, 'Referencia Contextual', unidad];
-    };
-
-    const colHrsCampo = codigoSexo === 1 ? 'hrs_doble_jornada_hombres' : codigoSexo === 2 ? 'hrs_doble_jornada_mujeres' : 'hrs_doble_jornada_mujeres';
+    // Hoja 1: Ficha Ejecutiva, Score DataROI y Escenarios del Simulador ROI (3 columnas limpias sin un solo "-")
+    const invPubRef = semestresDefaultCarrera * 1800 + 8500 + capex.costoEquipo;
+    const invPrivMedRef = semestresDefaultCarrera * (6500 * 6) + 22000 + capex.costoEquipo;
+    const invPrivEliRef = semestresDefaultCarrera * (16000 * 6) + 28000 + capex.costoEquipo;
 
     const filasHoja1: ValorCeldaExcel[][] = [
-      filaInd('1. Identificación', 'Clave CMPE INEGI', cve_carrera, '-', carreraInfo.nombre_carrera),
-      filaInd('1. Identificación', 'Macro-Región y Perfil Evaluado', REGIONES_INFO[regionActiva]?.nombre || regionActiva, '-', etiquetaGeneroActual),
-      filaInd('1. Identificación', 'Muestra Certificada INEGI', `${nEncuestadosActivos} encuestados`, '-', 'Encuestados físicos reales'),
-      filaInd('2. Salario y ROI', 'Salario Mensual Consolidado', sueldoParaRadar, benchReg.sueldo_lic_promedio, 'MXN / mes', true, 800, '-'),
-      filaInd('2. Salario y ROI', 'Salario Base Preparatoria Regional', `${formatoMoneda(sueldoPrepaParaROI)} / mes`, `${formatoMoneda(sueldoPrepaParaROI)} / mes`, 'Referencia bachillerato'),
-      filaInd('2. Salario y ROI', 'Prima Salarial vs. Preparatoria', `${statsMercado?.premioVsPrepaPct ?? 0}%`, '-', '% sobre bachillerato'),
-      filaInd('2. Salario y ROI', 'Tendencia Salarial Real (2021–2026)', statsMercado?.tendenciaEtiqueta || 'Estable', '-', 'Pesos constantes 2026'),
-      filaInd('2. Salario y ROI', 'Inversión Total Estimada (Carrera + Equipo)', formatoMoneda(inversionTotalROI), '-', `Modalidad: ${tipoUniROI}`),
-      filaInd('2. Salario y ROI', 'Tiempo de Recuperación (ROI)', formatearAniosROI(aniosRetornoROI), '-', semaforoROI.etiqueta),
-      filaInd('2. Salario y ROI', 'Ganancia Neta a 10 Años vs. Prepa', formatoMoneda(gananciaNeta10Anios), '-', 'MXN acumulados'),
-      filaInd(
-        '3. Calidad y Mercado',
+      [{ v: 'Nombre de la Licenciatura Auditada', s: 'bold' }, { v: `${carreraInfo.nombre_carrera} (CVE: ${cve_carrera})`, s: 'section' }, capex.detalle],
+      [
+        { v: 'Calificación Integral DataROI (0–100)', s: 'bold' },
+        { v: `${evalScoreActual.score} / 100 pts (Grado ${semaforoScoreActual.grado} — ${semaforoScoreActual.etiqueta})`, s: semaforoScoreActual.grado === 'A' ? 'winner' : semaforoScoreActual.grado === 'C' ? 'warning' : 'gold' },
+        `Ponderación de 6 Pilares: Retorno ${evalScoreActual.pilares.retornoSalarial}, Empleo ${evalScoreActual.pilares.empleabilidad}, Calidad OIT ${evalScoreActual.pilares.calidadOIT}, Mérito ${evalScoreActual.pilares.meritocracia}, Futuro ${evalScoreActual.pilares.blindajeFuturo}, Estabilidad ${evalScoreActual.pilares.estabilidadVida}`
+      ],
+      ['Macro-Región y Perspectiva de Género', { v: `${REGIONES_INFO[regionActiva]?.nombre} (${etiquetaGeneroActual})`, s: 'bold' }, REGIONES_INFO[regionActiva]?.estados || '32 entidades federativas'],
+      ['Muestra Física Certificada INEGI', { v: `${nEncuestadosActivos.toLocaleString('es-MX')} profesionistas encuestados`, s: 'bold' }, `PEA Activa Estimada: ${peaTotal.toLocaleString('es-MX')} profesionistas (${ocupadosCount.toLocaleString('es-MX')} ocupados)`],
+      ['Salario Mensual Consolidado (Pesos 2026)', { v: `${formatoMoneda(sueldoParaRadar)} MXN / mes`, s: 'winner' }, `Media de todas las licenciaturas en esta región: ${formatoMoneda(benchReg.sueldo_lic_promedio)} / mes`],
+      ['Salario Base Preparatoria Regional', { v: `${formatoMoneda(sueldoPrepaParaROI)} MXN / mes`, s: 'bold' }, 'Costo de oportunidad mensual de un egresado de bachillerato en la misma región y género'],
+      ['Prima Salarial Universitaria vs. Prepa', { v: `${premioVsPrepaActivo >= 0 ? `+${premioVsPrepaActivo}%` : `${premioVsPrepaActivo}%`} sobre bachillerato`, s: premioVsPrepaActivo >= 25 ? 'winner' : 'bold' }, `Bono salarial anual extra por tener título: ${formatoMoneda(bonoAnualROI)} MXN / año`],
+      ['Tendencia Salarial Real (2021–2026)', { v: statsMercado?.tendenciaEtiqueta || 'Estable', s: 'bold' }, 'Evaluada sobre la trayectoria post-pandemia deflactada con el INPC'],
+      ['Inversión Requerida en Equipamiento (CapEx)', { v: `${formatoMoneda(capex.costoEquipo)} MXN (${capex.etiqueta})`, s: 'bold' }, capex.detalle],
+      [
+        'Escenario ROI 1: Universidad Pública Estándar',
+        { v: bonoAnualROI > 0 ? `${(invPubRef / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invPubRef)})` : 'No amortizable', s: 'winner' },
+        `Supuesto: ${semestresDefaultCarrera} semestres · Cuota pública $1,800/sem + Titulación $8,500 + Equipo ${formatoMoneda(capex.costoEquipo)}`
+      ],
+      [
+        'Escenario ROI 2: Universidad Privada Media',
+        { v: bonoAnualROI > 0 ? `${(invPrivMedRef / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invPrivMedRef)})` : 'No amortizable', s: 'bold' },
+        `Supuesto: ${semestresDefaultCarrera} semestres · Colegiatura $6,500/mes (6 pagos/sem) + Titulación $22,000 + Equipo ${formatoMoneda(capex.costoEquipo)}`
+      ],
+      [
+        'Escenario ROI 3: Universidad Privada Élite',
+        { v: bonoAnualROI > 0 ? `${(invPrivEliRef / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invPrivEliRef)})` : 'No amortizable', s: 'bold' },
+        `Supuesto: ${semestresDefaultCarrera} semestres · Colegiatura $16,000/mes (6 pagos/sem) + Titulación $28,000 + Equipo ${formatoMoneda(capex.costoEquipo)}`
+      ],
+      [
+        'Simulación Personalizada Activa (Bolsillo)',
+        { v: `${formatearAniosROI(aniosRetornoBolsillo)} — ${semaforoROI.etiqueta}`, s: 'section' },
+        `${supuestoROICortoTexto} · Ganancia neta a 10 años: ${formatoMoneda(gananciaNeta10Anios)}`
+      ],
+      [
+        'Simulación Económica Total (Con Costo de Oportunidad Mincer)',
+        { v: `${formatearAniosROI(aniosRetornoEconomicoMincer)} (Inversión económica total: ${formatoMoneda(inversionEconomicaTotalMincer)})`, s: 'bold' },
+        `Incluye ${formatoMoneda(costoOportunidadNeto)} MXN de sueldos de preparatoria no percibidos durante ${mesesEstudioTotales} meses de estudio (${
+          nivelTrabajoEstudio === 0 ? 'Sin trabajar al estudiar' : nivelTrabajoEstudio === 0.5 ? 'Trabajando medio tiempo 50%' : 'Trabajando tiempo completo 100%'
+        })`
+      ]
+    ];
+
+    // Hoja 2: Tabla Pura de Benchmarking contra la Media Regional (CERO celdas con "-")
+    const filaBench = (
+      cat: string,
+      ind: string,
+      valCar: number,
+      valMed: number,
+      unidad: string,
+      mejorAlto: boolean,
+      umbralSignificativo: number,
+      lugarReg: string
+    ): ValorCeldaExcel[] => {
+      const diff = Number((valCar - valMed).toFixed(2));
+      const diffFavorable = mejorAlto ? diff : -diff;
+      const signo = diff > 0 ? `+${diff}` : `${diff}`;
+
+      let estiloValor: EstiloCeldaExcel = 'bold';
+      let veredictoTxt = '= En Rango Promedio Regional';
+
+      if (diffFavorable >= umbralSignificativo) {
+        estiloValor = 'winner';
+        veredictoTxt = '★ Ventaja Sólida vs. Media';
+      } else if (diffFavorable <= -umbralSignificativo) {
+        estiloValor = 'warning';
+        veredictoTxt = '▲ Rezago / Mayor Fricción';
+      }
+
+      return [
+        cat,
+        ind,
+        { v: valCar, s: estiloValor },
+        valMed,
+        signo,
+        lugarReg,
+        { v: veredictoTxt, s: estiloValor === 'bold' ? 'default' : estiloValor },
+        unidad
+      ];
+    };
+
+    const colHrsCampo = codigoSexo === 1 ? 'hrs_doble_jornada_hombres' : 'hrs_doble_jornada_mujeres';
+
+    const filasHoja2: ValorCeldaExcel[][] = [
+      filaBench(
+        '1. Remuneración',
+        'Salario Mensual Consolidado vs. Media Lic.',
+        sueldoParaRadar,
+        benchReg.sueldo_lic_promedio,
+        'MXN / mes',
+        true,
+        800,
+        '#Top Salarial'
+      ),
+      filaBench(
+        '2. Calidad y Mercado',
         'Empleo de Calidad (Estándar OIT)',
         tasaEmpleoCalidadPct,
         mediaCalidadOITContexto,
@@ -1309,8 +1492,8 @@ function CarreraPerfilContenido() {
           true
         )
       ),
-      filaInd(
-        '3. Calidad y Mercado',
+      filaBench(
+        '2. Calidad y Mercado',
         'Formalidad Laboral Total',
         tasaFormalidadPct,
         scoreFormalidadMedia,
@@ -1323,52 +1506,39 @@ function CarreraPerfilContenido() {
           true
         )
       ),
-      filaInd('3. Calidad y Mercado', 'Tasa de Desempleo Abierto', Number(desempleoSeguro.toFixed(1)), 3.5, '% de la PEA', false, 1.2, '-'),
-      filaInd('3. Calidad y Mercado', 'Índice de Saturación ANUIES', Number(saturacionSegura.toFixed(0)), 100, `% (${diagSat.texto})`, false, 12, '-'),
-      filaInd('3. Calidad y Mercado', 'PEA Activa Estimada', `${peaTotal.toLocaleString('es-MX')} profesionistas`, '-', 'Volumen laboral activo'),
-      filaInd('4. Ecosistema Empleador', 'PYME (Empresas 6–100 empleados)', pPyme, benchContextual.pct_pyme, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_pyme || 0), pPyme, true)),
-      filaInd('4. Ecosistema Empleador', 'Microempresa y Práctica Independiente', pMicro, benchContextual.pct_micro, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_micro || 0), pMicro, true)),
-      filaInd('4. Ecosistema Empleador', 'Gran Corporativo y Transnacional', pCorp, benchContextual.pct_corp, '% de ocupados', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_corp || 0), pCorp, true)),
-      filaInd('4. Ecosistema Empleador', 'Administración Pública y Gobierno', pGob, benchContextual.pct_gobierno, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_gobierno || 0), pGob, true)),
-      filaInd('4. Ecosistema Empleador', 'Academia, Investigación y ONGs', `${pAcademiaOtros}%`, '-', '% de ocupados'),
-      filaInd('5. Escalera de Prestaciones', 'Contrato Escrito Estable', pContrato, benchContextual.pct_contrato, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_contrato || 0), pContrato, true)),
-      filaInd('5. Escalera de Prestaciones', 'Aguinaldo de Ley', pAguinaldo, benchContextual.pct_aguinaldo, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_aguinaldo || 0), pAguinaldo, true)),
-      filaInd('5. Escalera de Prestaciones', 'Fondo de Retiro (AFORE)', pAfore, benchContextual.pct_afore, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_afore || 0), pAfore, true)),
-      filaInd('5. Escalera de Prestaciones', 'Protección Materna / Paterna', Number(sateliteActual?.pct_materno || 0), benchContextual.pct_materno, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_materno || 0), Number(sateliteActual?.pct_materno || 0), true)),
-      filaInd('5. Escalera de Prestaciones', 'Afiliación Sindical / Gremial', pSindicato, benchContextual.pct_sindicato, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_sindicato || 0), pSindicato, true)),
-      filaInd('5. Escalera de Prestaciones', 'Seguro Médico Privado (SGMM)', pSgmm, benchContextual.pct_sgmm, '% de cobertura', true, 2.0, calcularLugarEnRegion(r => Number(r.pct_sgmm || 0), pSgmm, true)),
-      filaInd('6. Barreras y Modalidad', 'Índice de Privilegio (Estrato Origen 1–4)', social.estrato, benchContextual.indice_privilegio, 'Escala INEGI 1 a 4', false, 0.12, calcularLugarEnRegion(r => Number(r.indice_privilegio || 2.8), social.estrato, false)),
-      filaInd('6. Barreras y Modalidad', 'Ingreso por Redes Familiares (Nepotismo)', social.nepotismo, benchContextual.pct_nepotismo, '% por contactos', false, 3.0, calcularLugarEnRegion(r => Number(r.pct_nepotismo || 37), social.nepotismo, false)),
-      filaInd('6. Barreras y Modalidad', 'Índice de Ascensor Meritocrático', social.scoreMovilidad, 58.0, `% (${social.cuadrante.nombre})`, true, 2.5, '-'),
-      filaInd('6. Barreras y Modalidad', 'Pluriempleo (Segundo Trabajo)', pPluriempleo, benchContextual.pct_pluriempleo, '% con 2+ empleos', false, 2.0, calcularLugarEnRegion(r => Number(r.pct_pluriempleo || 5), pPluriempleo, false)),
-      filaInd('6. Barreras y Modalidad', 'Migración Forzada (Desarraigo)', pDesarraigo, benchContextual.pct_desarraigo, '% que emigró de estado', false, 1.5, calcularLugarEnRegion(r => Number(r.pct_desarraigo || 2.5), pDesarraigo, false)),
-      filaInd('6. Barreras y Modalidad', 'Trabajo Doméstico No Remunerado', hrsHogarActiva, benchContextual.hrs_hogar, 'Horas / semana', false, 1.8, calcularLugarEnRegion(r => Number(r[colHrsCampo] || 15), hrsHogarActiva, false)),
-      filaInd('6. Barreras y Modalidad', 'Trabajo Remoto (Home Office)', pHomeOffice, benchContextual.pct_home_office, '% remoto', true, 2.0, calcularLugarEnRegion(r => Number(r.pct_home_office || 0), pHomeOffice, true)),
-      filaInd('6. Barreras y Modalidad', 'Jornada de Medio Tiempo (<30h)', pMedioTiempo, benchContextual.pct_medio_tiempo, '% medio tiempo', null, 3.0, calcularLugarEnRegion(r => Number(r.pct_medio_tiempo || 14), pMedioTiempo, false)),
-      filaInd('6. Barreras y Modalidad', 'Riesgo de Automatización IA', riesgoIA, 40, '% de exposición', false, 8.0, calcularLugarEnRegion(r => Number(r.riesgo_ia_score || 40), riesgoIA, false))
+      filaBench('2. Calidad y Mercado', 'Tasa de Desempleo Abierto', Number(desempleoSeguro.toFixed(1)), 3.5, '% de la PEA', false, 1.2, 'Media 5 años ENOE'),
+      filaBench('2. Calidad y Mercado', 'Índice de Saturación ANUIES', Number(saturacionSegura.toFixed(0)), 100, `% (${diagSat.texto})`, false, 12, 'Balance Egresados/Plazas'),
+      filaBench('3. Ecosistema Empleador', 'PYME (Empresas 6–100 empleados)', pPyme, benchContextual.pct_pyme, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_pyme || 0), pPyme, true)),
+      filaBench('3. Ecosistema Empleador', 'Microempresa y Práctica Independiente', pMicro, benchContextual.pct_micro, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_micro || 0), pMicro, true)),
+      filaBench('3. Ecosistema Empleador', 'Gran Corporativo y Transnacional', pCorp, benchContextual.pct_corp, '% de ocupados', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_corp || 0), pCorp, true)),
+      filaBench('3. Ecosistema Empleador', 'Administración Pública y Gobierno', pGob, benchContextual.pct_gobierno, '% de ocupados', true, 4.0, calcularLugarEnRegion(r => Number(r.pct_gobierno || 0), pGob, true)),
+      filaBench('4. Escalera de Prestaciones', 'Contrato Escrito Estable', pContrato, benchContextual.pct_contrato, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_contrato || 0), pContrato, true)),
+      filaBench('4. Escalera de Prestaciones', 'Aguinaldo de Ley', pAguinaldo, benchContextual.pct_aguinaldo, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_aguinaldo || 0), pAguinaldo, true)),
+      filaBench('4. Escalera de Prestaciones', 'Fondo de Retiro (AFORE)', pAfore, benchContextual.pct_afore, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_afore || 0), pAfore, true)),
+      filaBench('4. Escalera de Prestaciones', 'Protección Materna / Paterna', Number(sateliteActual?.pct_materno || 0), benchContextual.pct_materno, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_materno || 0), Number(sateliteActual?.pct_materno || 0), true)),
+      filaBench('4. Escalera de Prestaciones', 'Afiliación Sindical / Gremial', pSindicato, benchContextual.pct_sindicato, '% de cobertura', true, 3.0, calcularLugarEnRegion(r => Number(r.pct_sindicato || 0), pSindicato, true)),
+      filaBench('4. Escalera de Prestaciones', 'Seguro Médico Privado (SGMM)', pSgmm, benchContextual.pct_sgmm, '% de cobertura', true, 2.0, calcularLugarEnRegion(r => Number(r.pct_sgmm || 0), pSgmm, true)),
+      filaBench('5. Barreras y Modalidad', 'Índice de Privilegio (Estrato Origen 1–4)', social.estrato, benchContextual.indice_privilegio, 'Escala INEGI 1 a 4', false, 0.12, calcularLugarEnRegion(r => Number(r.indice_privilegio || 2.8), social.estrato, false)),
+      filaBench('5. Barreras y Modalidad', 'Ingreso por Redes Familiares (Nepotismo)', social.nepotismo, benchContextual.pct_nepotismo, '% por contactos', false, 3.0, calcularLugarEnRegion(r => Number(r.pct_nepotismo || 37), social.nepotismo, false)),
+      filaBench('5. Barreras y Modalidad', 'Índice de Ascensor Meritocrático', social.scoreMovilidad, 58.0, `% (${social.cuadrante.nombre})`, true, 2.5, 'Modelo Chetty/CEEY'),
+      filaBench('5. Barreras y Modalidad', 'Pluriempleo (Segundo Trabajo)', pPluriempleo, benchContextual.pct_pluriempleo, '% con 2+ empleos', false, 2.0, calcularLugarEnRegion(r => Number(r.pct_pluriempleo || 5), pPluriempleo, false)),
+      filaBench('5. Barreras y Modalidad', 'Migración Forzada (Desarraigo)', pDesarraigo, benchContextual.pct_desarraigo, '% que emigró de estado', false, 1.5, calcularLugarEnRegion(r => Number(r.pct_desarraigo || 2.5), pDesarraigo, false)),
+      filaBench('5. Barreras y Modalidad', 'Trabajo Doméstico No Remunerado', hrsHogarActiva, benchContextual.hrs_hogar, 'Horas / semana', false, 1.8, calcularLugarEnRegion(r => Number(r[colHrsCampo] || 15), hrsHogarActiva, false)),
+      filaBench('5. Barreras y Modalidad', 'Trabajo Remoto (Home Office)', pHomeOffice, benchContextual.pct_home_office, '% modalidad remota', true, 2.0, calcularLugarEnRegion(r => Number(r.pct_home_office || 0), pHomeOffice, true)),
+      filaBench('5. Barreras y Modalidad', 'Jornada de Medio Tiempo (<30h)', pMedioTiempo, benchContextual.pct_medio_tiempo, '% medio tiempo', false, 3.5, calcularLugarEnRegion(r => Number(r.pct_medio_tiempo || 14), pMedioTiempo, false)),
+      filaBench('5. Barreras y Modalidad', 'Riesgo de Automatización IA', riesgoIA, 40, '% de exposición', false, 8.0, calcularLugarEnRegion(r => Number(r.riesgo_ia_score || 40), riesgoIA, false))
     ];
 
-    const serieReal = obtenerSerieAnualConfiable();
-    const filasHoja2: ValorCeldaExcel[][] = serieReal.map(pt => {
-      const sLic = pt.sueldoLic ?? 0;
-      const sPre = pt.sueldoPrepa ?? 0;
-      const prima = sPre > 0 && sLic > 0 ? Number((((sLic - sPre) / sPre) * 100).toFixed(1)) : 0;
-      return [
-        pt.anio,
-        sLic > 0 ? { v: sLic, s: 'bold' } : 'Sin dato',
-        sPre > 0 ? sPre : 'Sin dato',
-        sLic - sPre,
-        prima,
-        pt.pea || peaTotal
-      ];
-    });
-
-    // Hoja 3: Iluminar en Verde (winner) al verdadero líder regional de cada una de las 4 métricas de la carrera
+    // Hoja 3: ¿En qué Macro-Región conviene más ejercer ESTA carrera? (Iluminando en Verde al ganador de cada columna)
     const dispRegs = filasComparativaRegional.filter(r => r.celdaDisponible);
+    const maxScoreReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.scoreDataROIRegional)) : -1;
     const maxSalReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.sueldoCarrera)) : -1;
     const maxPrimaReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.premioPct)) : -999;
+    const minRoiPubReg = dispRegs.length > 0 ? Math.min(...dispRegs.map(r => r.roiPublicaReg ?? 999)) : 999;
+    const maxCalOitReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.calidadOitReg)) : -1;
     const maxFormReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.formalidadPct)) : -1;
     const maxDifFormReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.diffFormalidadPts)) : -999;
+    const minNepReg = dispRegs.length > 0 ? Math.min(...dispRegs.map(r => r.nepotismoReg)) : 999;
 
     const filasHoja3: ValorCeldaExcel[][] = filasComparativaRegional.map(r => {
       const esAct = r.region === regionActiva;
@@ -1377,31 +1547,62 @@ function CarreraPerfilContenido() {
         r.estados,
         r.celdaDisponible ? 'Muestra Certificada' : 'Muestra Insuficiente',
         r.celdaDisponible
+          ? { v: r.scoreDataROIRegional, s: r.scoreDataROIRegional === maxScoreReg ? 'winner' : 'bold' }
+          : 'Sin muestra',
+        r.celdaDisponible
           ? { v: r.sueldoCarrera, s: r.sueldoCarrera === maxSalReg ? 'winner' : 'bold' }
           : 'Sin muestra',
         r.sueldoPrepa,
         r.celdaDisponible
           ? { v: r.premioPct, s: r.premioPct === maxPrimaReg ? 'winner' : 'default' }
-          : 'N/D',
-        r.celdaDisponible
-          ? { v: r.formalidadPct, s: r.formalidadPct === maxFormReg ? 'winner' : 'bold' }
           : 'Sin muestra',
-        r.formalidadPrepaPct,
+        r.celdaDisponible && r.roiPublicaReg != null
+          ? { v: `${r.roiPublicaReg} años`, s: r.roiPublicaReg === minRoiPubReg ? 'winner' : 'default' }
+          : 'Sin muestra',
+        r.celdaDisponible && r.roiPrivadaReg != null
+          ? `${r.roiPrivadaReg} años`
+          : 'Sin muestra',
+        r.celdaDisponible
+          ? { v: r.calidadOitReg, s: r.calidadOitReg === maxCalOitReg ? 'winner' : 'default' }
+          : 'Sin muestra',
+        r.celdaDisponible
+          ? { v: r.formalidadPct, s: r.formalidadPct === maxFormReg ? 'winner' : 'default' }
+          : 'Sin muestra',
         r.celdaDisponible
           ? { v: r.diffFormalidadPts, s: r.diffFormalidadPts === maxDifFormReg ? 'winner' : 'default' }
-          : 'N/D'
+          : 'Sin muestra',
+        r.celdaDisponible ? r.sectorDominanteReg : 'Sin muestra',
+        r.celdaDisponible
+          ? { v: r.nepotismoReg, s: r.nepotismoReg === minNepReg ? 'winner' : 'default' }
+          : 'Sin muestra',
+        r.celdaDisponible ? r.estratoReg : 'Sin muestra'
       ];
     });
 
+    // Hoja 4: Serie Salarial Real (2021-2026) + Diagnóstico de Fortalezas y Riesgos
+    const serieReal = obtenerSerieAnualConfiable();
     const filasHoja4: ValorCeldaExcel[][] = [
+      ...serieReal.map(pt => {
+        const sLic = pt.sueldoLic ?? 0;
+        const sPre = pt.sueldoPrepa ?? 0;
+        const prima = sPre > 0 && sLic > 0 ? Number((((sLic - sPre) / sPre) * 100).toFixed(1)) : 0;
+        return [
+          `Corte Anual ENOE ${pt.anio}`,
+          sLic > 0 ? { v: `${formatoMoneda(sLic)} / mes`, s: 'bold' as const } : 'Sin dato',
+          sPre > 0 ? `${formatoMoneda(sPre)} / mes` : 'Sin dato',
+          `+${formatoMoneda(sLic - sPre)}/mes (${prima >= 0 ? `+${prima}%` : `${prima}%`} vs. Prepa) · PEA: ${(pt.pea || peaTotal).toLocaleString('es-MX')}`
+        ];
+      }),
       ...diagnosticoEjecutivo.topPros.map((pro, idx) => [
         { v: `Fortaleza Comprobada #${idx + 1}`, s: 'winner' as const },
-        'Ventaja Competitiva del Perfil',
+        'Ventaja Competitiva Auditada',
+        `${REGIONES_INFO[regionActiva]?.corto} (${etiquetaGeneroActual})`,
         pro
       ]),
       ...diagnosticoEjecutivo.topContras.map((con, idx) => [
         { v: `Riesgo o Fricción #${idx + 1}`, s: 'warning' as const },
         'Factor de Riesgo a Considerar',
+        `${REGIONES_INFO[regionActiva]?.corto} (${etiquetaGeneroActual})`,
         con
       ])
     ];
@@ -1415,7 +1616,12 @@ function CarreraPerfilContenido() {
       `DataROI_Ficha_${cve_carrera}_${regionActiva}_${modoGenero}.xlsx`,
       [
         {
-          nombre: '1_Indicadores_y_ROI',
+          nombre: '1_Ficha_Ejecutiva_y_ROI',
+          cabeceras: ['Concepto_Ejecutivo', 'Valor_en_Esta_Carrera', 'Contexto_y_Explicacion_Metodologica'],
+          filas: filasHoja1
+        },
+        {
+          nombre: '2_Benchmark_vs_Media_Regional',
           cabeceras: [
             'Categoria',
             'Indicador_Auditado',
@@ -1426,21 +1632,32 @@ function CarreraPerfilContenido() {
             'Veredicto_Estadistico',
             'Unidad_o_Detalle'
           ],
-          filas: filasHoja1
-        },
-        {
-          nombre: '2_Serie_Salarial_2021_2026',
-          cabeceras: ['Anio', 'Salario_Licenciatura_MXN', 'Salario_Base_Prepa_MXN', 'Diferencia_Mensual_MXN', 'Prima_vs_Prepa_Pct', 'PEA_Activa'],
           filas: filasHoja2
         },
         {
-          nombre: '3_Comparativa_5_Regiones',
-          cabeceras: ['Macro_Region', 'Entidades_Incluidas', 'Estatus_Muestra', 'Salario_Carrera_MXN', 'Salario_Prepa_MXN', 'Prima_Salarial_Pct', 'Formalidad_Carrera_Pct', 'Formalidad_Prepa_Pct', 'Dif_Formalidad_Pts'],
+          nombre: '3_Mejor_Region_para_Ejercer',
+          cabeceras: [
+            'Macro_Region',
+            'Entidades_Incluidas',
+            'Estatus_Muestra',
+            'Score_DataROI_0_100',
+            'Salario_Carrera_MXN',
+            'Salario_Prepa_MXN',
+            'Prima_Salarial_Pct',
+            'ROI_Univ_Publica',
+            'ROI_Univ_Privada_Media',
+            'Calidad_OIT_Pct',
+            'Formalidad_Total_Pct',
+            'Dif_Formalidad_vs_Prepa_Pts',
+            'Sector_Empleador_Dominante',
+            'Nepotismo_Pct',
+            'Estrato_Origen_1_4'
+          ],
           filas: filasHoja3
         },
         {
-          nombre: '4_Diagnostico_Pros_Contras',
-          cabeceras: ['Clasificacion_Hallazgo', 'Tipo_Impacto', 'Descripcion_Ejecutiva_Auditada'],
+          nombre: '4_Serie_2021_2026_y_Hallazgos',
+          cabeceras: ['Periodo_o_Clasificacion', 'Salario_Licenciatura_o_Tipo', 'Base_Prepa_o_Contexto', 'Detalle_Ejecutivo_Auditado'],
           filas: filasHoja4
         }
       ]
@@ -1448,7 +1665,7 @@ function CarreraPerfilContenido() {
   };
 
   const exportarFichaCSV = () => {
-    const { filasHoja1 } = construirHojasFichaCarrera();
+    const { filasHoja2 } = construirHojasFichaCarrera();
     descargarCSVEstilizado(
       `DataROI_Ficha_${cve_carrera}_${regionActiva}_${modoGenero}.csv`,
       [
@@ -1461,7 +1678,7 @@ function CarreraPerfilContenido() {
         'Veredicto_Estadistico',
         'Unidad_o_Detalle'
       ],
-      filasHoja1
+      filasHoja2
     );
   };
 
@@ -1477,9 +1694,11 @@ function CarreraPerfilContenido() {
       nEncuestados: nEncuestadosActivos,
       capexEtiqueta: capex.etiqueta,
       riesgoIA,
+      scoreDataROI: evalScoreActual.score,
+      etiquetaScoreDataROI: `Grado ${semaforoScoreActual.grado} — ${semaforoScoreActual.etiqueta}`,
       sueldoActivo: sueldoParaRadar,
       sueldoPrepa: sueldoPrepaParaROI,
-      premioVsPrepaPct: statsMercado?.premioVsPrepaPct ?? 0,
+      premioVsPrepaPct: premioVsPrepaActivo,
       bonoAnual: statsMercado?.gananciaAnualExtra ?? bonoAnualROI,
       tasaEmpleoCalidadPct,
       diffCalidadVsMediaLic,
@@ -1495,10 +1714,11 @@ function CarreraPerfilContenido() {
       tasaInformalidadPct,
       countFormalBasico,
       countInformal,
-      inversionTotalROI,
-      aniosRetornoTexto: formatearAniosROI(aniosRetornoROI),
+      inversionTotalROI: inversionDirectaBolsillo,
+      aniosRetornoTexto: formatearAniosROI(aniosRetornoBolsillo),
       semaforoROI: semaforoROI.etiqueta,
       gananciaNeta10Anios,
+      supuestoROICorto: `Inv. Bolsillo (${semestresROI} sem): ${formatoMoneda(inversionDirectaBolsillo)} | Neto 10a: ${formatoMoneda(gananciaNeta10Anios)}`,
       topPros: diagnosticoEjecutivo.topPros,
       topContras: diagnosticoEjecutivo.topContras,
       serieAnual: serieReal,
@@ -1528,6 +1748,11 @@ function CarreraPerfilContenido() {
       nombreArchivo: `DataROI_Reporte_${cve_carrera}_${regionActiva}_${modoGenero}.pdf`
     });
   };
+
+  // Cálculo del arco SVG para el Anillo Circular del Score DataROI en el Piso 1
+  const rAnillo = 24;
+  const circAnillo = 2 * Math.PI * rAnillo;
+  const offsetAnillo = circAnillo - (Math.max(0, Math.min(100, evalScoreActual.score)) / 100) * circAnillo;
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -1563,7 +1788,7 @@ function CarreraPerfilContenido() {
 
           <button
             onClick={exportarFichaExcel}
-            title="Descargar Libro de Excel (.xlsx) con 4 Hojas, #Lugar en Región y Semáforo Estadístico"
+            title="Descargar Libro de Excel (.xlsx) con 4 Hojas sin celdas vacías, Score DataROI y comparativa regional"
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs transition-all cursor-pointer"
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -1572,7 +1797,7 @@ function CarreraPerfilContenido() {
 
           <button
             onClick={exportarFichaCSV}
-            title="Descargar tabla de indicadores en formato CSV limpio (RFC 4180)"
+            title="Descargar tabla de benchmarking en formato CSV limpio (RFC 4180)"
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
           >
             <Download className="w-3.5 h-3.5 text-blue-600" />
@@ -1596,35 +1821,76 @@ function CarreraPerfilContenido() {
         </div>
       </div>
 
-      {/* PISO 1: CINTA EJECUTIVA UNIFICADA */}
+      {/* PISO 1: CINTA EJECUTIVA UNIFICADA CON ANILLO CIRCULAR SCORE DATAROI */}
       <div className="print-avoid-break bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         
         <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 items-stretch">
           
-          <div className="lg:col-span-5 p-6 flex flex-col justify-center gap-3">
-            <div>
-              <div className="flex flex-wrap items-center gap-2 mb-2.5">
-                <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 font-mono">
-                  CVE: {cve_carrera}
-                </span>
-                <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border ${capex.badge}`}>
-                  {capex.etiqueta}
-                </span>
-                <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border inline-flex items-center gap-1 ${
-                  riesgoIA <= 35
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : riesgoIA <= 65
-                      ? 'bg-amber-50 text-amber-800 border-amber-200'
-                      : 'bg-rose-50 text-rose-700 border-rose-200'
-                }`}>
-                  {riesgoIA <= 35 ? <ShieldCheck className="w-3 h-3" /> : <ShieldAlert className="w-3 h-3" />}
-                  Riesgo IA: {riesgoIA}%
-                </span>
+          {/* Identificación + Anillo Circular Score DataROI (5 cols) */}
+          <div className="lg:col-span-5 p-6 flex flex-col justify-between gap-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                  <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 font-mono">
+                    CVE: {cve_carrera}
+                  </span>
+                  <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border ${capex.badge}`}>
+                    {capex.etiqueta}
+                  </span>
+                  <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border inline-flex items-center gap-1 ${
+                    riesgoIA <= 35
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : riesgoIA <= 65
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}>
+                    {riesgoIA <= 35 ? <ShieldCheck className="w-3 h-3" /> : <ShieldAlert className="w-3 h-3" />}
+                    Riesgo IA: {riesgoIA}%
+                  </span>
+                </div>
+
+                <h1 className="text-lg md:text-2xl font-black text-slate-900 tracking-tight leading-snug">
+                  {carreraInfo.nombre_carrera}
+                </h1>
               </div>
 
-              <h1 className="text-lg md:text-2xl font-black text-slate-900 tracking-tight leading-snug">
-                {carreraInfo.nombre_carrera}
-              </h1>
+              {/* Anillo Circular Semáforo Score DataROI Reactivo */}
+              <div
+                title={`Calificación Integral DataROI en ${REGIONES_INFO[regionActiva]?.corto} (${etiquetaGeneroActual}): ${evalScoreActual.score}/100`}
+                className={`p-2.5 rounded-2xl border flex items-center gap-2.5 shrink-0 ${semaforoScoreActual.ringBgClass}`}
+              >
+                <div className="relative w-14 h-14 flex items-center justify-center shrink-0">
+                  <svg className="w-14 h-14 -rotate-90" viewBox="0 0 56 56">
+                    <circle cx="28" cy="28" r={rAnillo} fill="none" stroke={semaforoScoreActual.trackHex} strokeWidth="5" />
+                    <circle
+                      cx="28"
+                      cy="28"
+                      r={rAnillo}
+                      fill="none"
+                      stroke={semaforoScoreActual.colorHex}
+                      strokeWidth="5"
+                      strokeLinecap="round"
+                      strokeDasharray={circAnillo}
+                      strokeDashoffset={offsetAnillo}
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+                    <span className="text-sm font-black text-slate-900">{evalScoreActual.score}</span>
+                    <span className="text-[9px] font-bold text-slate-400">/100</span>
+                  </div>
+                </div>
+                <div className="pr-1">
+                  <span className="block text-[9.5px] font-black uppercase tracking-wider text-slate-400 leading-none">
+                    Score DataROI
+                  </span>
+                  <span className={`block text-xs font-black ${semaforoScoreActual.textClass} mt-1 leading-none`}>
+                    {semaforoScoreActual.etiqueta}
+                  </span>
+                  <span className="block text-[10px] font-bold text-slate-500 mt-1 leading-none">
+                    Grado {semaforoScoreActual.grado} · {REGIONES_INFO[regionActiva]?.corto}
+                  </span>
+                </div>
+              </div>
             </div>
 
             <p className="text-xs text-slate-500 pt-2.5 border-t border-slate-100 leading-relaxed">
@@ -1632,6 +1898,7 @@ function CarreraPerfilContenido() {
             </p>
           </div>
 
+          {/* Salario Mensual Consolidado (3 cols) */}
           <div className="lg:col-span-3 p-6 flex flex-col justify-center gap-3.5">
             <div>
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
@@ -1647,25 +1914,26 @@ function CarreraPerfilContenido() {
 
             <div className="pt-3 border-t border-slate-100">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-500 font-medium">Prima vs. Prepa ({formatoMoneda(statsMercado?.sueldoPrepaActivo || 10608)}):</span>
+                <span className="text-slate-500 font-medium">Prima vs. Prepa ({formatoMoneda(sueldoPrepaParaROI)}):</span>
                 <span className={`font-black px-2 py-0.5 rounded ${
-                  (statsMercado?.premioVsPrepaPct || 0) >= 0
+                  premioVsPrepaActivo >= 0
                     ? 'bg-emerald-50 text-emerald-700'
                     : 'bg-rose-50 text-rose-700'
                 }`}>
-                  {statsMercado && statsMercado.premioVsPrepaPct >= 0 ? `+${statsMercado.premioVsPrepaPct}%` : `${statsMercado?.premioVsPrepaPct || 0}%`}
+                  {premioVsPrepaActivo >= 0 ? `+${premioVsPrepaActivo}%` : `${premioVsPrepaActivo}%`}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-1">
                 Bono anual: <strong className="text-slate-700">
-                  {statsMercado && statsMercado.gananciaAnualExtra >= 0
-                    ? `+${formatoMoneda(statsMercado.gananciaAnualExtra)}/año`
-                    : `${formatoMoneda(statsMercado?.gananciaAnualExtra || 0)}/año`}
+                  {bonoAnualROI >= 0
+                    ? `+${formatoMoneda(bonoAnualROI)}/año`
+                    : `${formatoMoneda(bonoAnualROI)}/año`}
                 </strong>
               </p>
             </div>
           </div>
 
+          {/* Empleo de Calidad OIT (2 cols) */}
           <div className="lg:col-span-2 p-6 flex flex-col justify-center gap-3.5">
             <div>
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
@@ -1691,6 +1959,7 @@ function CarreraPerfilContenido() {
             </div>
           </div>
 
+          {/* Índice de Saturación ANUIES (2 cols) */}
           <div className="lg:col-span-2 p-6 flex flex-col justify-center gap-3">
             <div>
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
@@ -1790,7 +2059,7 @@ function CarreraPerfilContenido() {
         </div>
       </div>
 
-      {/* PISO DE SÍNTESIS EJECUTIVA V2 (PROS/CONTRAS) + SIMULADOR DE ROI CON SLIDER DE COLEGIATURA EN VIVO */}
+      {/* PISO DE SÍNTESIS EJECUTIVA V2 (PROS/CONTRAS) + SIMULADOR DE ROI MEXICANO */}
       <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         <div className="lg:col-span-7 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
@@ -1844,6 +2113,7 @@ function CarreraPerfilContenido() {
           </div>
         </div>
 
+        {/* SIMULADOR DE RETORNO (ROI) CON ARQUETIPOS MEXICANOS + GAVETA PERSONALIZABLE */}
         <div className="lg:col-span-5 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-3 border-b border-slate-100">
@@ -1853,7 +2123,7 @@ function CarreraPerfilContenido() {
                   Simulador de Retorno (ROI)
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Años de trabajo para amortizar la carrera con el bono sobre Prepa.
+                  Años de trabajo para recuperar tu inversión con el bono sobre Prepa.
                 </p>
               </div>
 
@@ -1861,28 +2131,39 @@ function CarreraPerfilContenido() {
                 {([
                   { id: 'publica' as TipoUniversidadROI, label: 'Pública' },
                   { id: 'privada_media' as TipoUniversidadROI, label: 'Priv. Media' },
-                  { id: 'privada_elite' as TipoUniversidadROI, label: 'Priv. Élite' }
-                ]).map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => seleccionarTipoUni(t.id)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                      tipoUniROI === t.id ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                ))}
+                  { id: 'privada_elite' as TipoUniversidadROI, label: 'Priv. Élite' },
+                  { id: 'personalizada' as TipoUniversidadROI, label: '⚙️ Ajustar' }
+                ]).map((t) => {
+                  const activo = t.id === 'personalizada' ? (tipoUniROI === 'personalizada' || gavetaROIAbierta) : (tipoUniROI === t.id && !gavetaROIAbierta);
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        if (t.id === 'personalizada') {
+                          setTipoUniROI('personalizada');
+                          setGavetaROIAbierta(prev => !prev);
+                        } else {
+                          seleccionarTipoUni(t.id);
+                        }
+                      }}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                        activo ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="flex items-baseline justify-between gap-2 mb-2">
+            <div className="flex items-baseline justify-between gap-2 mb-1.5">
               <div>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Tiempo de Recuperación
+                  Recuperación Directa de Bolsillo
                 </span>
                 <span className="text-3xl font-black text-slate-900">
-                  {formatearAniosROI(aniosRetornoROI)}
+                  {formatearAniosROI(aniosRetornoBolsillo)}
                 </span>
               </div>
               <span className={`text-[11px] font-extrabold px-2.5 py-1 rounded-lg border ${semaforoROI.claseBadge}`}>
@@ -1890,49 +2171,146 @@ function CarreraPerfilContenido() {
               </span>
             </div>
 
-            <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden my-2">
+            {/* Receta explícita del supuesto activo */}
+            <p className="text-[11px] text-slate-500 font-medium mb-2 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-200/70">
+              {supuestoROICortoTexto}
+            </p>
+
+            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden my-2">
               <div
                 className={`h-full rounded-full transition-all duration-300 ${semaforoROI.colorBarra}`}
                 style={{
-                  width: aniosRetornoROI === null
+                  width: aniosRetornoBolsillo === null
                     ? '100%'
-                    : `${Math.max(10, Math.min(100, (1 - Math.min(15, aniosRetornoROI) / 16) * 100))}%`
+                    : `${Math.max(10, Math.min(100, (1 - Math.min(15, aniosRetornoBolsillo) / 16) * 100))}%`
                 }}
               />
             </div>
 
-            <div className="no-print my-2.5 pt-2 border-t border-slate-100">
-              <div className="flex items-center justify-between text-[11px] mb-1">
-                <span className="font-bold text-slate-600">
-                  Ajustar Colegiatura Total / Beca (4.5 años):
-                </span>
-                <span className="font-black text-blue-600">
-                  {formatoMoneda(costoBaseColegiatura)} + {formatoMoneda(capex.costoEquipo)} equipo
-                </span>
+            {/* GAVETA COMPACTA DE AJUSTE A LA REALIDAD MEXICANA (PROGRESSIVE DISCLOSURE) */}
+            {gavetaROIAbierta && (
+              <div className="no-print my-3 p-3.5 rounded-xl bg-blue-50/50 border border-blue-200/80 space-y-3 animate-in fade-in duration-150">
+                <div className="flex items-center justify-between text-xs font-black text-slate-900">
+                  <span className="flex items-center gap-1.5">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-blue-600" />
+                    Personalizar a mi Universidad en México
+                  </span>
+                  <button
+                    onClick={() => setGavetaROIAbierta(false)}
+                    className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
+                  >
+                    Listo
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+                  <div>
+                    <div className="flex justify-between font-bold text-slate-700 mb-1">
+                      <span>Colegiatura Mensual:</span>
+                      <span className="text-blue-700 font-black">{formatoMoneda(colegiaturaMensualROI)}/mes</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={28000}
+                      step={500}
+                      value={colegiaturaMensualROI}
+                      onChange={(e) => {
+                        setTipoUniROI('personalizada');
+                        setColegiaturaMensualROI(Number(e.target.value));
+                      }}
+                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                    />
+                    <span className="text-[10px] text-slate-400 block mt-0.5">
+                      $0 = Pública · Cobra 5 meses + 1 reinscripción/sem
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between font-bold text-slate-700 mb-1">
+                      <span>Duración Carrera:</span>
+                      <span className="text-blue-700 font-black">{semestresROI} sem ({(semestresROI / 2).toFixed(1)} años)</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={6}
+                      max={14}
+                      step={1}
+                      value={semestresROI}
+                      onChange={(e) => {
+                        setTipoUniROI('personalizada');
+                        setSemestresROI(Number(e.target.value));
+                      }}
+                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                    />
+                    <span className="text-[10px] text-slate-400 block mt-0.5">
+                      Estándar: 9 sem · Ejecutiva: 6–7 · Medicina: 12
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between font-bold text-slate-700 mb-1">
+                      <span>Titulación y Cédula:</span>
+                      <span className="text-blue-700 font-black">{formatoMoneda(costoTitulacionROI)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={45000}
+                      step={1500}
+                      value={costoTitulacionROI}
+                      onChange={(e) => {
+                        setTipoUniROI('personalizada');
+                        setCostoTitulacionROI(Number(e.target.value));
+                      }}
+                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                    />
+                  </div>
+
+                  <div>
+                    <span className="font-bold text-slate-700 block mb-1">¿Trabajas mientras estudias?</span>
+                    <div className="grid grid-cols-3 gap-1 bg-white p-0.5 rounded-lg border border-slate-200">
+                      {([
+                        { val: 0 as NivelTrabajoEstudio, label: 'No (0%)' },
+                        { val: 0.5 as NivelTrabajoEstudio, label: '1/2 Tpo' },
+                        { val: 1 as NivelTrabajoEstudio, label: 'Tpo Comp.' }
+                      ]).map(op => (
+                        <button
+                          key={op.val}
+                          onClick={() => {
+                            setTipoUniROI('personalizada');
+                            setNivelTrabajoEstudio(op.val);
+                          }}
+                          className={`py-1 rounded text-[10px] font-bold cursor-pointer ${
+                            nivelTrabajoEstudio === op.val ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {op.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
-              <input
-                type="range"
-                min={0}
-                max={1200000}
-                step={10000}
-                value={costoBaseColegiatura}
-                onChange={(e) => {
-                  setTipoUniROI('personalizada');
-                  setCostoColegiaturaCustom(Number(e.target.value));
-                }}
-                className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-              />
-            </div>
+            )}
 
             <div className="grid grid-cols-2 gap-2.5 mt-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200/70">
               <div>
-                <span className="text-[11px] text-slate-400 block">Inversión Total (Colegiatura + equipo):</span>
-                <strong className="text-slate-800 font-black">{formatoMoneda(inversionTotalROI)} MXN</strong>
+                <span className="text-[10.5px] text-slate-400 block">Inversión Directa de Bolsillo:</span>
+                <strong className="text-slate-900 font-black">{formatoMoneda(inversionDirectaBolsillo)} MXN</strong>
               </div>
               <div>
-                <span className="text-[11px] text-slate-400 block">Ganancia Neta a 10 años vs. Prepa:</span>
+                <span className="text-[10.5px] text-slate-400 block">Ganancia Neta a 10 años vs. Prepa:</span>
                 <strong className={`font-black ${gananciaNeta10Anios >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                   {gananciaNeta10Anios >= 0 ? `+${formatoMoneda(gananciaNeta10Anios)}` : formatoMoneda(gananciaNeta10Anios)}
+                </strong>
+              </div>
+              <div className="col-span-2 pt-2 border-t border-slate-200/70 flex items-center justify-between text-[11px]">
+                <span className="text-slate-500">
+                  ROI Económico Total (incl. {formatoMoneda(costoOportunidadNeto)} de costo de oportunidad):
+                </span>
+                <strong className="text-slate-800 font-black">
+                  {formatearAniosROI(aniosRetornoEconomicoMincer)}
                 </strong>
               </div>
             </div>
@@ -2080,16 +2458,14 @@ function CarreraPerfilContenido() {
 
                 const textoComplementarioPie = !disp
                   ? 'Muestra insuf.'
-                  : esVistaSueldo
-                    ? `${item.formalidadPct}% formal`
-                    : formatoMoneda(item.sueldoCarrera);
+                  : `Score: ${item.scoreDataROIRegional}`;
 
                 return (
                   <button
                     key={item.region}
                     disabled={!disp}
                     onClick={() => disp && setRegionActiva(item.region)}
-                    title={!disp ? `Muestra insuficiente en ${item.nombreCorto}` : `${item.nombreCorto} (${item.estados})`}
+                    title={!disp ? `Muestra insuficiente en ${item.nombreCorto}` : `${item.nombreCorto} (${item.estados}) · Score DataROI: ${item.scoreDataROIRegional}/100`}
                     className={`group flex flex-col items-center justify-between p-2.5 sm:p-3 rounded-2xl border transition-all ${
                       !disp
                         ? 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'
@@ -2143,7 +2519,7 @@ function CarreraPerfilContenido() {
                       <span className="block text-[10px] font-semibold text-slate-500 mt-0.5 truncate">
                         {textoRefPrepa}
                       </span>
-                      <span className="block text-[10px] text-slate-400 mt-0.5 truncate">
+                      <span className="block text-[10px] font-bold text-blue-600 mt-0.5 truncate">
                         {textoComplementarioPie}
                       </span>
                     </div>
