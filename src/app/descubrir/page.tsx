@@ -1,7 +1,7 @@
 import React, { Suspense } from 'react';
 import { supabase } from '@/lib/supabase';
-import Link from 'next/link';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { formatearNombreCarreraEjecutivo } from '@/lib/excelReportGenerator';
+import { Loader2 } from 'lucide-react';
 import DescubridorClient from '@/components/DescubridorClient';
 
 const ESTADOS_POR_REGION: Record<string, string[]> = {
@@ -75,7 +75,6 @@ function calcularSueldoPonderadoRobusto(filas: any[], sueldoRefNacional = 0): nu
   return sumaProducto / sumaPob;
 }
 
-// Sincronizado al 100% con GraficaPredictiva.tsx: promedia directamente el cierre 2025-2026 ponderado por PEA
 function calcularSueldoNacionalConsolidado(filasRealesNacSx: any[]): number {
   const filas25_26 = filasRealesNacSx.filter(r => (r.anio === 2025 || r.anio === 2026) && Number(r.sueldo_promedio_mensual) > 0);
   const lote = filas25_26.length > 0 ? filas25_26 : filasRealesNacSx;
@@ -366,7 +365,8 @@ async function RankingCargador() {
 
     return {
       cve_carrera: cve,
-      nombre_carrera: c.nombre_carrera,
+      nombre_carrera: formatearNombreCarreraEjecutivo(cve, c.nombre_carrera),
+      nombre_oficial_inegi: c.nombre_carrera,
       tendencia_salarial: tendenciaNac.etiqueta,
       tendencia_codigo: tendenciaNac.codigo,
       volumen_nacional_2026: volumenConsolidadoNac,
@@ -385,16 +385,9 @@ async function RankingCargador() {
 
 export default function DescubrirPage() {
   return (
-    <main className="min-h-screen bg-slate-50 font-sans p-4 md:p-6">
-      <div className="max-w-6xl mx-auto mb-4">
-        <Link href="/" className="inline-flex items-center text-xs md:text-sm font-bold text-slate-600 hover:text-slate-900 transition-colors">
-          <ArrowLeft className="w-4 h-4 mr-1.5" />
-          Directorio Nacional
-        </Link>
-      </div>
-
+    <main className="font-sans p-4 md:px-8 md:py-5">
       <Suspense fallback={
-        <div className="min-h-screen flex flex-col items-center justify-center">
+        <div className="min-h-[80vh] flex flex-col items-center justify-center">
           <Loader2 className="w-9 h-9 animate-spin text-blue-600 mb-3" />
           <p className="text-slate-500 text-sm font-medium animate-pulse">
             Auditando muestras regionales y cargando motor de decisión...

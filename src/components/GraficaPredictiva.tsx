@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
-  ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, Minus, Activity, Loader2, MapPin,
@@ -83,14 +83,22 @@ const formatoTickExacto5k = (valor: any) => {
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
+    const itemLic = payload.find((p: any) => !String(p.name).includes('Preparatoria'));
+    const itemPrepa = payload.find((p: any) => String(p.name).includes('Preparatoria'));
+    const valLic = Number(itemLic?.value || 0);
+    const valPrepa = Number(itemPrepa?.value || 0);
+    const diffMes = valLic - valPrepa;
+    const primaPct = valPrepa > 0 && valLic > 0 ? Math.round((diffMes / valPrepa) * 100) : null;
+
     return (
-      <div className="bg-slate-900/95 backdrop-blur-md p-3.5 border border-slate-700 shadow-xl rounded-xl z-50 min-w-[220px] text-white">
-        <p className="font-bold text-slate-300 mb-2 border-b border-slate-700/80 pb-1.5 text-xs uppercase tracking-wider">
-          Año {label} · Observado INEGI (Pesos Reales)
+      <div className="bg-slate-900/95 backdrop-blur-md p-3.5 border border-slate-700 shadow-2xl rounded-2xl z-50 min-w-[235px] text-white">
+        <p className="font-black text-slate-300 mb-2 border-b border-slate-700/80 pb-1.5 text-xs uppercase tracking-wider flex items-center justify-between">
+          <span>Corte ENOE {label}</span>
+          <span className="text-[10px] font-bold text-blue-400">Pesos Reales 2026</span>
         </p>
         {payload.map((entry: any, index: number) => {
           if (entry.value == null) return null;
-          const esPrepa = entry.name.includes('Preparatoria');
+          const esPrepa = String(entry.name).includes('Preparatoria');
           return (
             <div
               key={index}
@@ -101,14 +109,25 @@ const CustomTooltip = ({ active, payload, label }: any) => {
               <span className="flex items-center gap-2">
                 <span
                   className="w-2.5 h-2.5 rounded-full shrink-0"
-                  style={{ backgroundColor: entry.color }}
+                  style={{ backgroundColor: entry.color || (esPrepa ? '#F59E0B' : '#2563EB') }}
                 />
-                {entry.name}:
+                {esPrepa ? 'Base Preparatoria:' : 'Salario Licenciatura:'}
               </span>
               <span className="font-black">{formatoMoneda(entry.value)}</span>
             </div>
           );
         })}
+
+        {primaPct !== null && (
+          <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between text-[11px]">
+            <span className="text-slate-400 font-semibold">Prima Universitaria:</span>
+            <span className={`font-black px-2 py-0.5 rounded-md ${
+              diffMes >= 0 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300'
+            }`}>
+              {diffMes >= 0 ? `+${formatoMoneda(diffMes)} (+${primaPct}%)` : `${formatoMoneda(diffMes)} (${primaPct}%)`}
+            </span>
+          </div>
+        )}
       </div>
     );
   }
@@ -121,6 +140,9 @@ export interface SueldoRegionalItem {
   sueldoPrepa: number;
   premioPct: number;
   pea: number;
+  tasaDesempleo: number;
+  saturacion: number;
+  tendenciaCodigo: 'crecimiento' | 'estable' | 'ajuste' | 'volatil';
   sinMuestraRegional: boolean;
 }
 
@@ -220,6 +242,24 @@ function clasificarTendenciaReal21_26(puntosAnuales: { anio: number; sueldo: num
     return { etiqueta: 'En ajuste', codigo: 'ajuste' as const };
   }
   return { etiqueta: 'Estable', codigo: 'estable' as const };
+}
+
+function agruparPuntosAnualesZona(filasZona: any[]): { anio: number; sueldo: number | null }[] {
+  const mapa: Record<number, { prod: number; pob: number }> = {};
+  filasZona.forEach(r => {
+    const a = Number(r.anio);
+    const s = Number(r.sueldo_promedio_mensual || 0);
+    const p = Math.max(1, Number(r.poblacion_activa_total || 1));
+    if (a >= 2021 && a <= 2026 && s > 0) {
+      if (!mapa[a]) mapa[a] = { prod: 0, pob: 0 };
+      mapa[a].prod += s * p;
+      mapa[a].pob += p;
+    }
+  });
+  return Object.entries(mapa).map(([anioStr, obj]) => ({
+    anio: Number(anioStr),
+    sueldo: obj.pob > 0 ? Math.round(obj.prod / obj.pob) : null
+  }));
 }
 
 export default function GraficaPredictiva({
@@ -322,13 +362,22 @@ export default function GraficaPredictiva({
       calcularPonderado(filasNac25_26.length > 0 ? filasNac25_26 : filasNac)
     );
 
+    const filasNac22_26 = filasNac.filter(r => r.anio >= 2022 && r.anio <= 2026);
+    const loteNacEmp = filasNac22_26.length > 0 ? filasNac22_26 : filasNac;
+    const sumaPeaNac = loteNacEmp.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0);
+    const sumaDesNac = loteNacEmp.reduce((a, b) => a + Number(b.desempleados_reales || 0), 0);
+    const desempleoNacionalBase = sumaPeaNac > 0 ? Math.max(0.8, (sumaDesNac / sumaPeaNac) * 100) : 3.2;
+
     const filasNacConSat = filasNac.filter(r => Number(r.indice_saturacion_pct) > 5);
     const saturacionNacionalBase = filasNacConSat.length > 0
       ? filasNacConSat.reduce((acc, c) => acc + Number(c.indice_saturacion_pct), 0) / filasNacConSat.length
       : 92;
 
+    const tendenciaNacionalBase = clasificarTendenciaReal21_26(agruparPuntosAnualesZona(filasNac));
+
     const ordenZonas = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'];
 
+    // Cada macro-región calcula y conserva sus propios indicadores (independientes de regionActiva)
     const comparativaRegiones: SueldoRegionalItem[] = ordenZonas.map(zona => {
       const serieZ = extraerSerieZona(zona, targetSexo);
       const serieZ22_26 = serieZ.filter(r => r.anio >= 2022 && r.anio <= 2026);
@@ -338,6 +387,19 @@ export default function GraficaPredictiva({
       const peaZ = lotePeaZ.length > 0
         ? Math.round(lotePeaZ.reduce((acc, c) => acc + Number(c.poblacion_activa_total || 0), 0) / lotePeaZ.length)
         : 0;
+
+      const sumaPeaZ = lotePeaZ.reduce((acc, c) => acc + Number(c.poblacion_activa_total || 0), 0);
+      const sumaDesZ = lotePeaZ.reduce((acc, c) => acc + Number(c.desempleados_reales || 0), 0);
+      const tasaDesempleoZ = sumaPeaZ > 0 ? Math.max(0.8, (sumaDesZ / sumaPeaZ) * 100) : desempleoNacionalBase;
+
+      const fila2026Z = serieZ.find(r => Number(r.anio) === 2026) || serieZ[serieZ.length - 1];
+      const satRawZ = Number(fila2026Z?.indice_saturacion_pct || 0);
+      const saturacionZ = satRawZ > 5 ? satRawZ : saturacionNacionalBase;
+
+      const ptsAnualesZ = agruparPuntosAnualesZona(serieZ);
+      const tendenciaZ = ptsAnualesZ.length >= 4
+        ? clasificarTendenciaReal21_26(ptsAnualesZ)
+        : tendenciaNacionalBase;
 
       const sueldoObsCrudo = calcularPonderado(serieZ25_26.length > 0 ? serieZ25_26 : serieZ22_26);
       const nKishZ = kishSeguro[zona] || 0;
@@ -366,6 +428,9 @@ export default function GraficaPredictiva({
         sueldoPrepa: prepaZ,
         premioPct: premioZ,
         pea: peaZ,
+        tasaDesempleo: Number(tasaDesempleoZ.toFixed(1)),
+        saturacion: Math.round(saturacionZ),
+        tendenciaCodigo: tendenciaZ.codigo,
         sinMuestraRegional
       };
     });
@@ -536,7 +601,7 @@ export default function GraficaPredictiva({
         pob: resumen.poblacionActiva,
         des: resumen.desempleadosActivos,
         sat: Math.round(resumen.saturacion),
-        reg: resumen.comparativaRegiones.map(r => r.sueldoCarrera),
+        reg: resumen.comparativaRegiones.map(r => `${r.sueldoCarrera}_${r.tasaDesempleo}_${r.saturacion}_${r.tendenciaCodigo}`),
         ser: resumen.serieAnualReal.map(x => x.sueldoLic)
       });
       if (ultimaFirmaEmitidaRef.current !== firmaActual) {
@@ -547,7 +612,7 @@ export default function GraficaPredictiva({
   }, [loading, resumen, onStatsChange]);
 
   return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs h-full flex flex-col justify-between">
+    <div className="bg-gradient-to-b from-white via-white to-slate-50/70 rounded-2xl p-6 border border-slate-200/90 shadow-xs hover:shadow-md transition-all duration-300 h-full flex flex-col justify-between">
       <div>
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4 pb-3.5 border-b border-slate-100">
           <div>
@@ -556,19 +621,19 @@ export default function GraficaPredictiva({
                 Evolución Salarial Real vs. Preparatoria (2021–2026)
               </h2>
               {isStem && (
-                <span className="bg-slate-100 text-slate-700 border border-slate-200 text-[11px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1">
+                <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1">
                   <Microscope className="w-3 h-3" /> STEM
                 </span>
               )}
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Ingreso mensual en pesos constantes de 2026 frente al salario base observado de bachillerato en la misma zona y perfil.
+              El área sombreada azul representa la prima salarial acumulada sobre el ingreso base de bachillerato en pesos constantes de 2026.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
             {resumen.tendenciaCodigo === 'crecimiento' && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
                 <TrendingUp className="w-3.5 h-3.5" /> Tendencia Real: En crecimiento
               </span>
             )}
@@ -610,12 +675,23 @@ export default function GraficaPredictiva({
 
         {chartData.length > 0 && !loading ? (
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 10, right: 15, left: 0, bottom: 5 }}>
+            <ComposedChart data={chartData} margin={{ top: 12, right: 18, left: 2, bottom: 5 }}>
+              <defs>
+                <linearGradient id="gradienteSalarioLic" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#2563EB" stopOpacity={0.28} />
+                  <stop offset="65%" stopColor="#3B82F6" stopOpacity={0.08} />
+                  <stop offset="100%" stopColor="#60A5FA" stopOpacity={0.0} />
+                </linearGradient>
+                <filter id="sombraCurvaLic" x="-10%" y="-10%" width="120%" height="130%">
+                  <feDropShadow dx="0" dy="4" stdDeviation="4" floodColor="#2563EB" floodOpacity="0.22" />
+                </filter>
+              </defs>
+
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
               <XAxis
                 dataKey="anio"
                 minTickGap={15}
-                tick={{ fill: '#64748B', fontSize: 12, fontWeight: 600 }}
+                tick={{ fill: '#475569', fontSize: 12, fontWeight: 700 }}
                 tickLine={false}
                 axisLine={false}
                 dy={8}
@@ -629,8 +705,22 @@ export default function GraficaPredictiva({
                 tickLine={false}
                 axisLine={false}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#94A3B8', strokeWidth: 1.5, strokeDasharray: '4 4' }} />
               <Legend wrapperStyle={{ paddingTop: '12px', fontSize: '12px', fontWeight: 700 }} />
+
+              <Area
+                type="monotone"
+                dataKey={nombreLineaActiva}
+                stroke="#2563EB"
+                strokeWidth={3.5}
+                fillOpacity={1}
+                fill="url(#gradienteSalarioLic)"
+                filter="url(#sombraCurvaLic)"
+                dot={{ r: 4.5, strokeWidth: 2.2, stroke: '#2563EB', fill: '#FFFFFF' }}
+                activeDot={{ r: 7, stroke: '#FFFFFF', strokeWidth: 2.5, fill: '#2563EB' }}
+                name={nombreLineaActiva}
+                connectNulls
+              />
 
               <Line
                 type="monotone"
@@ -638,20 +728,10 @@ export default function GraficaPredictiva({
                 stroke="#F59E0B"
                 strokeWidth={2.5}
                 strokeDasharray="6 4"
-                dot={{ r: 3, strokeWidth: 1.5, fill: '#FEF3C7' }}
+                dot={{ r: 3.5, strokeWidth: 1.8, stroke: '#D97706', fill: '#FEF3C7' }}
+                activeDot={{ r: 5.5, stroke: '#FFFFFF', strokeWidth: 2, fill: '#F59E0B' }}
                 name="Base Preparatoria (Real 2021–2026)"
                 connectNulls={false}
-              />
-
-              <Line
-                type="monotone"
-                dataKey={nombreLineaActiva}
-                stroke="#2563EB"
-                strokeWidth={3.5}
-                dot={{ r: 4, strokeWidth: 2, fill: '#FFFFFF' }}
-                activeDot={{ r: 6, stroke: '#2563EB', strokeWidth: 2 }}
-                name={nombreLineaActiva}
-                connectNulls
               />
             </ComposedChart>
           </ResponsiveContainer>

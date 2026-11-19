@@ -1,22 +1,26 @@
 "use client";
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
   obtenerSemaforoScoreDataROI,
+  leerEstadoDescubridorGlobal,
+  toggleCarreraComparadorGlobal,
+  EVENTO_VERSUS_SYNC,
   ValorCeldaExcel
 } from '@/lib/excelReportGenerator';
 import {
-  Search, Microscope, ShieldCheck, ChevronRight, SlidersHorizontal,
+  Search, Microscope, ShieldCheck, ChevronRight,
   TrendingUp, TrendingDown, Minus, Activity, Download, Share2, Check,
-  ArrowUpDown, FlaskConical, Users, Sparkles, FileSpreadsheet
+  ArrowUpDown, FileSpreadsheet, Scale
 } from 'lucide-react';
 
 export type CarreraDirectorioItem = {
   cve_carrera: string;
   nombre_carrera: string;
+  nombre_oficial_inegi?: string;
   is_stem: boolean;
   riesgo_ia_score: number;
   sueldo_mensual: number;
@@ -52,55 +56,60 @@ const ETIQUETAS_ORDEN_HUMANO: Record<OrdenDirectorio, string> = {
   alfabetico: 'Orden Alfabético (A–Z)'
 };
 
+const COLORES_SLOTS_VERSUS = [
+  { hex: '#2563EB', btnClass: 'bg-blue-600 text-white border-blue-600 shadow-xs' },
+  { hex: '#9333EA', btnClass: 'bg-purple-600 text-white border-purple-600 shadow-xs' },
+  { hex: '#EA580C', btnClass: 'bg-orange-600 text-white border-orange-600 shadow-xs' }
+];
+
 const formatoMoneda = (valor: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(valor || 0);
 
-function AnilloScoreDataROI({ score }: { score: number }) {
+function MedallonScoreEntero({ score }: { score: number }) {
   const sem = obtenerSemaforoScoreDataROI(score);
-  const r = 18;
+  const scoreEntero = Math.round(score);
+  const r = 23;
   const circ = 2 * Math.PI * r;
-  const pct = Math.max(0, Math.min(100, score));
+  const pct = Math.max(0, Math.min(100, scoreEntero));
   const offset = circ - (pct / 100) * circ;
 
   return (
     <div
-      title={`Calificación Integral DataROI: ${score.toFixed(1)} / 100 (${sem.etiqueta})`}
-      className="flex items-center gap-2 shrink-0"
+      role="img"
+      aria-label={`Calificación Integral DataROI: ${scoreEntero} de 100 puntos, Grado ${sem.grado}, ${sem.etiqueta}`}
+      title={`Calificación Integral DataROI: ${scoreEntero} / 100 (Grado ${sem.grado} · ${sem.etiqueta})`}
+      className="flex flex-col items-center shrink-0"
     >
-      <div className="text-right hidden sm:block">
-        <span className="block text-[9.5px] font-black uppercase tracking-wider text-slate-400 leading-none">
-          Score DataROI
-        </span>
-        <span className={`block text-[11px] font-black ${sem.textClass} mt-0.5 leading-none`}>
-          {sem.etiqueta}
-        </span>
-      </div>
-      <div className="relative w-12 h-12 flex items-center justify-center shrink-0">
-        <svg className="w-12 h-12 -rotate-90" viewBox="0 0 44 44">
+      <div className="relative w-14 h-14 flex items-center justify-center group-hover:scale-105 transition-transform duration-300">
+        <svg className="w-14 h-14 -rotate-90 drop-shadow-2xs" viewBox="0 0 56 56" aria-hidden="true">
           <circle
-            cx="22"
-            cy="22"
+            cx="28"
+            cy="28"
             r={r}
-            fill="none"
+            fill={sem.fillTintHex}
             stroke={sem.trackHex}
-            strokeWidth="4.2"
+            strokeWidth="4.8"
           />
           <circle
-            cx="22"
-            cy="22"
+            cx="28"
+            cy="28"
             r={r}
             fill="none"
             stroke={sem.colorHex}
-            strokeWidth="4.2"
+            strokeWidth="4.8"
             strokeLinecap="round"
             strokeDasharray={circ}
             strokeDashoffset={offset}
+            className="transition-all duration-700 ease-out"
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
-          <span className="text-xs font-black text-slate-900">{score.toFixed(1)}</span>
+          <span className="text-xl font-black text-slate-900 tracking-tight">{scoreEntero}</span>
         </div>
       </div>
+      <span className={`text-[10px] font-black uppercase tracking-wider mt-1 ${sem.textClass}`}>
+        Grado {sem.grado}
+      </span>
     </div>
   );
 }
@@ -108,28 +117,28 @@ function AnilloScoreDataROI({ score }: { score: number }) {
 function BadgeTendenciaMini({ codigo, etiqueta }: { codigo: string; etiqueta: string }) {
   if (codigo === 'crecimiento') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-        <TrendingUp className="w-3 h-3" /> {etiqueta}
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+        <TrendingUp className="w-3 h-3" aria-hidden="true" /> {etiqueta}
       </span>
     );
   }
   if (codigo === 'ajuste') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-        <TrendingDown className="w-3 h-3" /> {etiqueta}
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+        <TrendingDown className="w-3 h-3" aria-hidden="true" /> {etiqueta}
       </span>
     );
   }
   if (codigo === 'volatil') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
-        <Activity className="w-3 h-3" /> {etiqueta}
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+        <Activity className="w-3 h-3" aria-hidden="true" /> {etiqueta}
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-      <Minus className="w-3.5 h-3.5" /> {etiqueta}
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+      <Minus className="w-3 h-3" aria-hidden="true" /> {etiqueta}
     </span>
   );
 }
@@ -140,6 +149,24 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
   const [filtroRiesgo, setFiltroRiesgo] = useState(false);
   const [orden, setOrden] = useState<OrdenDirectorio>('score_desc');
   const [copiado, setCopiado] = useState(false);
+  const [cvesVersus, setCvesVersus] = useState<string[]>([]);
+
+  useEffect(() => {
+    const sync = () => {
+      const nueva = leerEstadoDescubridorGlobal().carrerasCompararCves || [];
+      setCvesVersus(prev => (prev.join(',') === nueva.join(',') ? prev : nueva));
+    };
+    sync();
+    window.addEventListener(EVENTO_VERSUS_SYNC, sync);
+    return () => window.removeEventListener(EVENTO_VERSUS_SYNC, sync);
+  }, []);
+
+  const handleToggleComparar = (e: React.MouseEvent, cve: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const nuevaLista = toggleCarreraComparadorGlobal(cve);
+    setCvesVersus(nuevaLista);
+  };
 
   const mediaSalarialCatalogo = useMemo(() => {
     if (directorio.length === 0) return 15534;
@@ -157,6 +184,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       const q = busqueda.toLowerCase().trim();
       const coincideTexto =
         carrera.nombre_carrera.toLowerCase().includes(q) ||
+        (carrera.nombre_oficial_inegi || '').toLowerCase().includes(q) ||
         carrera.cve_carrera.includes(q);
 
       const pasaFiltroStem = filtroStem ? carrera.is_stem : true;
@@ -214,7 +242,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
         c.cve_carrera,
         { v: c.nombre_carrera, s: 'bold' },
         c.is_stem ? 'Sí' : 'No',
-        { v: c.score_dataroi, s: sem.grado === 'A' ? 'winner' : sem.grado === 'C' ? 'warning' : 'bold' },
+        { v: Math.round(c.score_dataroi), s: sem.grado === 'A' ? 'winner' : sem.grado === 'C' ? 'warning' : 'bold' },
         `Grado ${sem.grado} — ${sem.etiqueta}`,
         { v: c.sueldo_mensual, s: 'bold' },
         c.premio_prepa_pct,
@@ -255,7 +283,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
           nombre: '2_Contexto_Metodologico',
           cabeceras: ['Parametro_Global', 'Valor_Auditado', 'Detalle_Metodologico'],
           filas: [
-            ['Total de Carreras Exportadas', `${carrerasFiltradas.length} licenciaturas`, 'Filtradas según los criterios activos en el Directorio Nacional'],
+            ['Total de Carreras Exportadas', `${carrerasFiltradas.length} licenciaturas`, 'Filtradas según los criterios activos en el Catálogo Nacional'],
             ['Criterio de Ordenamiento Aplicado', ETIQUETAS_ORDEN_HUMANO[orden], 'Orden activo en pantalla al momento de exportar el catálogo'],
             ['Media Salarial Licenciatura Nacional', `${formatoMoneda(mediaSalarialCatalogo)} MXN / mes`, 'Pesos constantes de 2026 deflactados con el INPC'],
             ['Salario Base Preparatoria Nacional', '$10,608 MXN / mes', 'Benchmark de referencia para el cálculo de Prima Salarial y ROI'],
@@ -280,7 +308,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
     if (navigator.share) {
       try {
         await navigator.share({
-          title: 'DataROI México — Directorio Nacional de Carreras',
+          title: 'DataROI México — Catálogo Nacional de Carreras',
           text: 'Consulta la Calificación Integral DataROI, salarios reales INEGI y riesgo IA de las 64 licenciaturas en México.',
           url
         });
@@ -295,79 +323,62 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
   };
 
   return (
-    <div className="max-w-7xl mx-auto p-4 md:p-8">
+    <div className="max-w-7xl mx-auto p-4 md:px-8 md:py-5">
       
-      {/* CABECERA EJECUTIVA */}
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-xs p-6 md:p-8 mb-7">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+      {/* BLOQUE HERO EJECUTIVO DE ALTO CONTRASTE */}
+      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 text-white rounded-3xl p-6 md:p-8 mb-6 shadow-lg border border-slate-800 relative overflow-hidden">
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-black uppercase tracking-wider mb-3">
-              <Sparkles className="w-3.5 h-3.5" /> Microdatos ENOE INEGI (2021–2026) + ANUIES
-            </div>
-            <h1 className="text-3xl md:text-5xl font-black text-slate-900 tracking-tight mb-2">
-              DataROI México
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/15 border border-blue-400/30 text-blue-300 text-xs font-extrabold uppercase tracking-wider mb-3">
+              Catálogo Nacional Auditado · Microdatos ENOE INEGI (2021–2026) + ANUIES
+            </span>
+            <h1 className="text-2xl md:text-4xl font-black tracking-tight mb-2">
+              Explora y Compara las 64 Licenciaturas de México
             </h1>
-            <p className="text-sm md:text-base text-slate-600 max-w-2xl leading-relaxed">
-              Sistema de apoyo a la decisión vocacional y auditoría de retorno de inversión universitaria en las 5 macro-regiones económicas del país.
+            <p className="text-xs md:text-sm text-slate-300 max-w-2xl leading-relaxed">
+              Cada carrera es evaluada del <strong>0 al 100</strong> según sus 6 Pilares Estructurales reales observados en el mercado laboral mexicano. Selecciona hasta 3 carreras con el botón <strong>+ Comparar</strong> para contrastarlas Cara a Cara.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <Link
-              href="/descubrir"
-              className="px-5 py-3 rounded-2xl text-xs md:text-sm font-black flex items-center gap-2 transition-all bg-blue-600 text-white hover:bg-blue-700 shadow-sm"
-            >
-              <SlidersHorizontal className="w-4 h-4" />
-              Descubridor y Comparador
-            </Link>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 shrink-0 text-xs">
+            <div className="bg-slate-800/90 p-3.5 rounded-2xl border border-slate-700/80">
+              <span className="text-slate-400 font-bold uppercase text-[10px] block">Media Licenciatura</span>
+              <strong className="text-lg font-black text-emerald-400 mt-0.5 block">
+                {formatoMoneda(mediaSalarialCatalogo)}/mes
+              </strong>
+              <span className="text-[10px] text-slate-400">vs. $10,608 Prepa</span>
+            </div>
 
-            <Link
-              href="/laboratorio"
-              className="px-4 py-3 rounded-2xl text-xs md:text-sm font-bold flex items-center gap-2 transition-all bg-slate-900 text-white hover:bg-slate-800 shadow-xs"
-            >
-              <FlaskConical className="w-4 h-4 text-emerald-400" />
-              Laboratorio de Datos Crudos
-            </Link>
-          </div>
-        </div>
+            <div className="bg-slate-800/90 p-3.5 rounded-2xl border border-slate-700/80">
+              <span className="text-slate-400 font-bold uppercase text-[10px] block">Muestra Física</span>
+              <strong className="text-lg font-black text-white mt-0.5 block">
+                {totalEncuestadosCatalogo.toLocaleString('es-MX')}
+              </strong>
+              <span className="text-[10px] text-slate-400">encuestados INEGI</span>
+            </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6 pt-5 border-t border-slate-100 text-xs">
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/70">
-            <span className="text-slate-400 font-bold uppercase text-[10px] block">Catálogo Auditado</span>
-            <strong className="text-lg font-black text-slate-900">{directorio.length} Licenciaturas</strong>
-          </div>
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/70">
-            <span className="text-slate-400 font-bold uppercase text-[10px] block">Media Salarial Licenciatura</span>
-            <strong className="text-lg font-black text-emerald-600">{formatoMoneda(mediaSalarialCatalogo)} / mes</strong>
-          </div>
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/70">
-            <span className="text-slate-400 font-bold uppercase text-[10px] block">Muestra Física Auditada</span>
-            <strong className="text-lg font-black text-slate-900">{totalEncuestadosCatalogo.toLocaleString('es-MX')} prof.</strong>
-          </div>
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/70 flex items-center justify-between gap-2">
-            <div>
-              <span className="text-slate-400 font-bold uppercase text-[10px] block">Exportar / Compartir</span>
-              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+            <div className="col-span-2 sm:col-span-1 bg-slate-800/90 p-3.5 rounded-2xl border border-slate-700/80 flex flex-col justify-between">
+              <span className="text-slate-400 font-bold uppercase text-[10px] block mb-1.5">Descargar Catálogo</span>
+              <div className="flex items-center gap-1.5">
                 <button
                   onClick={exportarCatalogoExcel}
-                  title="Descargar libro de Excel (.xlsx) con Score DataROI, alineación uniforme y auto-ancho"
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] cursor-pointer"
+                  title="Descargar libro de Excel (.xlsx) con 2 hojas"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-[11px] transition-all cursor-pointer"
                 >
-                  <FileSpreadsheet className="w-3 h-3" /> Excel
+                  <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" /> Excel
                 </button>
                 <button
                   onClick={exportarCatalogoCSV}
-                  title="Descargar archivo plano CSV compatible con Python/pandas"
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:border-blue-400 text-slate-700 font-bold text-[11px] cursor-pointer"
+                  title="Descargar archivo CSV"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 active:scale-95 text-white font-bold text-[11px] transition-all cursor-pointer"
                 >
-                  <Download className="w-3 h-3 text-blue-600" /> CSV
+                  <Download className="w-3.5 h-3.5" aria-hidden="true" /> CSV
                 </button>
                 <button
                   onClick={compartirDirectorio}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:border-blue-400 text-slate-700 font-bold text-[11px] cursor-pointer"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 active:scale-95 text-white font-bold text-[11px] transition-all cursor-pointer"
                 >
-                  {copiado ? <Check className="w-3 h-3 text-emerald-600" /> : <Share2 className="w-3 h-3 text-blue-600" />}
-                  {copiado ? 'Copiado' : 'Link'}
+                  {copiado ? <Check className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" /> : <Share2 className="w-3.5 h-3.5" aria-hidden="true" />}
                 </button>
               </div>
             </div>
@@ -376,14 +387,15 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       </div>
 
       {/* PANEL DE BÚSQUEDA, FILTROS RÁPIDOS Y ORDENAMIENTO */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs mb-6 flex flex-col lg:flex-row gap-3 items-center justify-between">
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-xs mb-5 flex flex-col lg:flex-row gap-3 items-center justify-between">
         
         <div className="relative w-full lg:w-96 shrink-0">
           <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-            <Search className="h-4 w-4 text-slate-400" />
+            <Search className="h-4 w-4 text-slate-400" aria-hidden="true" />
           </div>
           <input
-            type="text"
+            type="search"
+            aria-label="Buscar carrera por nombre o clave CVE"
             className="block w-full pl-10 pr-3 py-2.5 border border-slate-200 rounded-xl text-xs md:text-sm bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
             placeholder="Buscar carrera por nombre o clave CVE (ej. 061300)..."
             value={busqueda}
@@ -394,33 +406,36 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
         <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-between lg:justify-end">
           <div className="flex flex-wrap items-center gap-2">
             <button
+              aria-pressed={filtroStem}
               onClick={() => setFiltroStem(!filtroStem)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors border cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 border cursor-pointer ${
                 filtroStem
-                  ? 'bg-indigo-600 border-indigo-600 text-white'
+                  ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
                   : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
             >
-              <Microscope className="w-3.5 h-3.5" />
+              <Microscope className="w-3.5 h-3.5" aria-hidden="true" />
               Solo STEM
             </button>
 
             <button
+              aria-pressed={filtroRiesgo}
               onClick={() => setFiltroRiesgo(!filtroRiesgo)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors border cursor-pointer ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 border cursor-pointer ${
                 filtroRiesgo
-                  ? 'bg-emerald-600 border-emerald-600 text-white'
+                  ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs'
                   : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
             >
-              <ShieldCheck className="w-3.5 h-3.5" />
+              <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
               Blindadas vs IA (≤40% riesgo)
             </button>
           </div>
 
           <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-            <ArrowUpDown className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <ArrowUpDown className="w-3.5 h-3.5 text-blue-600 shrink-0" aria-hidden="true" />
             <select
+              aria-label="Criterio de ordenamiento del catálogo"
               value={orden}
               onChange={(e) => setOrden(e.target.value as OrdenDirectorio)}
               className="bg-transparent border-none text-xs font-bold text-slate-800 focus:ring-0 cursor-pointer outline-none"
@@ -437,45 +452,70 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       </div>
 
       {/* CONTADOR Y LEYENDA DEL SEMÁFORO DATAROI */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 font-bold px-1">
-        <span>Mostrando {carrerasFiltradas.length} de {directorio.length} carreras certificadas</span>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 font-bold px-1">
+        <span aria-live="polite">Mostrando {carrerasFiltradas.length} de {directorio.length} carreras certificadas</span>
         <div className="flex flex-wrap items-center gap-3 text-[11px]">
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
-            <strong>70–100:</strong> Sobresaliente
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" aria-hidden="true" />
+            <strong>Grado A (70–100):</strong> Sobresaliente
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-            <strong>56–69:</strong> Viable
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500" aria-hidden="true" />
+            <strong>Grado B (56–69):</strong> Viable
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-600" />
-            <strong>{'<56'}:</strong> En Riesgo
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-600" aria-hidden="true" />
+            <strong>Grado C ({'<56'}):</strong> En Riesgo
           </span>
         </div>
       </div>
 
-      {/* CUADRÍCULA DE TARJETAS CON ANILLO CIRCULAR SEMÁFORO */}
+      {/* CUADRÍCULA DE TARJETAS CON FÍSICA TÁCTIL Y SOMBRA COLOREADA POR GRADO */}
       {carrerasFiltradas.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {carrerasFiltradas.map((carrera) => {
-            const blindajeIA = 100 - carrera.riesgo_ia_score;
+            const sem = obtenerSemaforoScoreDataROI(carrera.score_dataroi);
+            const blindajeIA = Math.round(100 - carrera.riesgo_ia_score);
+            const calOitEntero = Math.round(carrera.calidad_oit_pct);
+            const primaEntero = Math.round(carrera.premio_prepa_pct);
+            const satEntero = Math.round(carrera.saturacion_pct);
+
+            const idxVersus = cvesVersus.indexOf(carrera.cve_carrera);
+            const enComparador = idxVersus !== -1;
+            const topeComparador = !enComparador && cvesVersus.length >= 3;
+            const slotEstilo = enComparador ? COLORES_SLOTS_VERSUS[idxVersus] || COLORES_SLOTS_VERSUS[0] : null;
+
+            const satEstado =
+              satEntero <= 85
+                ? { txt: 'Baja', colText: 'text-emerald-700', colBar: 'bg-gradient-to-r from-emerald-600 to-teal-400' }
+                : satEntero <= 115
+                  ? { txt: 'Media', colText: 'text-blue-700', colBar: 'bg-gradient-to-r from-blue-600 to-sky-400' }
+                  : { txt: 'Alta', colText: 'text-rose-700', colBar: 'bg-gradient-to-r from-rose-600 to-orange-500' };
+
+            const hoverShadowPorGrado =
+              sem.grado === 'A'
+                ? 'hover:shadow-[0_20px_38px_-12px_rgba(5,150,105,0.22)] hover:border-emerald-400'
+                : sem.grado === 'B'
+                  ? 'hover:shadow-[0_20px_38px_-12px_rgba(217,119,6,0.22)] hover:border-amber-400'
+                  : 'hover:shadow-[0_20px_38px_-12px_rgba(225,29,72,0.22)] hover:border-rose-400';
+
             return (
               <Link
                 key={carrera.cve_carrera}
                 href={`/carrera/${carrera.cve_carrera}`}
-                className="group bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:shadow-md hover:border-blue-400 transition-all flex flex-col justify-between"
+                className={`group bg-gradient-to-b from-white via-white to-slate-50/80 p-5 rounded-2xl border border-slate-200/90 border-t-4 ${sem.topBorderClass} shadow-xs hover:-translate-y-1.5 ${hoverShadowPorGrado} transition-all duration-300 ease-out flex flex-col justify-between`}
               >
                 <div>
-                  <div className="flex items-start justify-between gap-3 mb-2.5">
-                    <div>
+                  {/* Encabezado: Etiquetas + Título Ejecutivo Limpio + Medallón Entero Grande */}
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                        <span className="bg-slate-100 text-slate-700 text-[11px] font-mono font-bold px-2 py-0.5 rounded-md border border-slate-200">
+                        <span className="bg-slate-100 text-slate-700 text-[10.5px] font-mono font-bold px-2 py-0.5 rounded-md border border-slate-200">
                           CVE: {carrera.cve_carrera}
                         </span>
                         {carrera.is_stem && (
                           <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold px-2 py-0.5 rounded-md inline-flex items-center gap-1">
-                            <Microscope className="w-3 h-3" /> STEM
+                            <Microscope className="w-3 h-3" aria-hidden="true" /> STEM
                           </span>
                         )}
                         <BadgeTendenciaMini
@@ -484,19 +524,22 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                         />
                       </div>
 
-                      <h2 className="text-base md:text-lg font-black text-slate-900 group-hover:text-blue-600 transition-colors leading-snug">
+                      <h2
+                        title={carrera.nombre_oficial_inegi || carrera.nombre_carrera}
+                        className="text-base md:text-lg font-black text-slate-900 group-hover:text-blue-600 transition-colors leading-snug line-clamp-2"
+                      >
                         {carrera.nombre_carrera}
                       </h2>
                     </div>
 
-                    {/* Anillo Circular de Calificación Integral DataROI */}
-                    <AnilloScoreDataROI score={carrera.score_dataroi} />
+                    <MedallonScoreEntero score={carrera.score_dataroi} />
                   </div>
 
-                  <div className="flex items-baseline justify-between gap-2 pt-2.5 mt-2 border-t border-slate-100">
+                  {/* Bloque Salarial Puro */}
+                  <div className="flex items-baseline justify-between gap-2 pt-3 border-t border-slate-100">
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                        Salario Consolidado
+                        Salario Mensual Consolidado
                       </span>
                       <span className="text-2xl font-black text-slate-900">
                         {formatoMoneda(carrera.sueldo_mensual)}
@@ -504,39 +547,94 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                       <span className="text-[11px] text-slate-400 font-bold ml-1">/mes</span>
                     </div>
 
-                    <span className={`text-xs font-black px-2 py-0.5 rounded-md border ${
-                      carrera.premio_prepa_pct >= 0
+                    <span className={`text-xs font-black px-2.5 py-1 rounded-lg border ${
+                      primaEntero >= 0
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         : 'bg-rose-50 text-rose-700 border-rose-200'
                     }`}>
-                      {carrera.premio_prepa_pct >= 0 ? `+${carrera.premio_prepa_pct}%` : `${carrera.premio_prepa_pct}%`} vs. Prepa
+                      {primaEntero >= 0 ? `+${primaEntero}%` : `${primaEntero}%`} vs. Prepa
                     </span>
                   </div>
                 </div>
 
+                {/* 3 Mini-Barras Visuales con Degradado Semántico (Spark-bars) */}
                 <div className="mt-4 pt-3 border-t border-slate-100">
-                  <div className="grid grid-cols-3 gap-2 text-[11px] mb-3">
-                    <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
-                      <span className="text-slate-400 block text-[10px]">Calidad OIT</span>
-                      <strong className="text-slate-800 font-black">{carrera.calidad_oit_pct}%</strong>
+                  <div className="grid grid-cols-3 gap-2.5 text-[11px] mb-3.5">
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-slate-500 font-bold text-[10px]">Calidad OIT</span>
+                        <strong className="text-slate-900 font-black">{calOitEntero}%</strong>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-blue-600 to-indigo-500 rounded-full transition-all duration-500"
+                          style={{ width: `${Math.max(10, Math.min(100, calOitEntero))}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
-                      <span className="text-slate-400 block text-[10px]">Saturación</span>
-                      <strong className="text-slate-800 font-black">{carrera.saturacion_pct}%</strong>
+
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-slate-500 font-bold text-[10px]">Saturación</span>
+                        <strong className={`font-black ${satEstado.colText}`}>{satEntero}%</strong>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${satEstado.colBar}`}
+                          style={{ width: `${Math.max(12, Math.min(100, (satEntero / 180) * 100))}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
-                      <span className="text-slate-400 block text-[10px]">Blindaje IA</span>
-                      <strong className="text-slate-800 font-black">{blindajeIA}%</strong>
+
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-slate-500 font-bold text-[10px]">Blindaje IA</span>
+                        <strong className="text-slate-900 font-black">{blindajeIA}%</strong>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${
+                            blindajeIA >= 60
+                              ? 'bg-gradient-to-r from-emerald-600 to-teal-400'
+                              : 'bg-gradient-to-r from-indigo-600 to-purple-500'
+                          }`}
+                          style={{ width: `${Math.max(10, Math.min(100, blindajeIA))}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-500 group-hover:text-blue-600">
-                    <span className="flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5" />
-                      PEA: {carrera.pea_activa.toLocaleString('es-MX')} ocupados
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      Abrir dashboard <ChevronRight className="w-4 h-4" />
+                  {/* Pie de Tarjeta: Botón Directo + Comparar con Número y Color de Slot */}
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <button
+                      type="button"
+                      aria-pressed={enComparador}
+                      disabled={topeComparador}
+                      onClick={(e) => handleToggleComparar(e, carrera.cve_carrera)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black border transition-all active:scale-95 inline-flex items-center gap-1.5 ${
+                        enComparador && slotEstilo
+                          ? `${slotEstilo.btnClass} cursor-pointer`
+                          : topeComparador
+                            ? 'bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed'
+                            : 'bg-white text-slate-700 border-slate-200 hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50/50 shadow-2xs cursor-pointer'
+                      }`}
+                    >
+                      {enComparador ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>En Versus #{idxVersus + 1}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Scale className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>+ Comparar</span>
+                        </>
+                      )}
+                    </button>
+
+                    <span className="inline-flex items-center gap-1 text-xs font-extrabold text-slate-600 group-hover:text-blue-600 transition-colors">
+                      <span>PEA: {(carrera.pea_activa / 1000).toFixed(0)}k · Abrir</span>
+                      <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" aria-hidden="true" />
                     </span>
                   </div>
                 </div>

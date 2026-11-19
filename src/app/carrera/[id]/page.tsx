@@ -10,11 +10,17 @@ import {
   descargarCSVEstilizado,
   calcularScoreDataROIUniversal,
   obtenerSemaforoScoreDataROI,
+  formatearNombreCarreraEjecutivo,
+  leerEstadoDescubridorGlobal,
+  toggleCarreraComparadorGlobal,
+  STORAGE_KEY_DESCUBRIDOR,
+  EVENTO_VERSUS_SYNC,
   ValorCeldaExcel,
   EstiloCeldaExcel
 } from '@/lib/excelReportGenerator';
 import GraficaPredictiva, {
   BENCHMARK_PREPA,
+  ESTADOS_POR_REGION,
   ResumenMercadoRegion,
   SueldoRegionalItem,
   ModoGeneroEstricto
@@ -28,7 +34,7 @@ import {
   Scale, Award, Loader2, AlertCircle,
   MapPin, Sparkles, CheckCircle2, Compass, Users, Home, Clock, Lock,
   Calculator, ThumbsUp, AlertTriangle, Share2, Download, Printer, Check,
-  FlaskConical, FileSpreadsheet, SlidersHorizontal
+  FileSpreadsheet, SlidersHorizontal, Briefcase, Landmark, GraduationCap, Crown
 } from 'lucide-react';
 
 const REGIONES_ORDEN = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
@@ -36,6 +42,13 @@ const MACRO_REGIONES_5 = ['norte', 'noroeste', 'bajio', 'centro', 'sur'] as cons
 
 type TipoUniversidadROI = 'publica' | 'privada_media' | 'privada_elite' | 'personalizada';
 type NivelTrabajoEstudio = 0 | 0.5 | 1; // 0 = Sin trabajar, 0.5 = Medio tiempo, 1 = Tiempo completo
+type SegmentoOITHover = 'calidad' | 'basico' | 'informal' | null;
+
+const COLORES_SLOTS_VERSUS = [
+  { hex: '#2563EB', btnClass: 'bg-blue-600 text-white border-blue-600 shadow-xs' },
+  { hex: '#9333EA', btnClass: 'bg-purple-600 text-white border-purple-600 shadow-xs' },
+  { hex: '#EA580C', btnClass: 'bg-orange-600 text-white border-orange-600 shadow-xs' }
+];
 
 const REGIONES_INFO: Record<string, { nombre: string; corto: string; estados: string }> = {
   nacional: { nombre: 'Nacional (Todo México)', corto: 'Nacional', estados: 'Promedio de las 32 entidades' },
@@ -72,6 +85,58 @@ const BENCHMARK_FALLBACK_NACIONAL: BenchmarkSateliteItem = {
   pct_pluriempleo: 5.6, pct_desarraigo: 2.7, pct_nepotismo: 37.2, indice_privilegio: 2.80,
   pct_micro: 28.0, pct_pyme: 30.6, pct_corp: 12.5, pct_gobierno: 19.0, hrs_hogar: 15.4
 };
+
+function clasificarTendenciaSerieReal(puntosAnuales: { anio: number; sueldo: number | null }[]) {
+  const validos = puntosAnuales
+    .filter(p => p.sueldo != null && p.sueldo > 0)
+    .sort((a, b) => a.anio - b.anio) as { anio: number; sueldo: number }[];
+
+  if (validos.length < 4) {
+    return { etiqueta: 'Estable', codigo: 'estable' as const };
+  }
+
+  const sueldos = validos.map(p => p.sueldo);
+  let maxSalto = 0;
+  for (let i = 1; i < sueldos.length; i++) {
+    const salto = Math.abs(sueldos[i] - sueldos[i - 1]) / sueldos[i - 1];
+    if (salto > maxSalto) maxSalto = salto;
+  }
+
+  const media = sueldos.reduce((a, b) => a + b, 0) / sueldos.length;
+  const varianza = sueldos.reduce((a, b) => a + Math.pow(b - media, 2), 0) / sueldos.length;
+  const cv = Math.sqrt(varianza) / (media || 1);
+
+  if (maxSalto > 0.22 || cv > 0.16) {
+    return { etiqueta: 'Volátil', codigo: 'volatil' as const };
+  }
+
+  const ptsBase = validos.filter(p => p.anio === 2022 || p.anio === 2023).map(p => p.sueldo);
+  const ptsRec = validos.filter(p => p.anio === 2025 || p.anio === 2026).map(p => p.sueldo);
+
+  const sueldoBase = ptsBase.length > 0 ? ptsBase.reduce((a, b) => a + b, 0) / ptsBase.length : sueldos[0];
+  const sueldoRec = ptsRec.length > 0 ? ptsRec.reduce((a, b) => a + b, 0) / ptsRec.length : sueldos[sueldos.length - 1];
+
+  const crecRealAcum = sueldoBase > 0 ? (sueldoRec - sueldoBase) / sueldoBase : 0;
+
+  const postPandemia = validos.filter(p => p.anio >= 2022);
+  const loteEval = postPandemia.length >= 3 ? postPandemia : validos;
+  const aniosEval = loteEval.map(p => p.anio);
+  const sueldosEval = loteEval.map(p => p.sueldo);
+  const mediaEval = sueldosEval.reduce((a, b) => a + b, 0) / sueldosEval.length;
+
+  const meanX = aniosEval.reduce((a, b) => a + b, 0) / aniosEval.length;
+  const num = aniosEval.reduce((acc, x, idx) => acc + (x - meanX) * (sueldosEval[idx] - mediaEval), 0);
+  const den = aniosEval.reduce((acc, x) => acc + Math.pow(x - meanX, 2), 0) || 1;
+  const pendientePct = (num / den) / (mediaEval || 1);
+
+  if (crecRealAcum >= 0.040 && pendientePct >= 0.008) {
+    return { etiqueta: 'En crecimiento', codigo: 'crecimiento' as const };
+  }
+  if (crecRealAcum <= -0.040 && pendientePct <= -0.008) {
+    return { etiqueta: 'En ajuste', codigo: 'ajuste' as const };
+  }
+  return { etiqueta: 'Estable', codigo: 'estable' as const };
+}
 
 function calcularBenchmarkDinamicoSatelites(
   todasFilas: any[],
@@ -124,11 +189,36 @@ function calcularBenchmarkDinamicoSatelites(
 }
 
 const ESTILOS_MOSAICO_EMPLEADORES = [
-  { bg: 'bg-blue-600 text-white border-blue-700', sub: 'text-blue-100' },
-  { bg: 'bg-slate-900 text-white border-slate-900', sub: 'text-slate-300' },
-  { bg: 'bg-blue-50/90 text-slate-900 border-blue-200', sub: 'text-blue-700' },
-  { bg: 'bg-slate-100 text-slate-800 border-slate-200', sub: 'text-slate-500' },
-  { bg: 'bg-slate-50 text-slate-700 border-slate-200', sub: 'text-slate-400' }
+  {
+    bg: 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white border-blue-700 shadow-xs',
+    sub: 'text-blue-100',
+    track: 'bg-blue-950/35',
+    bar: 'bg-white'
+  },
+  {
+    bg: 'bg-gradient-to-br from-slate-900 to-slate-800 text-white border-slate-900 shadow-xs',
+    sub: 'text-slate-300',
+    track: 'bg-slate-700/60',
+    bar: 'bg-emerald-400'
+  },
+  {
+    bg: 'bg-gradient-to-br from-blue-50/90 to-indigo-50/60 text-slate-900 border-blue-200',
+    sub: 'text-blue-700',
+    track: 'bg-blue-200/70',
+    bar: 'bg-blue-600'
+  },
+  {
+    bg: 'bg-gradient-to-br from-slate-100 to-slate-50 text-slate-800 border-slate-200',
+    sub: 'text-slate-500',
+    track: 'bg-slate-200',
+    bar: 'bg-slate-700'
+  },
+  {
+    bg: 'bg-slate-50 text-slate-700 border-slate-200',
+    sub: 'text-slate-400',
+    track: 'bg-slate-200',
+    bar: 'bg-slate-500'
+  }
 ];
 
 const formatoMoneda = (valor: number) =>
@@ -166,6 +256,7 @@ function obtenerCapExCarrera(cve: string) {
       costoEquipo: 85000,
       etiqueta: 'Inversión Alta en Equipo',
       badge: 'text-rose-700 bg-rose-50 border-rose-200',
+      badgeDark: 'text-rose-200 bg-rose-500/25 border-rose-400/50 shadow-2xs',
       detalle: 'Exige instrumental clínico/odontológico propio, uniformes quirúrgicos e insumos continuos de práctica hospitalaria.'
     };
   }
@@ -175,6 +266,7 @@ function obtenerCapExCarrera(cve: string) {
       costoEquipo: 85000,
       etiqueta: 'Inversión Alta en Equipo',
       badge: 'text-rose-700 bg-rose-50 border-rose-200',
+      badgeDark: 'text-rose-200 bg-rose-500/25 border-rose-400/50 shadow-2xs',
       detalle: 'Exige instrumental clínico veterinario, equipo de diagnóstico y materiales continuos de práctica zootécnica.'
     };
   }
@@ -184,6 +276,7 @@ function obtenerCapExCarrera(cve: string) {
       costoEquipo: 85000,
       etiqueta: 'Inversión Alta en Equipo',
       badge: 'text-rose-700 bg-rose-50 border-rose-200',
+      badgeDark: 'text-rose-200 bg-rose-500/25 border-rose-400/50 shadow-2xs',
       detalle: 'Exige estación gráfica de alto rendimiento para modelado CAD/BIM, impresión de planos y materiales de maquetación.'
     };
   }
@@ -193,6 +286,7 @@ function obtenerCapExCarrera(cve: string) {
       costoEquipo: 85000,
       etiqueta: 'Inversión Alta en Equipo',
       badge: 'text-rose-700 bg-rose-50 border-rose-200',
+      badgeDark: 'text-rose-200 bg-rose-500/25 border-rose-400/50 shadow-2xs',
       detalle: 'Exige equipo de producción audiovisual/fotográfica, materiales de taller creativo o estación de diseño de alto rendimiento.'
     };
   }
@@ -202,6 +296,7 @@ function obtenerCapExCarrera(cve: string) {
       costoEquipo: 85000,
       etiqueta: 'Inversión Alta en Equipo',
       badge: 'text-rose-700 bg-rose-50 border-rose-200',
+      badgeDark: 'text-rose-200 bg-rose-500/25 border-rose-400/50 shadow-2xs',
       detalle: 'Exige cuchillería profesional, uniformes técnicos e insumos continuos para prácticas de laboratorio gastronómico.'
     };
   }
@@ -212,6 +307,7 @@ function obtenerCapExCarrera(cve: string) {
       costoEquipo: 42000,
       etiqueta: 'Inversión Media en Equipo',
       badge: 'text-amber-700 bg-amber-50 border-amber-200',
+      badgeDark: 'text-amber-200 bg-amber-500/25 border-amber-400/50 shadow-2xs',
       detalle: 'Requiere equipo de cómputo de gama media-alta para programación, compilación de software, redes y virtualización.'
     };
   }
@@ -226,6 +322,7 @@ function obtenerCapExCarrera(cve: string) {
       costoEquipo: 42000,
       etiqueta: 'Inversión Media en Equipo',
       badge: 'text-amber-700 bg-amber-50 border-amber-200',
+      badgeDark: 'text-amber-200 bg-amber-500/25 border-amber-400/50 shadow-2xs',
       detalle: 'Requiere equipo de cómputo para simulación/modelado especializado e insumos periódicos de prácticas de laboratorio.'
     };
   }
@@ -235,6 +332,7 @@ function obtenerCapExCarrera(cve: string) {
     costoEquipo: 18000,
     etiqueta: 'Inversión Básica',
     badge: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+    badgeDark: 'text-emerald-200 bg-emerald-500/25 border-emerald-400/50 shadow-2xs',
     detalle: 'Se cursa con equipo de cómputo estándar de ofimática y bibliografía académica.'
   };
 }
@@ -263,10 +361,32 @@ function obtenerTextoIndependenciaPorArea(cve: string, pMicro: number, diffMicro
 }
 
 function diagnosticarSaturacion(sat: number) {
-  if (sat <= 85) return { texto: 'Alta Demanda (Baja saturación)', clase: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
-  if (sat <= 110) return { texto: 'Mercado Equilibrado', clase: 'bg-blue-50 text-blue-700 border-blue-200' };
-  if (sat <= 135) return { texto: 'Mercado Competido', clase: 'bg-amber-50 text-amber-800 border-amber-200' };
-  return { texto: 'Alta Saturación de Egresados', clase: 'bg-rose-50 text-rose-700 border-rose-200' };
+  if (sat <= 85) {
+    return {
+      texto: 'Alta Demanda (Baja saturación)',
+      clase: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      claseDark: 'bg-emerald-500/25 text-emerald-200 border-emerald-400/45'
+    };
+  }
+  if (sat <= 110) {
+    return {
+      texto: 'Mercado Equilibrado',
+      clase: 'bg-blue-50 text-blue-700 border-blue-200',
+      claseDark: 'bg-blue-500/25 text-blue-200 border-blue-400/45'
+    };
+  }
+  if (sat <= 135) {
+    return {
+      texto: 'Mercado Competido',
+      clase: 'bg-amber-50 text-amber-800 border-amber-200',
+      claseDark: 'bg-amber-500/25 text-amber-200 border-amber-400/45'
+    };
+  }
+  return {
+    texto: 'Alta Saturación de Egresados',
+    clase: 'bg-rose-50 text-rose-700 border-rose-200',
+    claseDark: 'bg-rose-500/25 text-rose-200 border-rose-400/45'
+  };
 }
 
 function calcularMetricasSocialesContextual({
@@ -636,17 +756,41 @@ function calcEmpleabilidadRadar(desempleo: number, saturacion: number): number {
   return Math.round(compOcup * 0.60 + compSat * 0.40);
 }
 
-function calcAutonomiaRadar(homeOffice: number, micro: number, medioTiempo: number): number {
-  const compHo = Math.min(100, homeOffice * 5.0);
-  const compMic = Math.min(100, micro * 1.5);
-  const compMt = Math.min(100, medioTiempo * 2.0);
-  return Math.round(Math.max(15, Math.min(100, compHo * 0.40 + compMic * 0.35 + compMt * 0.25)));
-}
-
 function calcEstabilidadArraigoRadar(contrato: number, pluriempleo: number, desarraigo: number): number {
   const compPluri = Math.max(10, Math.min(100, 100 - pluriempleo * 5.0));
   const compDesarr = Math.max(10, Math.min(100, 100 - desarraigo * 6.5));
   return Math.round(compPluri * 0.35 + compDesarr * 0.30 + contrato * 0.35);
+}
+
+// Marcador Vectorial Monolítico (Rombo + Tallo en un solo eje X=5 para evitar desalineaciones sub-píxel)
+function MarcadorMediaVectorial({
+  leftPct,
+  titulo,
+  altura = 24
+}: {
+  leftPct: number;
+  titulo: string;
+  altura?: number;
+}) {
+  return (
+    <div
+      title={titulo}
+      className="absolute -top-2 z-10 -translate-x-1/2 pointer-events-none flex items-center justify-center"
+      style={{ left: `${Math.max(0, Math.min(99, leftPct))}%` }}
+    >
+      <svg
+        width="10"
+        height={altura}
+        viewBox={`0 0 10 ${altura}`}
+        className="overflow-visible block"
+        shapeRendering="geometricPrecision"
+        aria-hidden="true"
+      >
+        <polygon points="5,0 9.5,4.5 5,9 0.5,4.5" fill="#0F172A" />
+        <rect x="4" y="5" width="2" height={altura - 5} rx="1" fill="#0F172A" />
+      </svg>
+    </div>
+  );
 }
 
 function RielFriccionDivergente({
@@ -682,18 +826,18 @@ function RielFriccionDivergente({
   const widthTallo = Math.abs(posNodo - 50);
 
   let colorBadge = 'bg-slate-100 text-slate-600';
-  let colorTallo = 'bg-slate-400/50';
-  let colorNodo = 'bg-slate-600';
+  let colorTallo = 'bg-slate-400/60';
+  let colorNodo = 'bg-slate-600 ring-slate-200';
 
   if (Math.abs(diff) >= umbralNeutro) {
     if (diff < 0) {
-      colorBadge = 'bg-emerald-50 text-emerald-700';
-      colorTallo = 'bg-emerald-500/50';
-      colorNodo = 'bg-emerald-600';
+      colorBadge = 'bg-emerald-50 text-emerald-700 border border-emerald-200/70';
+      colorTallo = 'bg-gradient-to-r from-emerald-500/80 to-emerald-400/60';
+      colorNodo = 'bg-emerald-600 ring-emerald-500/20';
     } else {
-      colorBadge = 'bg-amber-50 text-amber-800';
-      colorTallo = 'bg-amber-500/50';
-      colorNodo = 'bg-amber-500';
+      colorBadge = 'bg-amber-50 text-amber-800 border border-amber-200/70';
+      colorTallo = 'bg-gradient-to-r from-amber-400/60 to-amber-500/85';
+      colorNodo = 'bg-amber-500 ring-amber-500/25';
     }
   }
 
@@ -705,10 +849,10 @@ function RielFriccionDivergente({
   const textoMax = esEscalaEstrato ? `${maxEscala.toFixed(1)}` : `${maxEscala}${unidad}`;
 
   return (
-    <div className="py-2.5 border-b border-slate-100 last:border-b-0">
+    <div className="py-2.5 border-b border-slate-100 last:border-b-0 group">
       <div className="flex items-baseline justify-between gap-2 mb-1">
         <div className="min-w-0">
-          <span className="text-xs font-bold text-slate-800">{titulo}</span>
+          <span className="text-xs font-bold text-slate-800 group-hover:text-blue-700 transition-colors">{titulo}</span>
           <span className="text-[11px] text-slate-400 ml-2 hidden sm:inline">{subtitulo}</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -721,34 +865,40 @@ function RielFriccionDivergente({
         </div>
       </div>
 
-      <div className="relative h-5 flex items-center my-0.5">
-        <div className="w-full h-1.5 bg-slate-100 rounded-full relative overflow-hidden">
+      <div className="relative h-6 flex items-center my-0.5">
+        <div className="w-full h-2.5 rounded-full relative overflow-hidden flex border border-slate-200/70">
+          <div className="w-1/2 h-full bg-emerald-500/10" />
+          <div className="w-1/2 h-full bg-amber-500/10" />
           <div
             className={`absolute top-0 bottom-0 rounded-full transition-all duration-500 ${colorTallo}`}
-            style={{ left: `${leftTallo}%`, width: `${Math.max(1, widthTallo)}%` }}
+            style={{ left: `${leftTallo}%`, width: `${Math.max(1.5, widthTallo)}%` }}
           />
         </div>
 
         <div
           title={`Media de referencia dinámica: ${textoMediaCtx}`}
-          className="absolute left-1/2 -top-0.5 -bottom-0.5 w-0.5 bg-slate-950 z-10 -translate-x-1/2"
-        />
+          className="absolute left-1/2 -top-0.5 -bottom-0.5 z-10 -translate-x-1/2 pointer-events-none flex items-center justify-center"
+        >
+          <svg width="4" height="20" viewBox="0 0 4 20" shapeRendering="geometricPrecision" aria-hidden="true">
+            <rect x="1" y="0" width="2" height="20" rx="1" fill="#0F172A" />
+          </svg>
+        </div>
 
         <div
           title={`Esta carrera: ${textoValor}`}
-          className={`absolute w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm z-20 -translate-x-1/2 transition-all duration-500 ${colorNodo}`}
+          className={`absolute w-4 h-4 rounded-full border-2 border-white ring-4 shadow-sm z-20 -translate-x-1/2 transition-all duration-500 ${colorNodo}`}
           style={{ left: `${posNodo}%` }}
         />
       </div>
 
       <div className="flex justify-between text-[10px] text-slate-400 font-medium">
-        <span className="text-emerald-700/80 font-semibold">{'←'} Menor fricción ({textoMin})</span>
+        <span className="text-emerald-700 font-bold">{'←'} Menor fricción ({textoMin})</span>
         <span className="text-slate-600 font-semibold">
           {esVistaRegional
             ? `Media Región: ${textoMediaCtx} (Nac: ${textoMediaNac})`
             : `Centro (Media Nac): ${textoMediaNac}`}
         </span>
-        <span className="text-amber-800/80 font-semibold">Mayor fricción ({textoMax}) {'→'}</span>
+        <span className="text-amber-800 font-bold">Mayor fricción ({textoMax}) {'→'}</span>
       </div>
     </div>
   );
@@ -780,7 +930,6 @@ function CarreraPerfilContenido() {
   const rawId = Array.isArray(params?.id) ? params.id[0] : String(params?.id || '');
   const cve_carrera = rawId.padStart(6, '0');
 
-  // Medicina dura 12 semestres (6 años: 4 de aulas + 1 internado + 1 servicio social)
   const semestresDefaultCarrera = cve_carrera === '091100' ? 12 : 9;
 
   const regionParam = searchParams.get('region');
@@ -790,6 +939,8 @@ function CarreraPerfilContenido() {
   const colParam = searchParams.get('col');
   const titParam = searchParams.get('tit');
   const trabParam = searchParams.get('trab');
+
+  const [vinoDeDescubridor, setVinoDeDescubridor] = useState<boolean>(Boolean(regionParam || generoParam));
 
   const regionInicial = regionParam && REGIONES_ORDEN.includes(regionParam as any) ? regionParam : 'nacional';
   const generoInicial: ModoGeneroEstricto =
@@ -805,17 +956,22 @@ function CarreraPerfilContenido() {
   const [regionActiva, setRegionActiva] = useState<string>(regionInicial);
   const [modoGenero, setModoGenero] = useState<ModoGeneroEstricto>(generoInicial);
   const [metricaRegionalVista, setMetricaRegionalVista] = useState<'sueldo' | 'formalidad'>('sueldo');
+  const [segmentoOITHover, setSegmentoOITHover] = useState<SegmentoOITHover>(null);
 
-  // Estados del Simulador de ROI adaptado al mercado mexicano
   const [tipoUniROI, setTipoUniROI] = useState<TipoUniversidadROI>(uniInicial);
   const [gavetaROIAbierta, setGavetaROIAbierta] = useState<boolean>(uniInicial === 'personalizada');
   const [semestresROI, setSemestresROI] = useState<number>(
     semParam && Number(semParam) >= 6 && Number(semParam) <= 14 ? Number(semParam) : semestresDefaultCarrera
   );
   const [colegiaturaMensualROI, setColegiaturaMensualROI] = useState<number>(
-    colParam && Number(colParam) >= 0 ? Number(colParam) : uniInicial === 'privada_elite' ? 16000 : uniInicial === 'privada_media' ? 6500 : 0
+    colParam && Number(colParam) >= 0
+      ? Number(colParam)
+      : uniInicial === 'privada_elite'
+        ? 16000
+        : uniInicial === 'privada_media'
+          ? 6500
+          : 300
   );
-  const [cuotaSemestralPublicaROI, setCuotaSemestralPublicaROI] = useState<number>(1800);
   const [costoTitulacionROI, setCostoTitulacionROI] = useState<number>(
     titParam && Number(titParam) >= 0 ? Number(titParam) : uniInicial === 'publica' ? 8500 : 22000
   );
@@ -823,17 +979,40 @@ function CarreraPerfilContenido() {
     trabParam === '0.5' ? 0.5 : trabParam === '1' ? 1 : 0
   );
 
+  const [urlRetornoDescubridor, setUrlRetornoDescubridor] = useState<string>(
+    `/descubrir?region=${regionInicial}&genero=${generoInicial}`
+  );
+  const [cvesVersus, setCvesVersus] = useState<string[]>([]);
   const [enlaceCopiado, setEnlaceCopiado] = useState<boolean>(false);
   const [carreraInfo, setCarreraInfo] = useState<any>(null);
   const [todosSatelitesGlobal, setTodosSatelitesGlobal] = useState<any[]>([]);
+  const [filasPrediccionesCarrera, setFilasPrediccionesCarrera] = useState<any[]>([]);
   const [statsMercado, setStatsMercado] = useState<ResumenMercadoRegion | null>(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (document.referrer && document.referrer.includes('/descubrir')) {
+      setVinoDeDescubridor(true);
+    }
+    const syncVersus = () => {
+      const nueva = leerEstadoDescubridorGlobal().carrerasCompararCves || [];
+      setCvesVersus(prev => (prev.join(',') === nueva.join(',') ? prev : nueva));
+    };
+    syncVersus();
+    window.addEventListener(EVENTO_VERSUS_SYNC, syncVersus);
+    return () => window.removeEventListener(EVENTO_VERSUS_SYNC, syncVersus);
+  }, []);
+
+  const handleToggleCompararActual = () => {
+    const nuevaLista = toggleCarreraComparadorGlobal(cve_carrera);
+    setCvesVersus(nuevaLista);
+  };
 
   const seleccionarTipoUni = (nuevoTipo: TipoUniversidadROI) => {
     setTipoUniROI(nuevoTipo);
     if (nuevoTipo === 'publica') {
-      setColegiaturaMensualROI(0);
-      setCuotaSemestralPublicaROI(1800);
+      setColegiaturaMensualROI(300);
       setCostoTitulacionROI(8500);
       setSemestresROI(semestresDefaultCarrera);
       setGavetaROIAbierta(false);
@@ -870,6 +1049,28 @@ function CarreraPerfilContenido() {
       url.searchParams.delete('trab');
     }
     window.history.replaceState({}, '', url.toString());
+
+    try {
+      const guardadoRaw = sessionStorage.getItem(STORAGE_KEY_DESCUBRIDOR);
+      if (guardadoRaw) {
+        const parsed = JSON.parse(guardadoRaw);
+        const paramsRet = new URLSearchParams();
+        paramsRet.set('region', regionActiva);
+        paramsRet.set('genero', modoGenero);
+        if (parsed.modoEvaluacion === 'afinidad' && Array.isArray(parsed.activos) && parsed.activos.length > 0) {
+          paramsRet.set('modo', 'afinidad');
+          if (parsed.sueldoMinimo) paramsRet.set('sueldo', String(parsed.sueldoMinimo));
+          paramsRet.set('prio', parsed.activos.join(','));
+        } else {
+          paramsRet.set('modo', 'calificacion');
+        }
+        setUrlRetornoDescubridor(`/descubrir?${paramsRet.toString().replace(/%2C/gi, ',')}`);
+      } else {
+        setUrlRetornoDescubridor(`/descubrir?region=${regionActiva}&genero=${modoGenero}`);
+      }
+    } catch {
+      setUrlRetornoDescubridor(`/descubrir?region=${regionActiva}&genero=${modoGenero}`);
+    }
   }, [regionActiva, modoGenero, tipoUniROI, gavetaROIAbierta, semestresROI, colegiaturaMensualROI, costoTitulacionROI, nivelTrabajoEstudio]);
 
   const handleStatsChange = useCallback((nuevosStats: ResumenMercadoRegion) => {
@@ -883,7 +1084,7 @@ function CarreraPerfilContenido() {
 
       const cveSinCero = String(Number(rawId));
 
-      const [resCarrera, resSat1, resSat2] = await Promise.all([
+      const [resCarrera, resSat1, resSat2, resPred] = await Promise.all([
         supabase
           .from('dim_carreras')
           .select('cve_carrera, nombre_carrera')
@@ -898,12 +1099,37 @@ function CarreraPerfilContenido() {
           .from('satelites_cultura')
           .select('*')
           .order('cve_carrera', { ascending: true })
-          .range(1000, 2499)
+          .range(1000, 2499),
+        supabase
+          .from('predicciones_roi')
+          .select('anio, cve_ent, sexo, poblacion_activa_total, desempleados_reales, indice_saturacion_pct, sueldo_promedio_mensual, tipo_dato')
+          .in('cve_carrera', [cve_carrera, cveSinCero])
+          .eq('tipo_dato', 'Real')
+          .order('anio', { ascending: true })
+          .limit(1000)
       ]);
 
       const todasFilasSat = [...(resSat1.data || []), ...(resSat2.data || [])];
+      const predNormalizadas = (resPred.data || []).map(row => {
+        const entRaw = String(row.cve_ent || 'nacional').toLowerCase().trim();
+        let regNorm = entRaw;
+        if (entRaw === '0' || entRaw === '00' || entRaw === 'nacional') {
+          regNorm = 'nacional';
+        } else if (!['norte', 'noroeste', 'bajio', 'centro', 'sur'].includes(entRaw)) {
+          const entPad = entRaw.padStart(2, '0');
+          const encontrada = Object.entries(ESTADOS_POR_REGION).find(([, lista]) => lista.includes(entPad));
+          if (encontrada) regNorm = encontrada[0];
+        }
+        return {
+          ...row,
+          cve_ent: regNorm,
+          sexo: Number(row.sexo ?? 0)
+        };
+      });
+
       setCarreraInfo(resCarrera.data?.[0] || null);
       setTodosSatelitesGlobal(todasFilasSat);
+      setFilasPrediccionesCarrera(predNormalizadas);
       setLoading(false);
     }
 
@@ -919,6 +1145,85 @@ function CarreraPerfilContenido() {
   }, [todosSatelitesGlobal, cve_carrera, rawId]);
 
   const codigoSexo = modoGenero === 'hombres' ? 1 : modoGenero === 'mujeres' ? 2 : 0;
+
+  // Diccionario inmutable de métricas de mercado por región (desempleo, saturación y tendencia propias de cada región)
+  const metricasMercadoPorRegion = useMemo(() => {
+    const extraerSerieZona = (zona: string, sx: number) => {
+      const directas = filasPrediccionesCarrera.filter(r => r.cve_ent === zona && r.sexo === sx && r.anio >= 2021 && r.anio <= 2026);
+      if (directas.length > 0) return directas;
+      if (sx === 0) {
+        return filasPrediccionesCarrera.filter(r => r.cve_ent === zona && (r.sexo === 1 || r.sexo === 2) && r.anio >= 2021 && r.anio <= 2026);
+      }
+      return [];
+    };
+
+    const filasNac = extraerSerieZona('nacional', codigoSexo);
+    const filasNacConSat = filasNac.filter(r => Number(r.indice_saturacion_pct) > 5);
+    const saturacionNacionalBase = filasNacConSat.length > 0
+      ? filasNacConSat.reduce((acc, c) => acc + Number(c.indice_saturacion_pct), 0) / filasNacConSat.length
+      : 92;
+
+    const mapa: Record<string, { tasaDesempleo: number; saturacion: number; tendenciaCodigo: 'crecimiento' | 'estable' | 'ajuste' | 'volatil' }> = {};
+
+    REGIONES_ORDEN.forEach(zona => {
+      let filasCandidatas = extraerSerieZona(zona, codigoSexo);
+      if (zona !== 'nacional' && filasCandidatas.filter(r => Number(r.sueldo_promedio_mensual) > 0).length < 3) {
+        filasCandidatas = filasNac;
+      }
+
+      const porAnio: Record<number, { sueldoProd: number; pobConSueldo: number; pobTotal: number; desTotal: number; satProd: number; pobConSat: number }> = {};
+      for (let a = 2021; a <= 2026; a++) {
+        porAnio[a] = { sueldoProd: 0, pobConSueldo: 0, pobTotal: 0, desTotal: 0, satProd: 0, pobConSat: 0 };
+      }
+
+      filasCandidatas.forEach(row => {
+        const a = Number(row.anio);
+        if (!porAnio[a]) return;
+        const pobReal = Number(row.poblacion_activa_total || 0);
+        const des = Number(row.desempleados_reales || 0);
+        const sat = Number(row.indice_saturacion_pct || 0);
+        const sueldo = Number(row.sueldo_promedio_mensual || 0);
+
+        porAnio[a].pobTotal += pobReal;
+        porAnio[a].desTotal += des;
+        if (sat > 5 && pobReal > 0) {
+          porAnio[a].satProd += sat * pobReal;
+          porAnio[a].pobConSat += pobReal;
+        }
+        if (sueldo > 0) {
+          const pobPeso = Math.max(1, pobReal);
+          porAnio[a].sueldoProd += sueldo * pobPeso;
+          porAnio[a].pobConSueldo += pobPeso;
+        }
+      });
+
+      const puntosAnuales = Object.entries(porAnio).map(([anioStr, d]) => ({
+        anio: Number(anioStr),
+        sueldo: d.pobConSueldo > 0 ? Math.round(d.sueldoProd / d.pobConSueldo) : null,
+        pob: d.pobTotal,
+        des: d.desTotal,
+        sat: d.pobConSat > 0 ? d.satProd / d.pobConSat : saturacionNacionalBase
+      }));
+
+      const ventana5a = puntosAnuales.filter(p => p.anio >= 2022 && p.anio <= 2026 && p.pob > 0);
+      const lote = ventana5a.length > 0 ? ventana5a : puntosAnuales.filter(p => p.pob > 0);
+      const sumaPea = lote.reduce((acc, d) => acc + d.pob, 0);
+      const sumaDes = lote.reduce((acc, d) => acc + d.des, 0);
+      const tasaDesempleo = sumaPea > 0 ? Math.max(0.8, (sumaDes / sumaPea) * 100) : 3.2;
+
+      const pt2026 = puntosAnuales.find(d => d.anio === 2026) || puntosAnuales[puntosAnuales.length - 1];
+      const saturacion = pt2026 && pt2026.sat > 5 ? pt2026.sat : saturacionNacionalBase;
+      const tendencia = clasificarTendenciaSerieReal(puntosAnuales.map(p => ({ anio: p.anio, sueldo: p.sueldo })));
+
+      mapa[zona] = {
+        tasaDesempleo: Number(tasaDesempleo.toFixed(1)),
+        saturacion: Math.round(saturacion),
+        tendenciaCodigo: tendencia.codigo
+      };
+    });
+
+    return mapa;
+  }, [filasPrediccionesCarrera, codigoSexo]);
 
   const { benchContextual, benchNacionalFijo } = useMemo(() => {
     return {
@@ -984,7 +1289,7 @@ function CarreraPerfilContenido() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
+      <div className="min-h-[80vh] flex flex-col items-center justify-center p-6">
         <Loader2 className="w-9 h-9 animate-spin text-blue-600 mb-3" />
         <p className="text-slate-500 text-sm font-medium">Cargando reporte ejecutivo y calculando benchmarks dinámicos...</p>
       </div>
@@ -993,7 +1298,7 @@ function CarreraPerfilContenido() {
 
   if (!carreraInfo) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+      <div className="min-h-[80vh] flex flex-col items-center justify-center p-6 text-center">
         <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-xs max-w-md">
           <AlertCircle className="w-10 h-10 text-rose-500 mx-auto mb-3" />
           <h1 className="text-xl font-black text-slate-900 mb-2">Carrera no encontrada</h1>
@@ -1004,12 +1309,15 @@ function CarreraPerfilContenido() {
             href="/"
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 text-white font-bold text-xs hover:bg-slate-800 transition-colors"
           >
-            <ArrowLeft className="w-4 h-4" /> Volver al Directorio
+            <ArrowLeft className="w-4 h-4" /> Volver al Catálogo
           </Link>
         </div>
       </div>
     );
   }
+
+  const nombreEjecutivoCarrera = formatearNombreCarreraEjecutivo(cve_carrera, carreraInfo.nombre_carrera);
+  const tieneSubtituloOficial = nombreEjecutivoCarrera !== carreraInfo.nombre_carrera;
 
   const esVistaRegional = regionActiva !== 'nacional';
   const benchReg = BENCHMARK_PREPA[regionActiva] || BENCHMARK_PREPA.nacional;
@@ -1054,9 +1362,12 @@ function CarreraPerfilContenido() {
   const sueldoParaRadar = statsMercado?.sueldoActivo || benchReg.sueldo_lic_promedio;
   const sueldoPrepaParaROI = statsMercado?.sueldoPrepaActivo || benchReg.sueldo_general;
   const premioVsPrepaActivo = statsMercado?.premioVsPrepaPct ?? Number((((sueldoParaRadar - sueldoPrepaParaROI) / sueldoPrepaParaROI) * 100).toFixed(1));
-  const satRaw = statsMercado?.saturacion ?? 100;
+
+  const metricasRegActiva = metricasMercadoPorRegion[regionActiva];
+  const satRaw = metricasRegActiva?.saturacion ?? statsMercado?.saturacion ?? 100;
   const saturacionSegura = satRaw > 5 ? satRaw : 100;
-  const desempleoSeguro = statsMercado?.tasaDesempleo ?? 3.5;
+  const desempleoSeguro = metricasRegActiva?.tasaDesempleo ?? statsMercado?.tasaDesempleo ?? 3.5;
+  const tendenciaSegura = metricasRegActiva?.tendenciaCodigo ?? statsMercado?.tendenciaCodigo ?? 'estable';
 
   const social = calcularMetricasSocialesContextual({
     indicePrivilegioRaw: sateliteActual?.indice_privilegio,
@@ -1071,20 +1382,20 @@ function CarreraPerfilContenido() {
     mediaNepotismoContexto: benchContextual.pct_nepotismo
   });
 
-  // Calificación Integral DataROI (0–100) Reactiva para esta Región y Género
   const evalScoreActual = calcularScoreDataROIUniversal({
     Prima_vs_Prepa_Pct: premioVsPrepaActivo,
-    Desempleo_Abierto_Pct: desempleoSeguro,
-    Saturacion_ANUIES_Pct: saturacionSegura,
+    Desempleo_Abierto_Pct: Number(desempleoSeguro.toFixed(1)),
+    Saturacion_ANUIES_Pct: Math.round(saturacionSegura),
     Empleo_Calidad_OIT_Pct: tasaEmpleoCalidadPct,
     Formalidad_Total_Pct: tasaFormalidadPct,
     Meritocracia_Pct: social.scoreMovilidad,
     Blindaje_IA_Pct: 100 - riesgoIA,
-    Tendencia_Codigo: statsMercado?.tendenciaCodigo || 'estable',
-    Empleo_Unico_Pct: Math.max(0, 100 - pPluriempleo),
-    Arraigo_Local_Pct: Math.max(0, 100 - pDesarraigo)
+    Tendencia_Codigo: tendenciaSegura,
+    Empleo_Unico_Pct: Number(Math.max(0, 100 - pPluriempleo).toFixed(1)),
+    Arraigo_Local_Pct: Number(Math.max(0, 100 - pDesarraigo).toFixed(1))
   });
 
+  const scoreEnteroActual = Math.round(evalScoreActual.score);
   const semaforoScoreActual = obtenerSemaforoScoreDataROI(evalScoreActual.score);
 
   const diagnosticoEjecutivo = generarDiagnosticoEjecutivoV2({
@@ -1114,18 +1425,10 @@ function CarreraPerfilContenido() {
     benchContextual
   });
 
-  // =========================================================================
-  // MODELO FINANCIERO MEXICANO DE ROI (BOLSILLO VS. COSTO DE OPORTUNIDAD)
-  // =========================================================================
-  // En México, las universidades privadas cobran 5 mensualidades por semestre + 1 reinscripción semestral (= 6 pagos mensuales por semestre)
-  const costoAcademicoSemestral = colegiaturaMensualROI > 0
-    ? colegiaturaMensualROI * 6
-    : cuotaSemestralPublicaROI;
-
+  const costoAcademicoSemestral = colegiaturaMensualROI * 6;
   const costoColegiaturaTotal = costoAcademicoSemestral * semestresROI;
   const inversionDirectaBolsillo = costoColegiaturaTotal + costoTitulacionROI + capex.costoEquipo;
 
-  // Costo de oportunidad (Lucro cesante de Mincer): meses de estudio (semestres * 6) multiplicados por el sueldo de Prepa no percibido
   const mesesEstudioTotales = semestresROI * 6;
   const costoOportunidadNeto = Math.round(sueldoPrepaParaROI * mesesEstudioTotales * (1 - nivelTrabajoEstudio));
   const inversionEconomicaTotalMincer = inversionDirectaBolsillo + costoOportunidadNeto;
@@ -1135,38 +1438,51 @@ function CarreraPerfilContenido() {
   const aniosRetornoEconomicoMincer = bonoAnualROI > 0 ? Number((inversionEconomicaTotalMincer / bonoAnualROI).toFixed(1)) : null;
   const gananciaNeta10Anios = bonoAnualROI * 10 - inversionDirectaBolsillo;
 
-  const supuestoROICortoTexto = `${semestresROI} semestres (${(semestresROI / 2).toFixed(1)} años) · ${
-    colegiaturaMensualROI > 0 ? `Colegiatura ${formatoMoneda(colegiaturaMensualROI)}/mes` : `Cuota pública ${formatoMoneda(cuotaSemestralPublicaROI)}/sem`
-  } · Titulación ${formatoMoneda(costoTitulacionROI)} · Equipo ${formatoMoneda(capex.costoEquipo)}`;
+  const invArqPublica = semestresDefaultCarrera * 1800 + 8500 + capex.costoEquipo;
+  const invArqPrivMedia = semestresDefaultCarrera * (6500 * 6) + 22000 + capex.costoEquipo;
+  const invArqPrivElite = semestresDefaultCarrera * (16000 * 6) + 28000 + capex.costoEquipo;
+
+  const aniosArqPublica = bonoAnualROI > 0 ? Number((invArqPublica / bonoAnualROI).toFixed(1)) : null;
+  const aniosArqPrivMedia = bonoAnualROI > 0 ? Number((invArqPrivMedia / bonoAnualROI).toFixed(1)) : null;
+  const aniosArqPrivElite = bonoAnualROI > 0 ? Number((invArqPrivElite / bonoAnualROI).toFixed(1)) : null;
+
+  const etiquetaColegiaturaReceta =
+    colegiaturaMensualROI === 0
+      ? 'Colegiatura $0/mes (Beca 100% / Gratuita)'
+      : colegiaturaMensualROI <= 600
+        ? `Cuota pública ${formatoMoneda(colegiaturaMensualROI)}/mes (${formatoMoneda(costoAcademicoSemestral)}/sem)`
+        : `Colegiatura ${formatoMoneda(colegiaturaMensualROI)}/mes`;
+
+  const supuestoROICortoTexto = `${semestresROI} semestres (${(semestresROI / 2).toFixed(1)} años) · ${etiquetaColegiaturaReceta} · Titulación ${formatoMoneda(costoTitulacionROI)} · Equipo ${formatoMoneda(capex.costoEquipo)}`;
 
   let semaforoROI = {
     etiqueta: 'Retorno Rápido (Alta viabilidad)',
     claseBadge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    colorBarra: 'bg-emerald-500'
+    colorBarra: 'bg-gradient-to-r from-emerald-600 to-teal-400'
   };
   if (aniosRetornoBolsillo === null) {
     semaforoROI = {
       etiqueta: 'Retorno Negativo en esta zona',
       claseBadge: 'bg-rose-50 text-rose-700 border-rose-200',
-      colorBarra: 'bg-rose-500'
+      colorBarra: 'bg-gradient-to-r from-rose-600 to-orange-500'
     };
   } else if (aniosRetornoBolsillo > 14) {
     semaforoROI = {
       etiqueta: 'Riesgo Financiero (Sobrecosto)',
       claseBadge: 'bg-rose-50 text-rose-700 border-rose-200',
-      colorBarra: 'bg-rose-500'
+      colorBarra: 'bg-gradient-to-r from-rose-600 to-orange-500'
     };
   } else if (aniosRetornoBolsillo > 7.5) {
     semaforoROI = {
       etiqueta: 'Retorno Lento (Exige beca alta)',
       claseBadge: 'bg-amber-50 text-amber-800 border-amber-200',
-      colorBarra: 'bg-amber-500'
+      colorBarra: 'bg-gradient-to-r from-amber-500 to-yellow-400'
     };
   } else if (aniosRetornoBolsillo > 3.5) {
     semaforoROI = {
       etiqueta: 'Retorno Moderado (Plazo medio)',
       claseBadge: 'bg-blue-50 text-blue-700 border-blue-200',
-      colorBarra: 'bg-blue-600'
+      colorBarra: 'bg-gradient-to-r from-blue-600 to-indigo-500'
     };
   }
 
@@ -1182,8 +1498,8 @@ function CarreraPerfilContenido() {
   const scoreMeritocracia = Math.round(social.scoreMovilidad);
   const scoreMeritocraciaMedia = 58;
 
-  const scoreAutonomia = calcAutonomiaRadar(pHomeOffice, pMicro, pMedioTiempo);
-  const scoreAutonomiaMedia = calcAutonomiaRadar(benchContextual.pct_home_office, benchContextual.pct_micro, benchContextual.pct_medio_tiempo);
+  const scoreFuturo = evalScoreActual.pilares.blindajeFuturo;
+  const scoreFuturoMedia = 60;
 
   const scoreEstabilidad = calcEstabilidadArraigoRadar(pContrato, pPluriempleo, pDesarraigo);
   const scoreEstabilidadMedia = calcEstabilidadArraigoRadar(benchContextual.pct_contrato, benchContextual.pct_pluriempleo, benchContextual.pct_desarraigo);
@@ -1193,18 +1509,27 @@ function CarreraPerfilContenido() {
     { eje: `Formalidad (${scoreFormalidad})`, nombreCorto: 'Formalidad', Carrera: scoreFormalidad, 'Media Contextual': scoreFormalidadMedia, diff: scoreFormalidad - scoreFormalidadMedia },
     { eje: `Empleo (${scoreEmpleabilidad})`, nombreCorto: 'Empleabilidad', Carrera: scoreEmpleabilidad, 'Media Contextual': scoreEmpleabilidadMedia, diff: scoreEmpleabilidad - scoreEmpleabilidadMedia },
     { eje: `Mérito (${scoreMeritocracia})`, nombreCorto: 'Meritocracia', Carrera: scoreMeritocracia, 'Media Contextual': scoreMeritocraciaMedia, diff: scoreMeritocracia - scoreMeritocraciaMedia },
-    { eje: `Autonomía (${scoreAutonomia})`, nombreCorto: 'Autonomía', Carrera: scoreAutonomia, 'Media Contextual': scoreAutonomiaMedia, diff: scoreAutonomia - scoreAutonomiaMedia },
+    { eje: `Futuro (${scoreFuturo})`, nombreCorto: 'Blindaje IA', Carrera: scoreFuturo, 'Media Contextual': scoreFuturoMedia, diff: scoreFuturo - scoreFuturoMedia },
     { eje: `Estabilidad (${scoreEstabilidad})`, nombreCorto: 'Estabilidad', Carrera: scoreEstabilidad, 'Media Contextual': scoreEstabilidadMedia, diff: scoreEstabilidad - scoreEstabilidadMedia }
+  ];
+
+  const desglose6PilaresScore = [
+    { label: 'Retorno Salarial (25%)', val: evalScoreActual.pilares.retornoSalarial },
+    { label: 'Empleabilidad (20%)', val: evalScoreActual.pilares.empleabilidad },
+    { label: 'Calidad OIT (20%)', val: evalScoreActual.pilares.calidadOIT },
+    { label: 'Meritocracia (15%)', val: evalScoreActual.pilares.meritocracia },
+    { label: 'Blindaje y Futuro (10%)', val: evalScoreActual.pilares.blindajeFuturo },
+    { label: 'Estabilidad (10%)', val: evalScoreActual.pilares.estabilidadVida }
   ];
 
   const pAcademiaOtros = Math.max(0, Number((100 - (pCorp + pPyme + pMicro + pGob)).toFixed(1)));
 
   const listaEmpleadores = [
-    { name: 'PYME (Empresas y Planteles 6–100 emp.)', value: pPyme },
-    { name: 'Microempresa y Práctica Independiente', value: pMicro },
-    { name: 'Gran Corporativo y Transnacional', value: pCorp },
-    { name: 'Administración Pública y Gobierno', value: pGob },
-    ...(pAcademiaOtros > 0.5 ? [{ name: 'Academia, Investigación y ONGs', value: pAcademiaOtros }] : [])
+    { id: 'pyme', name: 'PYME (Empresas y Planteles 6–100 emp.)', value: pPyme, icon: <Briefcase className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'micro', name: 'Microempresa y Práctica Independiente', value: pMicro, icon: <Sparkles className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'corp', name: 'Gran Corporativo y Transnacional', value: pCorp, icon: <Building2 className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'gob', name: 'Administración Pública y Gobierno', value: pGob, icon: <Landmark className="w-3.5 h-3.5" aria-hidden="true" /> },
+    ...(pAcademiaOtros > 0.5 ? [{ id: 'acad', name: 'Academia, Investigación y ONGs', value: pAcademiaOtros, icon: <GraduationCap className="w-3.5 h-3.5" aria-hidden="true" /> }] : [])
   ]
     .sort((a, b) => b.value - a.value)
     .map((item, idx) => ({
@@ -1232,6 +1557,7 @@ function CarreraPerfilContenido() {
 
   const sueldoBaseNacRef = statsMercado?.sueldoNacionalBase || statsMercado?.sueldoActivo || BENCHMARK_PREPA.nacional.sueldo_lic_promedio;
 
+  // Cada una de las 5 Macro-Regiones utiliza sus propios indicadores regionales inmutables
   const filasComparativaRegional: FilaComparativaRegionalUI[] = MACRO_REGIONES_5.map((regKey) => {
     const bReg = BENCHMARK_PREPA[regKey] || BENCHMARK_PREPA.nacional;
     const itemDesdeStats = statsMercado?.comparativaRegiones?.find((r: SueldoRegionalItem) => r.region === regKey);
@@ -1278,17 +1604,22 @@ function CarreraPerfilContenido() {
       mediaNepotismoContexto: benchCtxReg.pct_nepotismo
     });
 
+    const metMercadoReg = metricasMercadoPorRegion[regKey];
+    const desempleoRegPropio = metMercadoReg?.tasaDesempleo ?? 3.5;
+    const saturacionRegPropia = metMercadoReg?.saturacion ?? 92;
+    const tendenciaRegPropia = metMercadoReg?.tendenciaCodigo ?? 'estable';
+
     const evalReg = calcularScoreDataROIUniversal({
       Prima_vs_Prepa_Pct: premioPctReg,
-      Desempleo_Abierto_Pct: desempleoSeguro,
-      Saturacion_ANUIES_Pct: saturacionSegura,
+      Desempleo_Abierto_Pct: Number(desempleoRegPropio.toFixed(1)),
+      Saturacion_ANUIES_Pct: Math.round(saturacionRegPropia),
       Empleo_Calidad_OIT_Pct: calOitR,
       Formalidad_Total_Pct: formR,
       Meritocracia_Pct: socialReg.scoreMovilidad,
       Blindaje_IA_Pct: 100 - riesgoIA,
-      Tendencia_Codigo: statsMercado?.tendenciaCodigo || 'estable',
-      Empleo_Unico_Pct: Math.max(0, 100 - pPlurR),
-      Arraigo_Local_Pct: Math.max(0, 100 - pDesaR)
+      Tendencia_Codigo: tendenciaRegPropia,
+      Empleo_Unico_Pct: Number(Math.max(0, 100 - pPlurR).toFixed(1)),
+      Arraigo_Local_Pct: Number(Math.max(0, 100 - pDesaR).toFixed(1))
     });
 
     const bonoAnualReg = (sueldoCarreraReg - sueldoPrepaReg) * 12;
@@ -1306,7 +1637,7 @@ function CarreraPerfilContenido() {
       formalidadPrepaPct: formPrepaReg,
       diffFormalidadPts: diffFormPts,
       celdaDisponible: celdaDisp,
-      scoreDataROIRegional: evalReg.score,
+      scoreDataROIRegional: Math.round(evalReg.score),
       roiPublicaReg: bonoAnualReg > 0 ? Number((invPubBase / bonoAnualReg).toFixed(1)) : null,
       roiPrivadaReg: bonoAnualReg > 0 ? Number((invPrivBase / bonoAnualReg).toFixed(1)) : null,
       calidadOitReg: calOitR,
@@ -1315,6 +1646,10 @@ function CarreraPerfilContenido() {
       estratoReg: Number(pEstR.toFixed(2))
     };
   });
+
+  const regionesConMuestra = filasComparativaRegional.filter(r => r.celdaDisponible);
+  const maxSueldoLiderReg = regionesConMuestra.length > 0 ? Math.max(...regionesConMuestra.map(r => r.sueldoCarrera)) : -1;
+  const maxFormalidadLiderReg = regionesConMuestra.length > 0 ? Math.max(...regionesConMuestra.map(r => r.formalidadPct)) : -1;
 
   const maxSueldoCarreraReg = Math.max(...filasComparativaRegional.map((r: FilaComparativaRegionalUI) => Math.max(r.sueldoCarrera, r.sueldoPrepa)));
   const techoDinamicoSueldoRegional = Math.max(14000, Math.ceil((maxSueldoCarreraReg * 1.15) / 1000) * 1000);
@@ -1346,8 +1681,8 @@ function CarreraPerfilContenido() {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `DataROI — ${carreraInfo.nombre_carrera} (${REGIONES_INFO[regionActiva]?.corto})`,
-          text: `Calificación DataROI ${evalScoreActual.score}/100 y radiografía salarial de ${carreraInfo.nombre_carrera} en ${REGIONES_INFO[regionActiva]?.nombre}.`,
+          title: `DataROI — ${nombreEjecutivoCarrera} (${REGIONES_INFO[regionActiva]?.corto})`,
+          text: `Calificación DataROI ${scoreEnteroActual}/100 y radiografía salarial de ${nombreEjecutivoCarrera} en ${REGIONES_INFO[regionActiva]?.nombre}.`,
           url
         });
         return;
@@ -1360,9 +1695,6 @@ function CarreraPerfilContenido() {
     setTimeout(() => setEnlaceCopiado(false), 2200);
   };
 
-  // =========================================================================
-  // CONSTRUCCIÓN DE LAS 4 HOJAS DE EXCEL (CERO GUIONES "-" VACÍOS)
-  // =========================================================================
   const construirHojasFichaCarrera = () => {
     const cohortRegSx = todosSatelitesGlobal.filter(
       r => String(r.region || 'nacional').toLowerCase() === regionActiva && Number(r.sexo ?? 0) === codigoSexo
@@ -1379,16 +1711,11 @@ function CarreraPerfilContenido() {
       return `#${mejores + 1} de ${valores.length}`;
     };
 
-    // Hoja 1: Ficha Ejecutiva, Score DataROI y Escenarios del Simulador ROI (3 columnas limpias sin un solo "-")
-    const invPubRef = semestresDefaultCarrera * 1800 + 8500 + capex.costoEquipo;
-    const invPrivMedRef = semestresDefaultCarrera * (6500 * 6) + 22000 + capex.costoEquipo;
-    const invPrivEliRef = semestresDefaultCarrera * (16000 * 6) + 28000 + capex.costoEquipo;
-
     const filasHoja1: ValorCeldaExcel[][] = [
-      [{ v: 'Nombre de la Licenciatura Auditada', s: 'bold' }, { v: `${carreraInfo.nombre_carrera} (CVE: ${cve_carrera})`, s: 'section' }, capex.detalle],
+      [{ v: 'Nombre de la Licenciatura Auditada', s: 'bold' }, { v: `${nombreEjecutivoCarrera} (CVE: ${cve_carrera})`, s: 'section' }, carreraInfo.nombre_carrera],
       [
         { v: 'Calificación Integral DataROI (0–100)', s: 'bold' },
-        { v: `${evalScoreActual.score} / 100 pts (Grado ${semaforoScoreActual.grado} — ${semaforoScoreActual.etiqueta})`, s: semaforoScoreActual.grado === 'A' ? 'winner' : semaforoScoreActual.grado === 'C' ? 'warning' : 'gold' },
+        { v: `${scoreEnteroActual} / 100 pts (Grado ${semaforoScoreActual.grado} — ${semaforoScoreActual.etiqueta})`, s: semaforoScoreActual.grado === 'A' ? 'winner' : semaforoScoreActual.grado === 'C' ? 'warning' : 'gold' },
         `Ponderación de 6 Pilares: Retorno ${evalScoreActual.pilares.retornoSalarial}, Empleo ${evalScoreActual.pilares.empleabilidad}, Calidad OIT ${evalScoreActual.pilares.calidadOIT}, Mérito ${evalScoreActual.pilares.meritocracia}, Futuro ${evalScoreActual.pilares.blindajeFuturo}, Estabilidad ${evalScoreActual.pilares.estabilidadVida}`
       ],
       ['Macro-Región y Perspectiva de Género', { v: `${REGIONES_INFO[regionActiva]?.nombre} (${etiquetaGeneroActual})`, s: 'bold' }, REGIONES_INFO[regionActiva]?.estados || '32 entidades federativas'],
@@ -1400,17 +1727,17 @@ function CarreraPerfilContenido() {
       ['Inversión Requerida en Equipamiento (CapEx)', { v: `${formatoMoneda(capex.costoEquipo)} MXN (${capex.etiqueta})`, s: 'bold' }, capex.detalle],
       [
         'Escenario ROI 1: Universidad Pública Estándar',
-        { v: bonoAnualROI > 0 ? `${(invPubRef / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invPubRef)})` : 'No amortizable', s: 'winner' },
-        `Supuesto: ${semestresDefaultCarrera} semestres · Cuota pública $1,800/sem + Titulación $8,500 + Equipo ${formatoMoneda(capex.costoEquipo)}`
+        { v: bonoAnualROI > 0 ? `${(invArqPublica / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invArqPublica)})` : 'No amortizable', s: 'winner' },
+        `Supuesto: ${semestresDefaultCarrera} semestres · Cuota pública $300/mes ($1,800/sem) + Titulación $8,500 + Equipo ${formatoMoneda(capex.costoEquipo)}`
       ],
       [
         'Escenario ROI 2: Universidad Privada Media',
-        { v: bonoAnualROI > 0 ? `${(invPrivMedRef / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invPrivMedRef)})` : 'No amortizable', s: 'bold' },
+        { v: bonoAnualROI > 0 ? `${(invArqPrivMedia / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invArqPrivMedia)})` : 'No amortizable', s: 'bold' },
         `Supuesto: ${semestresDefaultCarrera} semestres · Colegiatura $6,500/mes (6 pagos/sem) + Titulación $22,000 + Equipo ${formatoMoneda(capex.costoEquipo)}`
       ],
       [
         'Escenario ROI 3: Universidad Privada Élite',
-        { v: bonoAnualROI > 0 ? `${(invPrivEliRef / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invPrivEliRef)})` : 'No amortizable', s: 'bold' },
+        { v: bonoAnualROI > 0 ? `${(invArqPrivElite / bonoAnualROI).toFixed(1)} años de trabajo (Inversión: ${formatoMoneda(invArqPrivElite)})` : 'No amortizable', s: 'bold' },
         `Supuesto: ${semestresDefaultCarrera} semestres · Colegiatura $16,000/mes (6 pagos/sem) + Titulación $28,000 + Equipo ${formatoMoneda(capex.costoEquipo)}`
       ],
       [
@@ -1427,7 +1754,6 @@ function CarreraPerfilContenido() {
       ]
     ];
 
-    // Hoja 2: Tabla Pura de Benchmarking contra la Media Regional (CERO celdas con "-")
     const filaBench = (
       cat: string,
       ind: string,
@@ -1468,16 +1794,7 @@ function CarreraPerfilContenido() {
     const colHrsCampo = codigoSexo === 1 ? 'hrs_doble_jornada_hombres' : 'hrs_doble_jornada_mujeres';
 
     const filasHoja2: ValorCeldaExcel[][] = [
-      filaBench(
-        '1. Remuneración',
-        'Salario Mensual Consolidado vs. Media Lic.',
-        sueldoParaRadar,
-        benchReg.sueldo_lic_promedio,
-        'MXN / mes',
-        true,
-        800,
-        '#Top Salarial'
-      ),
+      filaBench('1. Remuneración', 'Salario Mensual Consolidado vs. Media Lic.', sueldoParaRadar, benchReg.sueldo_lic_promedio, 'MXN / mes', true, 800, '#Top Salarial'),
       filaBench(
         '2. Calidad y Mercado',
         'Empleo de Calidad (Estándar OIT)',
@@ -1529,7 +1846,6 @@ function CarreraPerfilContenido() {
       filaBench('5. Barreras y Modalidad', 'Riesgo de Automatización IA', riesgoIA, 40, '% de exposición', false, 8.0, calcularLugarEnRegion(r => Number(r.riesgo_ia_score || 40), riesgoIA, false))
     ];
 
-    // Hoja 3: ¿En qué Macro-Región conviene más ejercer ESTA carrera? (Iluminando en Verde al ganador de cada columna)
     const dispRegs = filasComparativaRegional.filter(r => r.celdaDisponible);
     const maxScoreReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.scoreDataROIRegional)) : -1;
     const maxSalReg = dispRegs.length > 0 ? Math.max(...dispRegs.map(r => r.sueldoCarrera)) : -1;
@@ -1579,7 +1895,6 @@ function CarreraPerfilContenido() {
       ];
     });
 
-    // Hoja 4: Serie Salarial Real (2021-2026) + Diagnóstico de Fortalezas y Riesgos
     const serieReal = obtenerSerieAnualConfiable();
     const filasHoja4: ValorCeldaExcel[][] = [
       ...serieReal.map(pt => {
@@ -1687,18 +2002,18 @@ function CarreraPerfilContenido() {
 
     descargarReporteCarreraPDF({
       cve_carrera,
-      nombre_carrera: carreraInfo.nombre_carrera,
+      nombre_carrera: nombreEjecutivoCarrera,
       regionNombre: REGIONES_INFO[regionActiva]?.nombre || regionActiva,
       regionCorto: REGIONES_INFO[regionActiva]?.corto || regionActiva,
       perfilEtiqueta: etiquetaGeneroActual,
       nEncuestados: nEncuestadosActivos,
       capexEtiqueta: capex.etiqueta,
       riesgoIA,
-      scoreDataROI: evalScoreActual.score,
+      scoreDataROI: scoreEnteroActual,
       etiquetaScoreDataROI: `Grado ${semaforoScoreActual.grado} — ${semaforoScoreActual.etiqueta}`,
       sueldoActivo: sueldoParaRadar,
       sueldoPrepa: sueldoPrepaParaROI,
-      premioVsPrepaPct: premioVsPrepaActivo,
+      premioVsPrepaPct: Math.round(premioVsPrepaActivo),
       bonoAnual: statsMercado?.gananciaAnualExtra ?? bonoAnualROI,
       tasaEmpleoCalidadPct,
       diffCalidadVsMediaLic,
@@ -1749,133 +2064,168 @@ function CarreraPerfilContenido() {
     });
   };
 
-  // Cálculo del arco SVG para el Anillo Circular del Score DataROI en el Piso 1
-  const rAnillo = 24;
+  const rAnillo = 25;
   const circAnillo = 2 * Math.PI * rAnillo;
-  const offsetAnillo = circAnillo - (Math.max(0, Math.min(100, evalScoreActual.score)) / 100) * circAnillo;
+  const offsetAnillo = circAnillo - (Math.max(0, Math.min(100, scoreEnteroActual)) / 100) * circAnillo;
+
+  const idxVersusActual = cvesVersus.indexOf(cve_carrera);
+  const estaEnVersus = idxVersusActual !== -1;
+  const topeVersus = !estaEnVersus && cvesVersus.length >= 3;
+  const slotVersusEstilo = estaEnVersus ? COLORES_SLOTS_VERSUS[idxVersusActual] || COLORES_SLOTS_VERSUS[0] : null;
+  const primaEntero = Math.round(premioVsPrepaActivo);
+
+  const pctSliderColegiatura = Math.min(100, Math.max(0, (colegiaturaMensualROI / 28000) * 100));
+  const pctSliderSemestres = Math.min(100, Math.max(0, ((semestresROI - 6) / (14 - 6)) * 100));
+  const pctSliderTitulacion = Math.min(100, Math.max(0, (costoTitulacionROI / 45000) * 100));
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
+    <div className="max-w-7xl mx-auto space-y-6 pb-14">
       
-      {/* NAVEGACIÓN SUPERIOR + BARRA DE EXPORTACIÓN Y COMPARTIR */}
-      <div className="no-print flex flex-wrap items-center justify-between gap-3">
+      {/* BARRA DE HERRAMIENTAS DEL REPORTE */}
+      <nav aria-label="Acciones del reporte de carrera" className="no-print flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Link
-            href="/"
-            className="inline-flex items-center text-xs md:text-sm font-bold text-slate-600 hover:text-slate-900 transition-colors"
+            href={vinoDeDescubridor ? urlRetornoDescubridor : '/'}
+            className="inline-flex items-center px-3.5 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs md:text-sm font-black text-slate-700 hover:text-slate-900 shadow-2xs active:scale-95 transition-all"
           >
-            <ArrowLeft className="w-4 h-4 mr-1.5" />
-            Directorio Nacional
-          </Link>
-          <span className="text-slate-300">|</span>
-          <Link
-            href="/laboratorio"
-            className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 hover:text-blue-600 transition-colors"
-          >
-            <FlaskConical className="w-3.5 h-3.5 text-emerald-600" />
-            Laboratorio Crudo
+            <ArrowLeft className="w-4 h-4 mr-1.5 text-blue-600" aria-hidden="true" />
+            {vinoDeDescubridor ? 'Volver a mi Ranking' : 'Volver al Catálogo Nacional'}
           </Link>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={compartirAnalisis}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+            type="button"
+            aria-pressed={estaEnVersus}
+            disabled={topeVersus}
+            onClick={handleToggleCompararActual}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black border transition-all active:scale-95 ${
+              estaEnVersus && slotVersusEstilo
+                ? `${slotVersusEstilo.btnClass} cursor-pointer`
+                : topeVersus
+                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                  : 'bg-white text-slate-800 border-slate-200 hover:border-blue-500 hover:text-blue-600 shadow-2xs cursor-pointer'
+            }`}
           >
-            {enlaceCopiado ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" />}
+            {estaEnVersus ? (
+              <>
+                <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>En Versus #{idxVersusActual + 1}</span>
+              </>
+            ) : (
+              <>
+                <Scale className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
+                <span>+ Comparar carrera</span>
+              </>
+            )}
+          </button>
+
+          <button
+            onClick={compartirAnalisis}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs active:scale-95 transition-all cursor-pointer"
+          >
+            {enlaceCopiado ? <Check className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />}
             {enlaceCopiado ? '¡Enlace copiado!' : 'Compartir vista'}
           </button>
 
           <button
             onClick={exportarFichaExcel}
             title="Descargar Libro de Excel (.xlsx) con 4 Hojas sin celdas vacías, Score DataROI y comparativa regional"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs transition-all cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs active:scale-95 transition-all cursor-pointer"
           >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
             Excel (4 Hojas)
           </button>
 
           <button
             onClick={exportarFichaCSV}
             title="Descargar tabla de benchmarking en formato CSV limpio (RFC 4180)"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs active:scale-95 transition-all cursor-pointer"
           >
-            <Download className="w-3.5 h-3.5 text-blue-600" />
+            <Download className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
             CSV
           </button>
 
           <button
             onClick={descargarPDFEjecutivoCarrera}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs active:scale-95 transition-all cursor-pointer"
           >
-            <Printer className="w-3.5 h-3.5 text-blue-600" />
+            <Printer className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
             Descargar PDF
           </button>
-
-          <Link
-            href={`/descubrir?region=${regionActiva}&genero=${modoGenero}`}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-colors"
-          >
-            <Sparkles className="w-3.5 h-3.5" /> Ir al Descubridor
-          </Link>
         </div>
-      </div>
+      </nav>
 
-      {/* PISO 1: CINTA EJECUTIVA UNIFICADA CON ANILLO CIRCULAR SCORE DATAROI */}
-      <div className="print-avoid-break bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        
-        <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 items-stretch">
+      {/* PISO 1: CINTA EJECUTIVA OSCURA DE ALTO CONTRASTE CON CRISTAL ESMERILADO */}
+      <div className={`print-avoid-break bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 text-white rounded-3xl border border-slate-800 border-t-4 ${semaforoScoreActual.topBorderClass || 'border-t-emerald-500'} shadow-lg p-6 md:p-7`}>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
           
-          {/* Identificación + Anillo Circular Score DataROI (5 cols) */}
-          <div className="lg:col-span-5 p-6 flex flex-col justify-between gap-3">
+          {/* Identificación + Medallón Entero Score DataROI (5 cols) */}
+          <div className="lg:col-span-5 flex flex-col justify-between gap-3">
             <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                  <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 font-mono">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+                  <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-slate-800/95 text-slate-100 border border-slate-600/80 font-mono">
                     CVE: {cve_carrera}
                   </span>
-                  <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border ${capex.badge}`}>
+                  <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border ${capex.badgeDark}`}>
                     {capex.etiqueta}
                   </span>
                   <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border inline-flex items-center gap-1 ${
                     riesgoIA <= 35
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      ? 'bg-emerald-500/25 text-emerald-200 border-emerald-400/50'
                       : riesgoIA <= 65
-                        ? 'bg-amber-50 text-amber-800 border-amber-200'
-                        : 'bg-rose-50 text-rose-700 border-rose-200'
+                        ? 'bg-amber-500/25 text-amber-200 border-amber-400/50'
+                        : 'bg-rose-500/25 text-rose-200 border-rose-400/50'
                   }`}>
-                    {riesgoIA <= 35 ? <ShieldCheck className="w-3 h-3" /> : <ShieldAlert className="w-3 h-3" />}
+                    {riesgoIA <= 35 ? <ShieldCheck className="w-3 h-3" aria-hidden="true" /> : <ShieldAlert className="w-3 h-3" aria-hidden="true" />}
                     Riesgo IA: {riesgoIA}%
                   </span>
                 </div>
 
-                <h1 className="text-lg md:text-2xl font-black text-slate-900 tracking-tight leading-snug">
-                  {carreraInfo.nombre_carrera}
+                <h1 className="text-xl md:text-3xl font-black text-white tracking-tight leading-snug">
+                  {nombreEjecutivoCarrera}
                 </h1>
+
+                {tieneSubtituloOficial && (
+                  <p className="text-[11px] font-medium text-slate-400 mt-1 leading-snug">
+                    Catálogo CMPE INEGI: {carreraInfo.nombre_carrera}
+                  </p>
+                )}
               </div>
 
-              {/* Anillo Circular Semáforo Score DataROI Reactivo */}
+              {/* Medallón Grande de Calificación Entera sobre Cristal con Borde de Luz */}
               <div
-                title={`Calificación Integral DataROI en ${REGIONES_INFO[regionActiva]?.corto} (${etiquetaGeneroActual}): ${evalScoreActual.score}/100`}
-                className={`p-2.5 rounded-2xl border flex items-center gap-2.5 shrink-0 ${semaforoScoreActual.ringBgClass}`}
+                role="img"
+                aria-label={`Calificación Integral DataROI en ${REGIONES_INFO[regionActiva]?.corto}: ${scoreEnteroActual} de 100 puntos, Grado ${semaforoScoreActual.grado}, ${semaforoScoreActual.etiqueta}`}
+                title={`Calificación Integral DataROI en ${REGIONES_INFO[regionActiva]?.corto} (${etiquetaGeneroActual}): ${scoreEnteroActual}/100`}
+                className="p-3 rounded-2xl bg-slate-800/90 border border-slate-700 ring-1 ring-white/10 flex items-center gap-3 shrink-0 shadow-md"
               >
-                <div className="relative w-14 h-14 flex items-center justify-center shrink-0">
-                  <svg className="w-14 h-14 -rotate-90" viewBox="0 0 56 56">
-                    <circle cx="28" cy="28" r={rAnillo} fill="none" stroke={semaforoScoreActual.trackHex} strokeWidth="5" />
+                <div className="relative w-16 h-16 flex items-center justify-center shrink-0">
+                  <svg className="w-16 h-16 -rotate-90" viewBox="0 0 62 62" aria-hidden="true">
                     <circle
-                      cx="28"
-                      cy="28"
+                      cx="31"
+                      cy="31"
+                      r={rAnillo}
+                      fill="rgba(15, 23, 42, 0.75)"
+                      stroke="rgba(148, 163, 184, 0.22)"
+                      strokeWidth="5.2"
+                    />
+                    <circle
+                      cx="31"
+                      cy="31"
                       r={rAnillo}
                       fill="none"
                       stroke={semaforoScoreActual.colorHex}
-                      strokeWidth="5"
+                      strokeWidth="5.2"
                       strokeLinecap="round"
                       strokeDasharray={circAnillo}
                       strokeDashoffset={offsetAnillo}
+                      className="transition-all duration-700 ease-out"
                     />
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
-                    <span className="text-sm font-black text-slate-900">{evalScoreActual.score}</span>
+                    <span className="text-xl font-black text-white tracking-tight">{scoreEnteroActual}</span>
                     <span className="text-[9px] font-bold text-slate-400">/100</span>
                   </div>
                 </div>
@@ -1883,149 +2233,158 @@ function CarreraPerfilContenido() {
                   <span className="block text-[9.5px] font-black uppercase tracking-wider text-slate-400 leading-none">
                     Score DataROI
                   </span>
-                  <span className={`block text-xs font-black ${semaforoScoreActual.textClass} mt-1 leading-none`}>
+                  <span
+                    className="block text-xs font-black mt-1 leading-none"
+                    style={{ color: semaforoScoreActual.grado === 'A' ? '#34D399' : semaforoScoreActual.grado === 'B' ? '#FBBF24' : '#FB7185' }}
+                  >
                     {semaforoScoreActual.etiqueta}
                   </span>
-                  <span className="block text-[10px] font-bold text-slate-500 mt-1 leading-none">
+                  <span className="block text-[10px] font-bold text-slate-300 mt-1 leading-none">
                     Grado {semaforoScoreActual.grado} · {REGIONES_INFO[regionActiva]?.corto}
                   </span>
                 </div>
               </div>
             </div>
 
-            <p className="text-xs text-slate-500 pt-2.5 border-t border-slate-100 leading-relaxed">
+            <p className="text-xs text-slate-300 pt-3 border-t border-slate-800 leading-relaxed">
               {capex.detalle}
             </p>
           </div>
 
-          {/* Salario Mensual Consolidado (3 cols) */}
-          <div className="lg:col-span-3 p-6 flex flex-col justify-center gap-3.5">
-            <div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                Salario Mensual Consolidado
-              </span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-black text-slate-900">
-                  {statsMercado ? formatoMoneda(statsMercado.sueldoActivo) : '---'}
+          {/* 3 Tarjetas de Cristal para los KPIs Principales (7 cols) */}
+          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+            
+            {/* KPI 1: Salario Mensual Consolidado */}
+            <div className="bg-slate-800/85 border border-slate-700/90 ring-1 ring-white/10 rounded-2xl p-4 flex flex-col justify-between">
+              <div>
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                  Salario Mensual Consolidado
                 </span>
-                <span className="text-xs font-bold text-slate-400">/mes</span>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-2xl xl:text-3xl font-black text-white">
+                    {statsMercado ? formatoMoneda(statsMercado.sueldoActivo) : '---'}
+                  </span>
+                  <span className="text-xs font-bold text-slate-400">/mes</span>
+                </div>
+              </div>
+
+              <div className="pt-3 mt-3 border-t border-slate-700/80">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-300 font-medium">vs. Prepa ({formatoMonedaCorta(sueldoPrepaParaROI)}):</span>
+                  <span className={`font-black px-2 py-0.5 rounded-md border ${
+                    primaEntero >= 0
+                      ? 'bg-emerald-500/25 text-emerald-200 border-emerald-400/45'
+                      : 'bg-rose-500/25 text-rose-200 border-rose-400/45'
+                  }`}>
+                    {primaEntero >= 0 ? `+${primaEntero}%` : `${primaEntero}%`}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1.5">
+                  Bono anual: <strong className="text-emerald-300 font-bold">
+                    {bonoAnualROI >= 0
+                      ? `+${formatoMoneda(bonoAnualROI)}/año`
+                      : `${formatoMoneda(bonoAnualROI)}/año`}
+                  </strong>
+                </p>
               </div>
             </div>
 
-            <div className="pt-3 border-t border-slate-100">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-500 font-medium">Prima vs. Prepa ({formatoMoneda(sueldoPrepaParaROI)}):</span>
-                <span className={`font-black px-2 py-0.5 rounded ${
-                  premioVsPrepaActivo >= 0
-                    ? 'bg-emerald-50 text-emerald-700'
-                    : 'bg-rose-50 text-rose-700'
-                }`}>
-                  {premioVsPrepaActivo >= 0 ? `+${premioVsPrepaActivo}%` : `${premioVsPrepaActivo}%`}
+            {/* KPI 2: Empleo de Calidad OIT */}
+            <div className="bg-slate-800/85 border border-slate-700/90 ring-1 ring-white/10 rounded-2xl p-4 flex flex-col justify-between">
+              <div>
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                  Empleo de Calidad (OIT)
+                </span>
+                <span className="text-2xl xl:text-3xl font-black text-sky-400">
+                  {Math.round(tasaEmpleoCalidadPct)}%
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Bono anual: <strong className="text-slate-700">
-                  {bonoAnualROI >= 0
-                    ? `+${formatoMoneda(bonoAnualROI)}/año`
-                    : `${formatoMoneda(bonoAnualROI)}/año`}
-                </strong>
-              </p>
-            </div>
-          </div>
 
-          {/* Empleo de Calidad OIT (2 cols) */}
-          <div className="lg:col-span-2 p-6 flex flex-col justify-center gap-3.5">
-            <div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                Empleo de Calidad (OIT)
-              </span>
-              <span className="text-3xl font-black text-blue-600">
-                {tasaEmpleoCalidadPct}%
-              </span>
-            </div>
-
-            <div className="pt-3 border-t border-slate-100 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">vs. Media Lic.:</span>
-                <span className={`font-black px-1.5 py-0.5 rounded text-[11px] ${
-                  diffCalidadVsMediaLic >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
-                }`}>
-                  {diffCalidadVsMediaLic >= 0 ? `+${diffCalidadVsMediaLic}` : diffCalidadVsMediaLic} pts
-                </span>
+              <div className="pt-3 mt-3 border-t border-slate-700/80 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">vs. Media Lic.:</span>
+                  <span className={`font-black px-2 py-0.5 rounded-md border text-[11px] ${
+                    diffCalidadVsMediaLic >= 0
+                      ? 'bg-emerald-500/25 text-emerald-200 border-emerald-400/45'
+                      : 'bg-amber-500/25 text-amber-200 border-amber-400/45'
+                  }`}>
+                    {diffCalidadVsMediaLic >= 0 ? `+${diffCalidadVsMediaLic}` : diffCalidadVsMediaLic} pts
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1.5">
+                  Plenos: <strong className="text-white font-bold">{countCalidad.toLocaleString('es-MX')}</strong> ocup.
+                </p>
               </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Plenos: <strong className="text-slate-700">{countCalidad.toLocaleString('es-MX')}</strong> ocup.
-              </p>
             </div>
-          </div>
 
-          {/* Índice de Saturación ANUIES (2 cols) */}
-          <div className="lg:col-span-2 p-6 flex flex-col justify-center gap-3">
-            <div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                Índice de Saturación
-              </span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-black text-slate-900">
+            {/* KPI 3: Índice de Saturación ANUIES */}
+            <div className="bg-slate-800/85 border border-slate-700/90 ring-1 ring-white/10 rounded-2xl p-4 flex flex-col justify-between">
+              <div>
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                  Índice de Saturación
+                </span>
+                <span className="text-2xl xl:text-3xl font-black text-white block">
                   {statsMercado ? `${saturacionSegura.toFixed(0)}%` : '---'}
                 </span>
+                <span className={`inline-block mt-1.5 text-[10px] font-bold px-2 py-0.5 rounded-md border ${diagSat.claseDark}`}>
+                  {diagSat.texto}
+                </span>
               </div>
-              <span className={`inline-block mt-1.5 text-[10px] font-bold px-2 py-0.5 rounded border ${diagSat.clase}`}>
-                {diagSat.texto}
-              </span>
+
+              <div className="pt-3 mt-3 border-t border-slate-700/80 text-xs flex items-center justify-between">
+                <span className="text-slate-400">PEA Activa:</span>
+                <strong className="font-black text-white">{peaTotal.toLocaleString('es-MX')}</strong>
+              </div>
             </div>
 
-            <div className="pt-2.5 border-t border-slate-100 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-500">PEA Activa:</span>
-                <span className="font-bold text-slate-800">{peaTotal.toLocaleString('es-MX')}</span>
-              </div>
-            </div>
           </div>
 
         </div>
       </div>
 
-      {/* BARRA DE CONTROL GLOBAL STICKY */}
-      <div className="no-print sticky top-2 z-30 bg-white/95 backdrop-blur-md px-5 py-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5 mr-1">
-            <MapPin className="w-4 h-4 text-blue-600" /> Macro-Región:
+      {/* BARRA DE CONTROL REGIONAL Y DE GÉNERO EN CÁPSULAS SEGMENTADAS */}
+      <div className="no-print bg-white px-5 py-3.5 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Selector de Macro-Región">
+          <span className="text-xs font-black text-slate-800 flex items-center gap-1.5 mr-1">
+            <MapPin className="w-4 h-4 text-blue-600" aria-hidden="true" /> Macro-Región:
           </span>
-          {REGIONES_ORDEN.map((reg) => {
-            const activa = regionActiva === reg;
-            const habilitada = tieneMuestraCelda(reg, codigoSexo);
-            return (
-              <button
-                key={reg}
-                disabled={!habilitada}
-                onClick={() => habilitada && setRegionActiva(reg)}
-                title={!habilitada ? `Muestra insuficiente en ${REGIONES_INFO[reg]?.corto} para este perfil` : REGIONES_INFO[reg]?.nombre}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1 ${
-                  !habilitada
-                    ? 'bg-slate-100 text-slate-400 border border-slate-200 opacity-50 cursor-not-allowed'
-                    : activa
-                      ? 'bg-blue-600 text-white shadow-xs cursor-pointer'
-                      : 'bg-slate-50 text-slate-600 border border-slate-200 hover:border-slate-300 cursor-pointer'
-                }`}
-              >
-                {!habilitada && <Lock className="w-3 h-3" />}
-                {REGIONES_INFO[reg]?.corto || reg}
-              </button>
-            );
-          })}
+          <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+            {REGIONES_ORDEN.map((reg) => {
+              const activa = regionActiva === reg;
+              const habilitada = tieneMuestraCelda(reg, codigoSexo);
+              return (
+                <button
+                  key={reg}
+                  disabled={!habilitada}
+                  aria-pressed={activa}
+                  onClick={() => habilitada && setRegionActiva(reg)}
+                  title={!habilitada ? `Muestra INEGI insuficiente en ${REGIONES_INFO[reg]?.corto} para este perfil` : REGIONES_INFO[reg]?.nombre}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all active:scale-95 inline-flex items-center gap-1 ${
+                    !habilitada
+                      ? 'text-slate-400 opacity-50 cursor-not-allowed'
+                      : activa
+                        ? 'bg-blue-600 text-white shadow-xs cursor-pointer'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/70 cursor-pointer'
+                  }`}
+                >
+                  {!habilitada && <Lock className="w-3 h-3" aria-hidden="true" />}
+                  {REGIONES_INFO[reg]?.corto || reg}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between md:justify-end gap-3">
+        <div className="flex flex-wrap items-center justify-between xl:justify-end gap-3">
           {nEncuestadosActivos > 0 && (
-            <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg hidden xl:inline-flex items-center gap-1.5">
-              Muestra INEGI: <strong className="text-slate-800">{nEncuestadosActivos.toLocaleString('es-MX')} encuestados</strong>
+            <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200/70 inline-flex items-center gap-1.5">
+              Muestra INEGI: <strong className="text-slate-900 font-black">{nEncuestadosActivos.toLocaleString('es-MX')} encuestados</strong>
             </span>
           )}
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-blue-600" /> Perfil:
+          <div className="flex items-center gap-2" role="group" aria-label="Selector de Perspectiva de Género">
+            <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-blue-600" aria-hidden="true" /> Perfil:
             </span>
             <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
               {([
@@ -2039,17 +2398,18 @@ function CarreraPerfilContenido() {
                   <button
                     key={op.id}
                     disabled={!disp}
+                    aria-pressed={act}
                     onClick={() => disp && setModoGenero(op.id)}
-                    title={!disp ? `Muestra insuficiente para ${op.label} en ${REGIONES_INFO[regionActiva]?.corto}` : op.label}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1 ${
+                    title={!disp ? `Muestra INEGI insuficiente para ${op.label} en ${REGIONES_INFO[regionActiva]?.corto}` : op.label}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all active:scale-95 inline-flex items-center gap-1 ${
                       !disp
                         ? 'text-slate-400 opacity-50 cursor-not-allowed'
                         : act
                           ? 'bg-slate-900 text-white shadow-xs cursor-pointer'
-                          : 'text-slate-600 hover:text-slate-900 cursor-pointer'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white/70 cursor-pointer'
                     }`}
                   >
-                    {!disp && <Lock className="w-3 h-3" />}
+                    {!disp && <Lock className="w-3 h-3" aria-hidden="true" />}
                     {op.label}
                   </button>
                 );
@@ -2059,15 +2419,15 @@ function CarreraPerfilContenido() {
         </div>
       </div>
 
-      {/* PISO DE SÍNTESIS EJECUTIVA V2 (PROS/CONTRAS) + SIMULADOR DE ROI MEXICANO */}
+      {/* PISO DE SÍNTESIS EJECUTIVA V2 + SIMULADOR DE ROI CON 3 ESCENARIOS SIMULTÁNEOS */}
       <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        <div className="lg:col-span-7 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-7 bg-gradient-to-b from-white via-white to-slate-50/70 rounded-2xl p-6 border border-slate-200/90 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between gap-4">
           <div>
             <div className="flex items-center justify-between gap-2 mb-3 pb-3 border-b border-slate-100">
               <div>
                 <h2 className="text-base md:text-lg font-black text-slate-900 flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-blue-600" />
+                  <Sparkles className="w-5 h-5 text-blue-600" aria-hidden="true" />
                   Diagnóstico Ejecutivo en {REGIONES_INFO[regionActiva]?.corto}
                 </h2>
                 <p className="text-xs text-slate-500">
@@ -2080,30 +2440,30 @@ function CarreraPerfilContenido() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-emerald-50/40 border border-emerald-200/80 rounded-xl p-4">
+              <div className="bg-emerald-50/50 border border-emerald-200/80 rounded-xl p-4">
                 <h3 className="text-xs font-black uppercase tracking-wider text-emerald-800 flex items-center gap-1.5 mb-2.5">
-                  <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                  <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
                   Fortalezas Comprobadas
                 </h3>
                 <ul className="space-y-2.5 text-xs text-slate-700">
                   {diagnosticoEjecutivo.topPros.map((pro, idx) => (
                     <li key={idx} className="flex items-start gap-2 leading-snug">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 mt-1.5 shrink-0" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 mt-1.5 shrink-0" aria-hidden="true" />
                       <span className="font-medium">{pro}</span>
                     </li>
                   ))}
                 </ul>
               </div>
 
-              <div className="bg-amber-50/40 border border-amber-200/80 rounded-xl p-4">
+              <div className="bg-amber-50/50 border border-amber-200/80 rounded-xl p-4">
                 <h3 className="text-xs font-black uppercase tracking-wider text-amber-900 flex items-center gap-1.5 mb-2.5">
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" aria-hidden="true" />
                   Riesgos y Fricciones a Considerar
                 </h3>
                 <ul className="space-y-2.5 text-xs text-slate-700">
                   {diagnosticoEjecutivo.topContras.map((contra, idx) => (
                     <li key={idx} className="flex items-start gap-2 leading-snug">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" aria-hidden="true" />
                       <span className="font-medium">{contra}</span>
                     </li>
                   ))}
@@ -2111,56 +2471,129 @@ function CarreraPerfilContenido() {
               </div>
             </div>
           </div>
+
+          <div className="pt-3 border-t border-slate-100">
+            <div className="flex items-center justify-between text-[11px] mb-2">
+              <span className="font-black uppercase tracking-wider text-slate-400">
+                Desglose de la Calificación Integral DataROI ({scoreEnteroActual}/100)
+              </span>
+              <span className={`font-black ${semaforoScoreActual.textClass}`}>
+                Grado {semaforoScoreActual.grado} · {semaforoScoreActual.etiqueta}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {desglose6PilaresScore.map((pilar, idx) => (
+                <div key={idx} className="bg-white px-2.5 py-2 rounded-xl border border-slate-200/80 shadow-2xs">
+                  <div className="flex items-center justify-between text-[10.5px] mb-1">
+                    <span className="font-bold text-slate-700 truncate">{pilar.label}</span>
+                    <span className="font-black text-slate-900">{pilar.val}/100</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        pilar.val >= 70
+                          ? 'bg-gradient-to-r from-emerald-600 to-teal-400'
+                          : pilar.val >= 55
+                            ? 'bg-gradient-to-r from-blue-600 to-indigo-500'
+                            : 'bg-gradient-to-r from-amber-500 to-orange-400'
+                      }`}
+                      style={{ width: `${Math.max(8, Math.min(100, pilar.val))}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* SIMULADOR DE RETORNO (ROI) CON ARQUETIPOS MEXICANOS + GAVETA PERSONALIZABLE */}
-        <div className="lg:col-span-5 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
+        {/* SIMULADOR DE RETORNO (ROI) CON 3 ARQUETIPOS EN VIVO + SLIDERS COLOREADOS */}
+        <div className="lg:col-span-5 bg-gradient-to-b from-white via-white to-slate-50/70 rounded-2xl p-6 border border-slate-200/90 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between">
           <div>
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center justify-between gap-2 mb-3 pb-3 border-b border-slate-100">
               <div>
                 <h2 className="text-base md:text-lg font-black text-slate-900 flex items-center gap-2">
-                  <Calculator className="w-5 h-5 text-blue-600" />
+                  <Calculator className="w-5 h-5 text-blue-600" aria-hidden="true" />
                   Simulador de Retorno (ROI)
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Años de trabajo para recuperar tu inversión con el bono sobre Prepa.
+                  Compara de un vistazo los 3 escenarios o personaliza tu beca y colegiatura.
                 </p>
               </div>
 
-              <div className="no-print inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-                {([
-                  { id: 'publica' as TipoUniversidadROI, label: 'Pública' },
-                  { id: 'privada_media' as TipoUniversidadROI, label: 'Priv. Media' },
-                  { id: 'privada_elite' as TipoUniversidadROI, label: 'Priv. Élite' },
-                  { id: 'personalizada' as TipoUniversidadROI, label: '⚙️ Ajustar' }
-                ]).map((t) => {
-                  const activo = t.id === 'personalizada' ? (tipoUniROI === 'personalizada' || gavetaROIAbierta) : (tipoUniROI === t.id && !gavetaROIAbierta);
-                  return (
-                    <button
-                      key={t.id}
-                      onClick={() => {
-                        if (t.id === 'personalizada') {
-                          setTipoUniROI('personalizada');
-                          setGavetaROIAbierta(prev => !prev);
-                        } else {
-                          seleccionarTipoUni(t.id);
-                        }
-                      }}
-                      className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                        activo ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {t.label}
-                    </button>
-                  );
-                })}
-              </div>
+              <button
+                type="button"
+                aria-pressed={gavetaROIAbierta || tipoUniROI === 'personalizada'}
+                onClick={() => {
+                  setTipoUniROI('personalizada');
+                  setGavetaROIAbierta(prev => !prev);
+                }}
+                className={`no-print inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black border transition-all active:scale-95 cursor-pointer shrink-0 ${
+                  gavetaROIAbierta || tipoUniROI === 'personalizada'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                    : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                }`}
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{gavetaROIAbierta ? 'Ocultar ajuste' : 'Personalizar'}</span>
+              </button>
+            </div>
+
+            <div className="no-print grid grid-cols-3 gap-2 mb-3.5">
+              {([
+                {
+                  id: 'publica' as TipoUniversidadROI,
+                  titulo: 'Univ. Pública',
+                  anios: aniosArqPublica,
+                  inv: invArqPublica
+                },
+                {
+                  id: 'privada_media' as TipoUniversidadROI,
+                  titulo: 'Priv. Media',
+                  anios: aniosArqPrivMedia,
+                  inv: invArqPrivMedia
+                },
+                {
+                  id: 'privada_elite' as TipoUniversidadROI,
+                  titulo: 'Priv. Élite',
+                  anios: aniosArqPrivElite,
+                  inv: invArqPrivElite
+                }
+              ]).map((esc) => {
+                const activo = tipoUniROI === esc.id && !gavetaROIAbierta;
+                return (
+                  <button
+                    key={esc.id}
+                    type="button"
+                    aria-pressed={activo}
+                    onClick={() => seleccionarTipoUni(esc.id)}
+                    className={`p-2.5 rounded-xl border text-left transition-all active:scale-95 cursor-pointer flex flex-col justify-between ${
+                      activo
+                        ? 'bg-slate-900 text-white border-slate-900 shadow-sm ring-2 ring-slate-900/15'
+                        : 'bg-white text-slate-800 border-slate-200 hover:border-blue-400'
+                    }`}
+                  >
+                    <span className={`text-[10px] font-extrabold uppercase tracking-wider block ${
+                      activo ? 'text-blue-300' : 'text-slate-400'
+                    }`}>
+                      {esc.titulo}
+                    </span>
+                    <span className="text-sm font-black block mt-0.5">
+                      {esc.anios === null ? 'Negativo' : `${esc.anios} años`}
+                    </span>
+                    <span className={`text-[10px] font-semibold block mt-0.5 truncate ${
+                      activo ? 'text-slate-300' : 'text-slate-500'
+                    }`}>
+                      Inv: {formatoMonedaCorta(esc.inv)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex items-baseline justify-between gap-2 mb-1.5">
               <div>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Recuperación Directa de Bolsillo
+                  Recuperación Directa de Bolsillo ({tipoUniROI === 'personalizada' ? 'Personalizada' : tipoUniROI === 'publica' ? 'Pública' : tipoUniROI === 'privada_media' ? 'Priv. Media' : 'Priv. Élite'})
                 </span>
                 <span className="text-3xl font-black text-slate-900">
                   {formatearAniosROI(aniosRetornoBolsillo)}
@@ -2171,14 +2604,13 @@ function CarreraPerfilContenido() {
               </span>
             </div>
 
-            {/* Receta explícita del supuesto activo */}
-            <p className="text-[11px] text-slate-500 font-medium mb-2 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-200/70">
+            <p className="text-[11px] text-slate-600 font-medium mb-2 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-200/70">
               {supuestoROICortoTexto}
             </p>
 
-            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden my-2">
+            <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden my-2 border border-slate-200/60">
               <div
-                className={`h-full rounded-full transition-all duration-300 ${semaforoROI.colorBarra}`}
+                className={`h-full rounded-full transition-all duration-500 ${semaforoROI.colorBarra}`}
                 style={{
                   width: aniosRetornoBolsillo === null
                     ? '100%'
@@ -2187,42 +2619,32 @@ function CarreraPerfilContenido() {
               />
             </div>
 
-            {/* GAVETA COMPACTA DE AJUSTE A LA REALIDAD MEXICANA (PROGRESSIVE DISCLOSURE) */}
             {gavetaROIAbierta && (
               <div className="no-print my-3 p-3.5 rounded-xl bg-blue-50/50 border border-blue-200/80 space-y-3 animate-in fade-in duration-150">
-                <div className="flex items-center justify-between text-xs font-black text-slate-900">
-                  <span className="flex items-center gap-1.5">
-                    <SlidersHorizontal className="w-3.5 h-3.5 text-blue-600" />
-                    Personalizar a mi Universidad en México
-                  </span>
-                  <button
-                    onClick={() => setGavetaROIAbierta(false)}
-                    className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
-                  >
-                    Listo
-                  </button>
-                </div>
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
                   <div>
                     <div className="flex justify-between font-bold text-slate-700 mb-1">
-                      <span>Colegiatura Mensual:</span>
+                      <span>Colegiatura / Cuota:</span>
                       <span className="text-blue-700 font-black">{formatoMoneda(colegiaturaMensualROI)}/mes</span>
                     </div>
                     <input
                       type="range"
+                      aria-label="Colegiatura o cuota mensual en pesos"
                       min={0}
                       max={28000}
-                      step={500}
+                      step={300}
                       value={colegiaturaMensualROI}
                       onChange={(e) => {
                         setTipoUniROI('personalizada');
                         setColegiaturaMensualROI(Number(e.target.value));
                       }}
-                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      style={{
+                        background: `linear-gradient(to right, #2563EB 0%, #2563EB ${pctSliderColegiatura}%, #E2E8F0 ${pctSliderColegiatura}%, #E2E8F0 100%)`
+                      }}
+                      className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-blue-600"
                     />
                     <span className="text-[10px] text-slate-400 block mt-0.5">
-                      $0 = Pública · Cobra 5 meses + 1 reinscripción/sem
+                      $0 = Beca 100% · $300/mes = Pública
                     </span>
                   </div>
 
@@ -2233,6 +2655,7 @@ function CarreraPerfilContenido() {
                     </div>
                     <input
                       type="range"
+                      aria-label="Duración de la carrera en semestres"
                       min={6}
                       max={14}
                       step={1}
@@ -2241,10 +2664,13 @@ function CarreraPerfilContenido() {
                         setTipoUniROI('personalizada');
                         setSemestresROI(Number(e.target.value));
                       }}
-                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      style={{
+                        background: `linear-gradient(to right, #2563EB 0%, #2563EB ${pctSliderSemestres}%, #E2E8F0 ${pctSliderSemestres}%, #E2E8F0 100%)`
+                      }}
+                      className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-blue-600"
                     />
                     <span className="text-[10px] text-slate-400 block mt-0.5">
-                      Estándar: 9 sem · Ejecutiva: 6–7 · Medicina: 12
+                      Estándar: 9 sem · Medicina: 12 sem
                     </span>
                   </div>
 
@@ -2255,15 +2681,19 @@ function CarreraPerfilContenido() {
                     </div>
                     <input
                       type="range"
+                      aria-label="Costo de titulación y cédula profesional"
                       min={0}
                       max={45000}
-                      step={1500}
+                      step={500}
                       value={costoTitulacionROI}
                       onChange={(e) => {
                         setTipoUniROI('personalizada');
                         setCostoTitulacionROI(Number(e.target.value));
                       }}
-                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      style={{
+                        background: `linear-gradient(to right, #2563EB 0%, #2563EB ${pctSliderTitulacion}%, #E2E8F0 ${pctSliderTitulacion}%, #E2E8F0 100%)`
+                      }}
+                      className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-blue-600"
                     />
                   </div>
 
@@ -2277,12 +2707,14 @@ function CarreraPerfilContenido() {
                       ]).map(op => (
                         <button
                           key={op.val}
+                          type="button"
+                          aria-pressed={nivelTrabajoEstudio === op.val}
                           onClick={() => {
                             setTipoUniROI('personalizada');
                             setNivelTrabajoEstudio(op.val);
                           }}
-                          className={`py-1 rounded text-[10px] font-bold cursor-pointer ${
-                            nivelTrabajoEstudio === op.val ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                          className={`py-1 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                            nivelTrabajoEstudio === op.val ? 'bg-blue-600 text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'
                           }`}
                         >
                           {op.label}
@@ -2294,7 +2726,7 @@ function CarreraPerfilContenido() {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-2.5 mt-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200/70">
+            <div className="grid grid-cols-2 gap-2.5 mt-2 text-xs bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
               <div>
                 <span className="text-[10.5px] text-slate-400 block">Inversión Directa de Bolsillo:</span>
                 <strong className="text-slate-900 font-black">{formatoMoneda(inversionDirectaBolsillo)} MXN</strong>
@@ -2305,7 +2737,7 @@ function CarreraPerfilContenido() {
                   {gananciaNeta10Anios >= 0 ? `+${formatoMoneda(gananciaNeta10Anios)}` : formatoMoneda(gananciaNeta10Anios)}
                 </strong>
               </div>
-              <div className="col-span-2 pt-2 border-t border-slate-200/70 flex items-center justify-between text-[11px]">
+              <div className="col-span-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
                 <span className="text-slate-500">
                   ROI Económico Total (incl. {formatoMoneda(costoOportunidadNeto)} de costo de oportunidad):
                 </span>
@@ -2319,7 +2751,7 @@ function CarreraPerfilContenido() {
 
       </div>
 
-      {/* PISO 2: CURVA SALARIAL (65%) + HUELLA ESTRUCTURAL (35%) */}
+      {/* PISO 2: CURVA SALARIAL (65%) + HUELLA ESTRUCTURAL CON GRADIENTE RADIAL Y VÉRTICES (35%) */}
       <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         <div className="lg:col-span-8">
@@ -2333,22 +2765,28 @@ function CarreraPerfilContenido() {
           />
         </div>
 
-        <div className="lg:col-span-4 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-4 bg-gradient-to-b from-white via-white to-slate-50/70 rounded-2xl p-6 border border-slate-200/90 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between">
           <div>
             <h2 className="text-base md:text-lg font-black text-slate-900 flex items-center gap-2 mb-1">
-              <Compass className="w-5 h-5 text-blue-600" />
+              <Compass className="w-5 h-5 text-blue-600" aria-hidden="true" />
               Huella Estructural (6 Pilares)
             </h2>
             <p className="text-xs text-slate-500 mb-2">
-              Silueta de la carrera (<strong className="text-blue-600">azul</strong>) frente al promedio dinámico de {REGIONES_INFO[regionActiva]?.corto} (<strong className="text-slate-600">gris punteado</strong>).
+              Silueta de la carrera (<strong className="text-blue-600">azul con nodos</strong>) frente al promedio dinámico de {REGIONES_INFO[regionActiva]?.corto} (<strong className="text-slate-600">gris punteado</strong>).
             </p>
           </div>
 
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart cx="50%" cy="50%" outerRadius="70%" data={datosRadar}>
-                <PolarGrid stroke="#E2E8F0" />
-                <PolarAngleAxis dataKey="eje" tick={{ fill: '#334155', fontSize: 10.5, fontWeight: 700 }} />
+                <defs>
+                  <radialGradient id="gradienteRadarCarrera" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.12} />
+                    <stop offset="100%" stopColor="#2563EB" stopOpacity={0.42} />
+                  </radialGradient>
+                </defs>
+                <PolarGrid stroke="#CBD5E1" />
+                <PolarAngleAxis dataKey="eje" tick={{ fill: '#1E293B', fontSize: 10.5, fontWeight: 800 }} />
                 <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
                 <Radar
                   name="Media Contextual"
@@ -2357,15 +2795,16 @@ function CarreraPerfilContenido() {
                   strokeWidth={2}
                   strokeDasharray="4 4"
                   fill="#94A3B8"
-                  fillOpacity={0.15}
+                  fillOpacity={0.14}
                 />
                 <Radar
                   name="Esta Carrera"
                   dataKey="Carrera"
                   stroke="#2563EB"
                   strokeWidth={3}
-                  fill="#2563EB"
-                  fillOpacity={0.28}
+                  fill="url(#gradienteRadarCarrera)"
+                  fillOpacity={1}
+                  dot={{ r: 4, fill: '#2563EB', stroke: '#FFFFFF', strokeWidth: 1.8 }}
                 />
                 <Legend wrapperStyle={{ fontSize: '11.5px', fontWeight: 700 }} />
                 <RechartsTooltip />
@@ -2374,55 +2813,69 @@ function CarreraPerfilContenido() {
           </div>
 
           <div className="pt-3 border-t border-slate-100 grid grid-cols-3 gap-2 text-center text-[11px]">
-            {datosRadar.map((d, idx) => (
-              <div key={idx} className="bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
-                <span className="text-slate-500 font-semibold block truncate">{d.nombreCorto}</span>
-                <span className={`font-black ${
-                  d.diff >= 3 ? 'text-emerald-700' : d.diff <= -3 ? 'text-amber-700' : 'text-slate-700'
-                }`}>
-                  {d.diff > 0 ? `+${d.diff}` : d.diff} vs. Media
-                </span>
-              </div>
-            ))}
+            {datosRadar.map((d, idx) => {
+              const cardSemClass =
+                d.diff >= 3
+                  ? 'bg-emerald-50/70 border-emerald-200/80 text-emerald-800'
+                  : d.diff <= -3
+                    ? 'bg-amber-50/70 border-amber-200/80 text-amber-900'
+                    : 'bg-slate-50 border-slate-200/70 text-slate-700';
+              return (
+                <div key={idx} className={`px-2 py-1.5 rounded-xl border transition-colors ${cardSemClass}`}>
+                  <span className="opacity-75 font-bold block truncate text-[10px]">{d.nombreCorto}</span>
+                  <span className="font-black">
+                    {d.diff > 0 ? `+${d.diff}` : d.diff} vs. Media
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
       </div>
 
-      {/* PISO 3: COLUMNAS VERTICALES REGIONALES (50%) + CALIDAD Y MOSAICO (50%) */}
+      {/* PISO 3: TERMÓMETROS REGIONALES CON SCORE INMUTABLE (50%) + CALIDAD OIT Y MOSAICO BENTO (50%) */}
       <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        <div className="lg:col-span-6 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-6 bg-gradient-to-b from-white via-white to-slate-50/70 rounded-2xl p-6 border border-slate-200/90 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between">
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
               <h3 className="text-base md:text-lg font-black text-slate-900 flex items-center gap-2">
-                <MapPin className="w-5 h-5 text-blue-600" />
+                <MapPin className="w-5 h-5 text-blue-600" aria-hidden="true" />
                 Comparativa por Macro-Región
               </h3>
 
               <div className="no-print inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
                 <button
+                  type="button"
+                  aria-pressed={metricaRegionalVista === 'sueldo'}
                   onClick={() => setMetricaRegionalVista('sueldo')}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    metricaRegionalVista === 'sueldo' ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                  className={`px-3 py-1 rounded-lg text-xs font-black transition-all active:scale-95 cursor-pointer ${
+                    metricaRegionalVista === 'sueldo'
+                      ? 'bg-blue-600 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Vista: Salario
+                  Vista: Salario ($)
                 </button>
                 <button
+                  type="button"
+                  aria-pressed={metricaRegionalVista === 'formalidad'}
                   onClick={() => setMetricaRegionalVista('formalidad')}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    metricaRegionalVista === 'formalidad' ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                  className={`px-3 py-1 rounded-lg text-xs font-black transition-all active:scale-95 cursor-pointer ${
+                    metricaRegionalVista === 'formalidad'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Vista: Formalidad
+                  Vista: Formalidad (%)
                 </button>
               </div>
             </div>
-            <p className="text-xs text-slate-500 mb-5">
+            <p className="text-xs text-slate-500 mb-4">
               {metricaRegionalVista === 'sueldo'
-                ? 'Haz clic en cualquier región habilitada para filtrar el reporte. La línea negra horizontal señala el sueldo base de Preparatoria.'
-                : 'Haz clic en cualquier región habilitada para filtrar el reporte. La línea negra horizontal señala la formalidad base de Preparatoria.'}
+                ? 'Haz clic en cualquier región para auditarla. Los termómetros azules comparan el sueldo frente a la línea negra de Preparatoria.'
+                : 'Haz clic en cualquier región para auditarla. Los termómetros esmeralda comparan la formalidad frente a la base de Preparatoria.'}
             </p>
 
             <div className="grid grid-cols-5 gap-2.5 sm:gap-3 pt-1">
@@ -2430,6 +2883,12 @@ function CarreraPerfilContenido() {
                 const esActiva = regionActiva === item.region;
                 const esVistaSueldo = metricaRegionalVista === 'sueldo';
                 const disp = item.celdaDisponible;
+
+                const esLiderReg =
+                  disp &&
+                  (esVistaSueldo
+                    ? item.sueldoCarrera === maxSueldoLiderReg
+                    : item.formalidadPct === maxFormalidadLiderReg);
 
                 const alturaColumnaPct = esVistaSueldo
                   ? Math.max(8, Math.min(96, (item.sueldoCarrera / techoDinamicoSueldoRegional) * 100))
@@ -2443,9 +2902,9 @@ function CarreraPerfilContenido() {
                   ? 'Sin muestra'
                   : esVistaSueldo
                     ? formatoMoneda(item.sueldoCarrera)
-                    : `${item.formalidadPct}%`;
+                    : `${Math.round(item.formalidadPct)}%`;
 
-                const diffValor = esVistaSueldo ? item.premioPct : item.diffFormalidadPts;
+                const diffValor = esVistaSueldo ? Math.round(item.premioPct) : Math.round(item.diffFormalidadPts);
                 const textoBadgeDiff = !disp
                   ? 'N/D'
                   : esVistaSueldo
@@ -2454,27 +2913,41 @@ function CarreraPerfilContenido() {
 
                 const textoRefPrepa = esVistaSueldo
                   ? `Prepa: ${formatoMonedaCorta(item.sueldoPrepa)}`
-                  : `Prepa: ${item.formalidadPrepaPct}%`;
+                  : `Prepa: ${Math.round(item.formalidadPrepaPct)}%`;
 
-                const textoComplementarioPie = !disp
-                  ? 'Muestra insuf.'
-                  : `Score: ${item.scoreDataROIRegional}`;
+                const claseGradienteBarra = esVistaSueldo
+                  ? esActiva
+                    ? 'bg-gradient-to-t from-blue-800 via-blue-600 to-sky-400 shadow-sm'
+                    : 'bg-gradient-to-t from-blue-600/80 via-blue-500/75 to-sky-300/75 group-hover:from-blue-700 group-hover:to-sky-400'
+                  : esActiva
+                    ? 'bg-gradient-to-t from-emerald-800 via-emerald-600 to-teal-300 shadow-sm'
+                    : 'bg-gradient-to-t from-emerald-600/80 via-emerald-500/75 to-teal-300/75 group-hover:from-emerald-700 group-hover:to-teal-400';
 
                 return (
                   <button
                     key={item.region}
+                    type="button"
                     disabled={!disp}
                     onClick={() => disp && setRegionActiva(item.region)}
                     title={!disp ? `Muestra insuficiente en ${item.nombreCorto}` : `${item.nombreCorto} (${item.estados}) · Score DataROI: ${item.scoreDataROIRegional}/100`}
-                    className={`group flex flex-col items-center justify-between p-2.5 sm:p-3 rounded-2xl border transition-all ${
+                    className={`group flex flex-col items-center justify-between p-2.5 sm:p-3 rounded-2xl border transition-all duration-200 ${
                       !disp
                         ? 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'
                         : esActiva
-                          ? 'border-blue-600 bg-blue-50/40 ring-2 ring-blue-600/15 shadow-2xs cursor-pointer'
-                          : 'border-slate-200 hover:border-blue-300 bg-slate-50/40 hover:bg-white cursor-pointer'
+                          ? esVistaSueldo
+                            ? 'border-blue-600 bg-blue-50/40 ring-2 ring-blue-600/15 shadow-xs -translate-y-0.5 cursor-pointer'
+                            : 'border-emerald-600 bg-emerald-50/40 ring-2 ring-emerald-600/15 shadow-xs -translate-y-0.5 cursor-pointer'
+                          : 'border-slate-200 hover:border-blue-300 bg-slate-50/40 hover:bg-white hover:-translate-y-0.5 cursor-pointer'
                     }`}
                   >
                     <div className="text-center w-full mb-2">
+                      <div className="h-4 flex items-center justify-center mb-0.5">
+                        {esLiderReg && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[9px] font-black uppercase tracking-wider">
+                            <Crown className="w-2.5 h-2.5 text-amber-600" aria-hidden="true" /> Líder
+                          </span>
+                        )}
+                      </div>
                       <span className="block text-xs sm:text-sm font-black text-slate-900 tracking-tight truncate">
                         {valorPrincipalTexto}
                       </span>
@@ -2489,15 +2962,11 @@ function CarreraPerfilContenido() {
                       </span>
                     </div>
 
-                    <div className="w-full h-40 bg-slate-100/90 rounded-xl relative p-1.5 border border-slate-200/50">
+                    <div className="w-full h-38 bg-slate-100/90 rounded-xl relative p-1.5 border border-slate-200/60">
                       <div className="relative w-full h-full flex items-end justify-center">
                         {disp && (
                           <div
-                            className={`w-full rounded-lg transition-all duration-500 ${
-                              esActiva
-                                ? 'bg-blue-600 shadow-xs'
-                                : 'bg-blue-400/75 group-hover:bg-blue-500/85'
-                            }`}
+                            className={`w-full rounded-lg transition-all duration-500 ${claseGradienteBarra}`}
                             style={{ height: `${alturaColumnaPct}%` }}
                           />
                         )}
@@ -2512,15 +2981,17 @@ function CarreraPerfilContenido() {
 
                     <div className="text-center w-full mt-2.5 pt-2 border-t border-slate-200/70">
                       <span className={`block text-xs font-black truncate ${
-                        esActiva ? 'text-blue-700' : 'text-slate-800'
+                        esActiva ? (esVistaSueldo ? 'text-blue-700' : 'text-emerald-700') : 'text-slate-800'
                       }`}>
                         {item.nombreCorto}
                       </span>
                       <span className="block text-[10px] font-semibold text-slate-500 mt-0.5 truncate">
                         {textoRefPrepa}
                       </span>
-                      <span className="block text-[10px] font-bold text-blue-600 mt-0.5 truncate">
-                        {textoComplementarioPie}
+                      <span className={`block text-[10px] font-bold mt-0.5 truncate ${
+                        esVistaSueldo ? 'text-blue-600' : 'text-emerald-600'
+                      }`}>
+                        {!disp ? 'Muestra insuf.' : `Score: ${item.scoreDataROIRegional}/100`}
                       </span>
                     </div>
                   </button>
@@ -2531,7 +3002,7 @@ function CarreraPerfilContenido() {
 
           <div className="mt-5 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
             <span className="flex items-center gap-1.5 font-semibold text-slate-600">
-              <span className="inline-block w-3.5 h-1 bg-slate-950 rounded-full" />
+              <span className="inline-block w-3.5 h-1 bg-slate-950 rounded-full" aria-hidden="true" />
               Línea negra horizontal = Base Preparatoria en esa región ({metricaRegionalVista === 'sueldo' ? 'Salario' : 'Formalidad'})
             </span>
             {regionActiva !== 'nacional' && (
@@ -2545,51 +3016,102 @@ function CarreraPerfilContenido() {
           </div>
         </div>
 
-        {/* PISO 3 DERECHA: CALIDAD OIT + MOSAICO PROPORCIONAL */}
-        <div className="lg:col-span-6 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between space-y-6">
+        {/* PISO 3 DERECHA: CALIDAD OIT CON HOVER LINKING + MOSAICO BENTO */}
+        <div className="lg:col-span-6 bg-gradient-to-b from-white via-white to-slate-50/70 rounded-2xl p-6 border border-slate-200/90 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between space-y-6">
           
           <div>
             <div className="flex items-center justify-between gap-2 mb-1">
               <h3 className="text-base md:text-lg font-black text-slate-900 flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-blue-600" />
+                <CheckCircle2 className="w-5 h-5 text-blue-600" aria-hidden="true" />
                 Calidad de Ocupación ({ocupadosCount.toLocaleString('es-MX')} ocupados)
               </h3>
               <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">
-                Desempleo abierto: {statsMercado ? `${statsMercado.tasaDesempleo.toFixed(1)}%` : '0%'} ({desempleadosCount.toLocaleString('es-MX')})
+                Desempleo: {desempleoSeguro.toFixed(1)}% ({desempleadosCount.toLocaleString('es-MX')})
               </span>
             </div>
-            <p className="text-xs text-slate-500 mb-4">
-              El estándar de <strong>Empleo de Calidad OIT</strong> exige contar simultáneamente con contrato escrito y fondo de retiro sin necesidad de pluriempleo (<strong className="text-slate-800">{tasaFormalidadPct}% formalidad total</strong>).
+            <p className="text-xs text-slate-500 mb-3.5">
+              Pasa el cursor sobre la barra o las tarjetas para inspeccionar cada segmento (<strong className="text-slate-800">{tasaFormalidadPct}% formalidad total</strong>).
             </p>
 
-            <div className="w-full h-5 rounded-xl overflow-hidden flex bg-slate-100 mb-3 p-0.5 gap-0.5">
-              <div style={{ width: `${tasaEmpleoCalidadPct}%` }} className="h-full bg-blue-600 rounded-l-lg transition-all duration-500" />
-              <div style={{ width: `${tasaFormalBasicoPct}%` }} className="h-full bg-sky-400 transition-all duration-500" />
-              <div style={{ width: `${tasaInformalidadPct}%` }} className="h-full bg-slate-400 rounded-r-lg transition-all duration-500" />
+            <div
+              className="w-full h-6 rounded-xl overflow-hidden flex bg-slate-100 mb-3 p-0.5 gap-0.5 border border-slate-200/70"
+              onMouseLeave={() => setSegmentoOITHover(null)}
+            >
+              <div
+                onMouseEnter={() => setSegmentoOITHover('calidad')}
+                style={{ width: `${tasaEmpleoCalidadPct}%` }}
+                className={`h-full bg-gradient-to-r from-blue-700 to-blue-500 rounded-l-lg transition-all duration-300 cursor-pointer ${
+                  segmentoOITHover && segmentoOITHover !== 'calidad' ? 'opacity-45' : 'opacity-100'
+                }`}
+              />
+              <div
+                onMouseEnter={() => setSegmentoOITHover('basico')}
+                style={{ width: `${tasaFormalBasicoPct}%` }}
+                className={`h-full bg-gradient-to-r from-sky-400 to-cyan-300 transition-all duration-300 cursor-pointer ${
+                  segmentoOITHover && segmentoOITHover !== 'basico' ? 'opacity-45' : 'opacity-100'
+                }`}
+              />
+              <div
+                onMouseEnter={() => setSegmentoOITHover('informal')}
+                style={{ width: `${tasaInformalidadPct}%` }}
+                className={`h-full bg-slate-400 rounded-r-lg transition-all duration-300 cursor-pointer ${
+                  segmentoOITHover && segmentoOITHover !== 'informal' ? 'opacity-45' : 'opacity-100'
+                }`}
+              />
             </div>
 
-            <div className="grid grid-cols-3 gap-3 text-xs">
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+            <div
+              className="grid grid-cols-3 gap-3 text-xs"
+              onMouseLeave={() => setSegmentoOITHover(null)}
+            >
+              <div
+                onMouseEnter={() => setSegmentoOITHover('calidad')}
+                className={`p-3 rounded-xl border transition-all duration-200 cursor-pointer ${
+                  segmentoOITHover === 'calidad'
+                    ? 'bg-blue-50/70 border-blue-500 ring-2 ring-blue-500/15 -translate-y-0.5 shadow-xs'
+                    : segmentoOITHover
+                      ? 'bg-slate-50 border-slate-200/80 opacity-60'
+                      : 'bg-white border-slate-200/80 hover:border-blue-300'
+                }`}
+              >
                 <div className="flex items-center gap-1.5 font-bold text-slate-700">
-                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0" aria-hidden="true" />
                   Empleo Calidad OIT
                 </div>
                 <p className="text-lg font-black text-blue-600 mt-0.5">{tasaEmpleoCalidadPct}%</p>
                 <p className="text-[11px] text-slate-400">{countCalidad.toLocaleString('es-MX')} ocupados</p>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+              <div
+                onMouseEnter={() => setSegmentoOITHover('basico')}
+                className={`p-3 rounded-xl border transition-all duration-200 cursor-pointer ${
+                  segmentoOITHover === 'basico'
+                    ? 'bg-sky-50/70 border-sky-500 ring-2 ring-sky-500/15 -translate-y-0.5 shadow-xs'
+                    : segmentoOITHover
+                      ? 'bg-slate-50 border-slate-200/80 opacity-60'
+                      : 'bg-white border-slate-200/80 hover:border-sky-300'
+                }`}
+              >
                 <div className="flex items-center gap-1.5 font-bold text-slate-700">
-                  <span className="w-2.5 h-2.5 rounded-full bg-sky-400 shrink-0" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-sky-400 shrink-0" aria-hidden="true" />
                   Formal Básico
                 </div>
                 <p className="text-lg font-black text-slate-900 mt-0.5">{tasaFormalBasicoPct}%</p>
                 <p className="text-[11px] text-slate-400">{countFormalBasico.toLocaleString('es-MX')} ocupados</p>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+              <div
+                onMouseEnter={() => setSegmentoOITHover('informal')}
+                className={`p-3 rounded-xl border transition-all duration-200 cursor-pointer ${
+                  segmentoOITHover === 'informal'
+                    ? 'bg-slate-100 border-slate-500 ring-2 ring-slate-500/15 -translate-y-0.5 shadow-xs'
+                    : segmentoOITHover
+                      ? 'bg-slate-50 border-slate-200/80 opacity-60'
+                      : 'bg-white border-slate-200/80 hover:border-slate-300'
+                }`}
+              >
                 <div className="flex items-center gap-1.5 font-bold text-slate-700">
-                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0" aria-hidden="true" />
                   Sector Informal
                 </div>
                 <p className="text-lg font-black text-slate-900 mt-0.5">{tasaInformalidadPct}%</p>
@@ -2600,7 +3122,7 @@ function CarreraPerfilContenido() {
 
           <div className="border-t border-slate-100 pt-5">
             <h3 className="text-base font-black text-slate-900 flex items-center gap-2 mb-1">
-              <Building2 className="w-4 h-4 text-blue-600" />
+              <Building2 className="w-4 h-4 text-blue-600" aria-hidden="true" />
               Mosaico de Empleadores (Composición 100%)
             </h3>
             <p className="text-xs text-slate-500 mb-3.5">
@@ -2624,13 +3146,14 @@ function CarreraPerfilContenido() {
                 return (
                   <div
                     key={i}
-                    className={`rounded-xl border flex flex-col justify-between transition-all ${spanClass} ${item.estilo.bg}`}
+                    className={`rounded-xl border flex flex-col justify-between transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${spanClass} ${item.estilo.bg}`}
                   >
                     <div className="flex items-center justify-between gap-1 mb-1.5">
-                      <span className={`text-[10px] font-extrabold uppercase tracking-wider ${item.estilo.sub}`}>
-                        #{i + 1} Sector
+                      <span className={`text-[10px] font-extrabold uppercase tracking-wider inline-flex items-center gap-1 ${item.estilo.sub}`}>
+                        {item.icon}
+                        <span>#{i + 1} Sector</span>
                       </span>
-                      <span className={`text-[10px] font-semibold ${item.estilo.sub}`}>
+                      <span className={`text-[10px] font-bold ${item.estilo.sub}`}>
                         {conteoPersonasSector.toLocaleString('es-MX')} prof.
                       </span>
                     </div>
@@ -2639,9 +3162,15 @@ function CarreraPerfilContenido() {
                       <p className="text-xl font-black leading-none mb-1">
                         {item.value.toFixed(1)}%
                       </p>
-                      <p className="text-[11px] sm:text-xs font-bold leading-snug">
+                      <p className="text-[11px] sm:text-xs font-bold leading-snug mb-2">
                         {item.name}
                       </p>
+                      <div className={`w-full h-1.5 rounded-full overflow-hidden ${item.estilo.track}`}>
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${item.estilo.bar}`}
+                          style={{ width: `${Math.max(6, Math.min(100, item.value))}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
                 );
@@ -2653,30 +3182,42 @@ function CarreraPerfilContenido() {
 
       </div>
 
-      {/* PISO 4: ESCALERA DE PRESTACIONES (50%) + EJE DIVERGENTE DE FRICCIONES Y MODALIDAD (50%) */}
+      {/* PISO 4: ESCALERA DE PRESTACIONES CON MARCADOR VECTORIAL SVG EXACTO (50%) + RIELES DIVERGENTES (50%) */}
       <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        <div className="lg:col-span-6 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-6 bg-gradient-to-b from-white via-white to-slate-50/70 rounded-2xl p-6 border border-slate-200/90 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between">
           <div>
             <h3 className="text-base md:text-lg font-black text-slate-900 flex items-center gap-2 mb-1">
-              <Award className="w-5 h-5 text-blue-600" />
+              <Award className="w-5 h-5 text-blue-600" aria-hidden="true" />
               Escalera de Prestaciones vs. Media Contextual Dinámica
             </h3>
             <p className="text-xs text-slate-500 mb-6">
-              Cobertura en esta carrera (<strong className="text-blue-600">barra azul</strong>) frente a la <strong>marca negra vertical</strong> calculada en vivo sobre las licenciaturas de {REGIONES_INFO[regionActiva]?.corto}.
+              Las barras <strong className="text-emerald-700">esmeralda</strong> superan a la media regional, las <strong className="text-blue-600">azules</strong> están en rango promedio y las <strong className="text-amber-700">ámbar</strong> presentan rezago frente a la marca negra vectorial.
             </p>
 
             <div className="space-y-5">
               {listaPrestaciones.map((item, idx) => {
                 const diff = Number((item.valor - item.mediaCtx).toFixed(1));
+                const colorBarraPrestacion =
+                  diff >= 2.0
+                    ? 'bg-gradient-to-r from-emerald-600 to-teal-400'
+                    : diff <= -2.0
+                      ? 'bg-gradient-to-r from-amber-500 to-orange-400'
+                      : 'bg-gradient-to-r from-blue-600 to-indigo-500';
+
+                const badgeDiffClass =
+                  diff >= 2.0
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/70'
+                    : diff <= -2.0
+                      ? 'bg-amber-50 text-amber-800 border border-amber-200/70'
+                      : 'bg-slate-100 text-slate-600';
+
                 return (
-                  <div key={idx}>
+                  <div key={idx} className="group">
                     <div className="flex items-center justify-between text-xs mb-1.5">
-                      <span className="font-bold text-slate-800">{item.nombre}</span>
+                      <span className="font-bold text-slate-800 group-hover:text-blue-700 transition-colors">{item.nombre}</span>
                       <div className="flex items-center gap-2">
-                        <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
-                          diff >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
-                        }`}>
+                        <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${badgeDiffClass}`}>
                           {diff >= 0 ? `+${diff}% vs. Media` : `${diff}% vs. Media`}
                         </span>
                         <span className="text-sm font-black text-slate-900 w-12 text-right">
@@ -2685,15 +3226,15 @@ function CarreraPerfilContenido() {
                       </div>
                     </div>
 
-                    <div className="w-full bg-slate-100 h-3 rounded-full relative overflow-visible">
+                    <div className="w-full bg-slate-100 h-3.5 rounded-full relative overflow-visible border border-slate-200/60">
                       <div
-                        className="h-full rounded-full bg-blue-600 transition-all duration-500"
-                        style={{ width: `${Math.max(0, Math.min(100, item.valor))}%` }}
+                        className={`h-full rounded-full transition-all duration-500 ${colorBarraPrestacion}`}
+                        style={{ width: `${Math.max(2, Math.min(100, item.valor))}%` }}
                       />
-                      <div
-                        title={`Media Universitaria Dinámica (${REGIONES_INFO[regionActiva]?.corto}): ${item.mediaCtx}%`}
-                        className="absolute -top-1 -bottom-1 w-1 bg-slate-950 rounded-full z-10"
-                        style={{ left: `${Math.max(0, Math.min(99, item.mediaCtx))}%` }}
+                      <MarcadorMediaVectorial
+                        leftPct={item.mediaCtx}
+                        titulo={`Media Universitaria Dinámica (${REGIONES_INFO[regionActiva]?.corto}): ${item.mediaCtx}%`}
+                        altura={24}
                       />
                     </div>
                   </div>
@@ -2704,28 +3245,31 @@ function CarreraPerfilContenido() {
 
           <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
             <span className="flex items-center gap-1.5 font-semibold text-slate-600">
-              <span className="inline-block w-1.5 h-3 bg-slate-950 rounded-full" />
-              Marca negra = Promedio Dinámico Licenciatura ({REGIONES_INFO[regionActiva]?.corto})
+              <svg width="10" height="14" viewBox="0 0 10 14" shapeRendering="geometricPrecision" aria-hidden="true">
+                <polygon points="5,0 9,4 5,8 1,4" fill="#0F172A" />
+                <rect x="4" y="4" width="2" height="10" rx="1" fill="#0F172A" />
+              </svg>
+              Marca negra con diamante = Promedio Dinámico Licenciatura ({REGIONES_INFO[regionActiva]?.corto})
             </span>
             <span>Fuente: Microdatos ENOE INEGI</span>
           </div>
         </div>
 
-        <div className="lg:col-span-6 bg-white rounded-2xl p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-6 bg-gradient-to-b from-white via-white to-slate-50/70 rounded-2xl p-6 border border-slate-200/90 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col justify-between">
           <div>
             <div className="flex flex-wrap items-start justify-between gap-2 mb-2.5">
               <div>
                 <h3 className="text-base md:text-lg font-black text-slate-900 flex items-center gap-2">
-                  <Scale className="w-5 h-5 text-blue-600" />
+                  <Scale className="w-5 h-5 text-blue-600" aria-hidden="true" />
                   Barreras de Entrada y Fricción Laboral
                 </h3>
                 <p className="text-xs text-slate-500">
-                  En las 5 métricas, ubicarse a la <strong className="text-emerald-700">izquierda de la línea negra central</strong> indica menor barrera o menor fricción que el promedio regional.
+                  En las 5 métricas, ubicarse en la <strong className="text-emerald-700">mitad izquierda verde</strong> indica menor barrera o menor fricción que el promedio regional.
                 </p>
               </div>
 
               <span className={`text-xs font-extrabold px-2.5 py-1 rounded-lg border ${social.cuadrante.badge}`}>
-                {social.cuadrante.nombre} ({social.scoreMovilidad}% Mérito)
+                {social.cuadrante.nombre} ({Math.round(social.scoreMovilidad)}% Mérito)
               </span>
             </div>
 
@@ -2803,29 +3347,29 @@ function CarreraPerfilContenido() {
             </span>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+              <div className="p-3 rounded-xl bg-white border border-slate-200/80 shadow-2xs">
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="font-bold text-slate-700 flex items-center gap-1.5">
-                    <Home className="w-3.5 h-3.5 text-blue-600" /> Trabajo Remoto
+                    <Home className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" /> Trabajo Remoto
                   </span>
                   <div className="flex items-center gap-1.5">
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                      diffHomeOffice >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-200/70 text-slate-600'
+                      diffHomeOffice >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
                     }`}>
                       {diffHomeOffice >= 0 ? `+${diffHomeOffice}%` : `${diffHomeOffice}%`} vs. Media
                     </span>
                     <span className="text-sm font-black text-slate-900">{pHomeOffice.toFixed(1)}%</span>
                   </div>
                 </div>
-                <div className="w-full bg-slate-200/80 h-2 rounded-full relative overflow-visible my-1.5">
+                <div className="w-full bg-slate-100 h-2.5 rounded-full relative overflow-visible my-2 border border-slate-200/60">
                   <div
-                    className="h-full rounded-full bg-blue-600"
+                    className="h-full rounded-full bg-gradient-to-r from-blue-600 to-indigo-500 transition-all duration-500"
                     style={{ width: `${Math.min(100, (pHomeOffice / 20) * 100)}%` }}
                   />
-                  <div
-                    title={`Media Contextual Dinámica: ${benchContextual.pct_home_office}%`}
-                    className="absolute -top-0.5 -bottom-0.5 w-1 bg-slate-950 rounded-full z-10"
-                    style={{ left: `${Math.min(98, (benchContextual.pct_home_office / 20) * 100)}%` }}
+                  <MarcadorMediaVectorial
+                    leftPct={Math.min(98, (benchContextual.pct_home_office / 20) * 100)}
+                    titulo={`Media Contextual Dinámica: ${benchContextual.pct_home_office}%`}
+                    altura={20}
                   />
                 </div>
                 <div className="flex justify-between text-[10px] text-slate-400">
@@ -2835,27 +3379,27 @@ function CarreraPerfilContenido() {
                 </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+              <div className="p-3 rounded-xl bg-white border border-slate-200/80 shadow-2xs">
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="font-bold text-slate-700 flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-blue-600" /> Medio Tiempo {'(<30h)'}
+                    <Clock className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" /> Medio Tiempo {'(<30h)'}
                   </span>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200/70 text-slate-600">
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
                       {diffMedioTiempo >= 0 ? `+${diffMedioTiempo}%` : `${diffMedioTiempo}%`} vs. Media
                     </span>
                     <span className="text-sm font-black text-slate-900">{pMedioTiempo.toFixed(1)}%</span>
                   </div>
                 </div>
-                <div className="w-full bg-slate-200/80 h-2 rounded-full relative overflow-visible my-1.5">
+                <div className="w-full bg-slate-100 h-2.5 rounded-full relative overflow-visible my-2 border border-slate-200/60">
                   <div
-                    className="h-full rounded-full bg-slate-600"
+                    className="h-full rounded-full bg-gradient-to-r from-slate-700 to-slate-500 transition-all duration-500"
                     style={{ width: `${Math.min(100, (pMedioTiempo / 46) * 100)}%` }}
                   />
-                  <div
-                    title={`Media Contextual Dinámica: ${benchContextual.pct_medio_tiempo}%`}
-                    className="absolute -top-0.5 -bottom-0.5 w-1 bg-slate-950 rounded-full z-10"
-                    style={{ left: `${Math.min(98, (benchContextual.pct_medio_tiempo / 46) * 100)}%` }}
+                  <MarcadorMediaVectorial
+                    leftPct={Math.min(98, (benchContextual.pct_medio_tiempo / 46) * 100)}
+                    titulo={`Media Contextual Dinámica: ${benchContextual.pct_medio_tiempo}%`}
+                    altura={20}
                   />
                 </div>
                 <div className="flex justify-between text-[10px] text-slate-400">
@@ -2877,10 +3421,10 @@ function CarreraPerfilContenido() {
 
 export default function CarreraPerfilPage() {
   return (
-    <main className="min-h-screen bg-slate-50 font-sans p-4 md:p-8">
+    <main className="font-sans p-4 md:px-8 md:py-5">
       <Suspense
         fallback={
-          <div className="min-h-screen flex flex-col items-center justify-center p-6">
+          <div className="min-h-[80vh] flex flex-col items-center justify-center p-6">
             <Loader2 className="w-9 h-9 animate-spin text-blue-600 mb-3" />
             <p className="text-slate-500 text-sm font-medium">Abriendo reporte de la carrera...</p>
           </div>

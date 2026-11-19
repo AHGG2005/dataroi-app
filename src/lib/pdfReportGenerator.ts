@@ -1,5 +1,5 @@
 // src/lib/pdfReportGenerator.ts
-// Motor Vectorial Nativo PDF 1.4 de Alta Fidelidad (Con Score DataROI 0-100, Curvas de Bézier, Opacidad /ExtGState, Mosaico Bento y Rieles Divergentes)
+// Motor Vectorial Nativo PDF 1.4 de Alta Fidelidad (Con Score DataROI Entero 0-100, Curvas de Bézier, Opacidad /ExtGState, Mosaico Bento y Rieles Divergentes)
 
 const CP1252_EXTRA_MAP: Record<number, number> = {
   0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85,
@@ -399,16 +399,13 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
   const p1 = new VectorPageCanvas();
   const p2 = new VectorPageCanvas();
 
-  // =========================================================================
-  // PÁGINA 1: KPIS REDONDEADOS + DIAGNÓSTICO + CURVA REAL + RADAR CON RELLENO
-  // =========================================================================
   p1.rect(0, 0, p1.W, p1.H, C_BG);
 
   p1.roundedRect(24, 16, 794, 52, 10, C_DARK);
   p1.text('DATAROI MÉXICO · REPORTE EJECUTIVO DE AUDITORÍA UNIVERSITARIA (ENOE INEGI + ANUIES)', 38, 25, 8.2, true, [0.58, 0.77, 0.99]);
   p1.text(`${d.nombre_carrera} (CVE: ${d.cve_carrera})`, 38, 39, 13.5, true, C_WHITE);
   const scoreTxtHeader = d.scoreDataROI != null
-    ? `  |  Calificación DataROI: ${d.scoreDataROI}/100 (${d.etiquetaScoreDataROI || 'Auditada'}${d.lugarScoreRegion ? ` · ${d.lugarScoreRegion}` : ''})`
+    ? `  |  Calificación DataROI: ${Math.round(d.scoreDataROI)}/100 (${d.etiquetaScoreDataROI || 'Auditada'}${d.lugarScoreRegion ? ` · ${d.lugarScoreRegion}` : ''})`
     : '';
   p1.text(
     `Región: ${d.regionNombre}  |  Perfil: ${d.perfilEtiqueta}  |  Muestra: ${d.nEncuestados} enc.  |  Riesgo IA: ${d.riesgoIA}%${scoreTxtHeader}`,
@@ -431,7 +428,7 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
   const xK2 = 24 + (kpiW + kpiGap);
   p1.roundedRect(xK2, 76, kpiW, 68, 8, C_WHITE, C_BORDER);
   p1.text('EMPLEO DE CALIDAD (ESTÁNDAR OIT)', xK2 + 10, 84, 7.3, true, C_SLATE);
-  p1.text(`${d.tasaEmpleoCalidadPct}%`, xK2 + 10, 98, 15, true, C_BLUE);
+  p1.text(`${Math.round(d.tasaEmpleoCalidadPct)}%`, xK2 + 10, 98, 15, true, C_BLUE);
   p1.text(`Diferencial vs. Media Lic.: ${d.diffCalidadVsMediaLic >= 0 ? `+${d.diffCalidadVsMediaLic}` : d.diffCalidadVsMediaLic} pts`, xK2 + 10, 119, 8, true, d.diffCalidadVsMediaLic >= 0 ? C_EMERALD : C_AMBER);
   p1.text(`Ocupados plenos: ${d.countCalidad.toLocaleString('es-MX')} profesionistas`, xK2 + 10, 131, 7.4, false, C_SLATE);
 
@@ -456,7 +453,6 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     C_SLATE
   );
 
-  // FILA 2: Diagnóstico Ejecutivo Redondeado
   p1.roundedRect(24, 152, 794, 134, 10, C_WHITE, C_BORDER);
   p1.text(`DIAGNÓSTICO EJECUTIVO EN ${d.regionCorto.toUpperCase()} (6 HALLAZGOS CLAVE AUDITADOS)`, 36, 161, 9.2, true, C_DARK);
 
@@ -484,7 +480,6 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     yCon += 2.5;
   });
 
-  // FILA 3: Curva Salarial Real (2021-2026) con Padding Interno para separar 2021 del Eje Y
   p1.roundedRect(24, 294, 470, 278, 10, C_WHITE, C_BORDER);
   p1.text('EVOLUCIÓN SALARIAL REAL VS. PREPARATORIA (2021–2026)', 36, 304, 9.5, true, C_DARK);
   p1.text(`Tendencia Real: ${d.tendenciaEtiqueta} (Pesos constantes de 2026 deflactados con INPC)`, 36, 317, 7.6, false, C_SLATE);
@@ -543,7 +538,6 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
   p1.roundedRect(302, 549, 10, 4, 1.5, C_AMBER);
   p1.text('Base Preparatoria Regional', 316, 546, 7.4, true, C_AMBER);
 
-  // 3B: Radar Hexagonal con Relleno Translúcido (/GS_Alpha25)
   p1.roundedRect(504, 294, 314, 278, 10, C_WHITE, C_BORDER);
   p1.text('HUELLA ESTRUCTURAL (6 PILARES VS. MEDIA)', 516, 304, 9.5, true, C_DARK);
   p1.text('Azul = Esta Carrera  |  Gris punteado = Media Contextual', 516, 317, 7.4, false, C_SLATE);
@@ -594,9 +588,6 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     p1.text(diffTxt, bx + 46, by + 14.5, 7.8, true, item.diff >= 3 ? C_EMERALD : item.diff <= -3 ? C_AMBER : C_DARK, 'center');
   });
 
-  // =========================================================================
-  // PÁGINA 2: TERMÓMETROS REGIONALES DOBLES + BENTO EMPLEADORES + PRESTACIONES + RIELES DIVERGENTES
-  // =========================================================================
   p2.rect(0, 0, p2.W, p2.H, C_BG);
 
   p2.roundedRect(24, 16, 794, 40, 9, C_DARK);
@@ -624,8 +615,8 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       p2.text(item.nombreCorto, cxR + cardW / 2, 260, 7.8, true, C_SLATE, 'center');
     } else {
       p2.text(fmtMoney(item.sueldoCarrera), cxR + cardW / 2, 105, 8.2, true, C_DARK, 'center');
-      p2.text(`${item.premioPct >= 0 ? `+${item.premioPct}%` : `${item.premioPct}%`} vs Prepa`, cxR + cardW / 2, 115, 6.4, true, item.premioPct >= 0 ? C_EMERALD : C_AMBER, 'center');
-      p2.text(`${item.formalidadPct}% formal (${item.diffFormalidadPts >= 0 ? `+${item.diffFormalidadPts}` : item.diffFormalidadPts} pts)`, cxR + cardW / 2, 124, 6.2, true, C_BLUE, 'center');
+      p2.text(`${Math.round(item.premioPct) >= 0 ? `+${Math.round(item.premioPct)}%` : `${Math.round(item.premioPct)}%`} vs Prepa`, cxR + cardW / 2, 115, 6.4, true, item.premioPct >= 0 ? C_EMERALD : C_AMBER, 'center');
+      p2.text(`${Math.round(item.formalidadPct)}% formal (${item.diffFormalidadPts >= 0 ? `+${Math.round(item.diffFormalidadPts)}` : Math.round(item.diffFormalidadPts)} pts)`, cxR + cardW / 2, 124, 6.2, true, C_BLUE, 'center');
 
       const trackTop = 136;
       const trackH = 104;
@@ -650,11 +641,10 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       p2.text('F%', xT2 + wT / 2, trackBottom + 2, 6.2, true, C_DARK, 'center');
 
       p2.text(item.nombreCorto, cxR + cardW / 2, 251, 7.8, true, esAct ? C_BLUE : C_DARK, 'center');
-      p2.text(`Prepa: $${(item.sueldoPrepa / 1000).toFixed(1)}k | ${item.formalidadPrepaPct}%`, cxR + cardW / 2, 262, 6.1, false, C_SLATE, 'center');
+      p2.text(`Prepa: $${(item.sueldoPrepa / 1000).toFixed(1)}k | ${Math.round(item.formalidadPrepaPct)}%`, cxR + cardW / 2, 262, 6.1, false, C_SLATE, 'center');
     }
   });
 
-  // BLOQUE SUPERIOR DER P2: Calidad OIT Redondeada + Mosaico Bento de Cajas de Empleadores
   p2.roundedRect(434, 64, 384, 226, 10, C_WHITE, C_BORDER);
   p2.text(`CALIDAD DE OCUPACIÓN (${d.ocupadosCount.toLocaleString('es-MX')} OCUPADOS)`, 446, 74, 9.2, true, C_DARK);
   p2.text(`Desempleo: ${d.tasaDesempleo.toFixed(1)}% (${d.desempleadosCount})`, 806, 74, 7.4, true, C_SLATE, 'right');
@@ -727,7 +717,6 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     });
   });
 
-  // BLOQUE INFERIOR IZQ P2: Escalera de Prestaciones con Barras Redondeadas
   p2.roundedRect(24, 298, 400, 274, 10, C_WHITE, C_BORDER);
   p2.text(`ESCALERA DE PRESTACIONES VS. MEDIA EN ${d.regionCorto.toUpperCase()}`, 36, 308, 9.2, true, C_DARK);
   p2.text('Barra azul = Cobertura en esta carrera  |  Marca negra vertical = Media Licenciatura', 36, 320, 7.2, false, C_SLATE);
@@ -757,11 +746,10 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     yPr += 36.5;
   });
 
-  // BLOQUE INFERIOR DER P2: Los 5 Rieles Divergentes con Línea Negra Central y Nodos Circulares
   p2.roundedRect(434, 298, 384, 274, 10, C_WHITE, C_BORDER);
   p2.text('BARRERAS DE ENTRADA Y FRICCIÓN LABORAL', 446, 308, 9.2, true, C_DARK);
   p2.text(
-    `Clasificación: ${d.barreras.cuadranteNombre} (${d.barreras.scoreMovilidad}% Mérito) · Izquierda del centro = menor fricción`,
+    `Clasificación: ${d.barreras.cuadranteNombre} (${Math.round(d.barreras.scoreMovilidad)}% Mérito) · Izquierda del centro = menor fricción`,
     446,
     320,
     7.2,
@@ -921,9 +909,10 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
     lines.forEach((ln, li) => {
       p.text(ln, 54, yLeg + 7 + li * 9.5, 7.3, true, C_DARK);
     });
-    const txtScore = c.scoreDataROI != null ? ` · Score: ${c.scoreDataROI}/100` : '';
+    const txtScore = c.scoreDataROI != null ? ` · Score: ${Math.round(c.scoreDataROI)}/100` : '';
+    const primaEnt = Math.round(c.premioVsPrepaPct);
     p.text(
-      `${fmtMoney(c.sueldo_esperado)}/mes (${c.premioVsPrepaPct >= 0 ? `+${c.premioVsPrepaPct}%` : `${c.premioVsPrepaPct}%`})${txtScore}`,
+      `${fmtMoney(c.sueldo_esperado)}/mes (${primaEnt >= 0 ? `+${primaEnt}%` : `${primaEnt}%`})${txtScore}`,
       54,
       yLeg + 30,
       6.7,
@@ -936,7 +925,7 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
   const cx = 334;
   const cy = 172;
   const maxR = 52;
-  const ejes = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Autonomía', 'Estabilidad'];
+  const ejes = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Blindaje IA', 'Estabilidad'];
 
   [0.35, 0.7, 1.0].forEach(level => {
     const pts = ejes.map((_, i) => {
@@ -1022,8 +1011,8 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
   const filasTabla = [
     {
       label: 'Calificación Integral DataROI (0–100)',
-      vals: v.carreras.map(c => Number(c.scoreDataROI ?? 60)),
-      fmt: (n: number) => `${n.toFixed(1)} / 100 pts`,
+      vals: v.carreras.map(c => Math.round(Number(c.scoreDataROI ?? 60))),
+      fmt: (n: number) => `${Math.round(n)} / 100 pts`,
       mejorAlto: true,
       invalido: Infinity
     },
@@ -1036,7 +1025,7 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
     },
     {
       label: 'Prima Salarial vs. Preparatoria',
-      vals: v.carreras.map(c => c.premioVsPrepaPct),
+      vals: v.carreras.map(c => Math.round(c.premioVsPrepaPct)),
       fmt: (n: number) => `${n >= 0 ? `+${n}%` : `${n}%`} vs. Prepa`,
       mejorAlto: true,
       invalido: Infinity
@@ -1064,7 +1053,7 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
     },
     {
       label: 'Empleo de Calidad (Estándar OIT)',
-      vals: v.carreras.map(c => c.tasaCalidadOIT),
+      vals: v.carreras.map(c => Math.round(c.tasaCalidadOIT)),
       fmt: (n: number) => `${n}% de ocupados`,
       mejorAlto: true,
       invalido: Infinity
@@ -1085,8 +1074,8 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
     },
     {
       label: 'Apertura y Movilidad Social (Mérito)',
-      vals: v.carreras.map(c => c.meritoPct),
-      fmt: (n: number) => `${n.toFixed(1)}% Mérito`,
+      vals: v.carreras.map(c => Math.round(c.meritoPct)),
+      fmt: (n: number) => `${n}% Mérito`,
       mejorAlto: true,
       invalido: Infinity
     },

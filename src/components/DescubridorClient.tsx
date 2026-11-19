@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { descargarComparativaVersusPDF } from '@/lib/pdfReportGenerator';
 import {
@@ -8,6 +8,9 @@ import {
   descargarCSVEstilizado,
   calcularScoreDataROIUniversal,
   obtenerSemaforoScoreDataROI,
+  leerEstadoDescubridorGlobal,
+  STORAGE_KEY_DESCUBRIDOR,
+  EVENTO_VERSUS_SYNC,
   ValorCeldaExcel,
   EstiloCeldaExcel
 } from '@/lib/excelReportGenerator';
@@ -24,7 +27,7 @@ import {
   ArrowUpDown, ChevronDown, ChevronUp, AlertTriangle,
   MapPin, Users, Landmark, RotateCcw, Info, Anchor,
   SlidersHorizontal, Wand2, X, Check, BarChart3, Compass,
-  Share2, Download, Printer, FlaskConical, FileSpreadsheet, Target
+  Share2, Download, Printer, FileSpreadsheet, Target, Lock
 } from 'lucide-react';
 
 type ModoEvaluacionRanking = 'calificacion' | 'afinidad';
@@ -34,7 +37,6 @@ type ModoVistaFiltros = 'wizard' | 'colapsado' | 'expandido';
 
 const MAX_PRIORIDADES = 5;
 const MAX_COMPARAR = 3;
-const STORAGE_KEY_DESCUBRIDOR = 'dataroi_descubridor_state_v2';
 
 const TABLA_PESOS_EXACTOS: Record<number, number[]> = {
   1: [100],
@@ -45,9 +47,27 @@ const TABLA_PESOS_EXACTOS: Record<number, number[]> = {
 };
 
 const COLORES_VERSUS = [
-  { hex: '#2563EB', bg: 'bg-blue-600', text: 'text-blue-700', light: 'bg-blue-50/70 border-blue-200' },
-  { hex: '#9333EA', bg: 'bg-purple-600', text: 'text-purple-700', light: 'bg-purple-50/70 border-purple-200' },
-  { hex: '#EA580C', bg: 'bg-orange-600', text: 'text-orange-800', light: 'bg-orange-50/70 border-orange-200' }
+  {
+    hex: '#2563EB',
+    bg: 'bg-blue-600',
+    text: 'text-blue-700',
+    light: 'bg-blue-50/70 border-blue-200',
+    btnClass: 'bg-blue-600 text-white border-blue-600 shadow-xs'
+  },
+  {
+    hex: '#9333EA',
+    bg: 'bg-purple-600',
+    text: 'text-purple-700',
+    light: 'bg-purple-50/70 border-purple-200',
+    btnClass: 'bg-purple-600 text-white border-purple-600 shadow-xs'
+  },
+  {
+    hex: '#EA580C',
+    bg: 'bg-orange-600',
+    text: 'text-orange-800',
+    light: 'bg-orange-50/70 border-orange-200',
+    btnClass: 'bg-orange-600 text-white border-orange-600 shadow-xs'
+  }
 ];
 
 const BENCHMARK_REGIONES_BASE: Record<string, {
@@ -241,13 +261,12 @@ const PREFERENCIAS = [
   { id: 'publico', label: 'Sector Público y Gremial', corto: 'Sector Público', icon: <Landmark className="w-4 h-4" />, desc: 'Plazas en gobierno, educación/salud pública y respaldo sindical.' }
 ];
 
-// Los 6 Pilares Universales para el Modo de Calificación Integral DataROI (0–100)
 const PILARES_CALIFICACION_UNIVERSAL = [
   { id: 'pilar_retorno', label: 'Retorno Salarial (25%)', corto: 'Retorno Salarial' },
   { id: 'pilar_empleo', label: 'Empleabilidad Real (20%)', corto: 'Empleabilidad' },
   { id: 'pilar_calidad', label: 'Calidad Formal OIT (20%)', corto: 'Calidad OIT' },
   { id: 'pilar_merito', label: 'Apertura y Mérito (15%)', corto: 'Meritocracia' },
-  { id: 'pilar_futuro', label: 'Blindaje IA y Futuro (10%)', corto: 'Blindaje y Futuro' },
+  { id: 'pilar_futuro', label: 'Blindaje IA y Futuro (10%)', corto: 'Blindaje IA' },
   { id: 'pilar_estabilidad', label: 'Estabilidad de Vida (10%)', corto: 'Estabilidad' }
 ] as const;
 
@@ -280,7 +299,6 @@ function obtenerCapExCorto(cve: string) {
   return { nivel: 1, costoEquipo: 18000, etiqueta: 'Equipo Básico ($18k)', corto: 'Equipo Básico', clase: 'bg-slate-100 text-slate-600 border-slate-200' };
 }
 
-// Sincronizado al 100% con el modelo mexicano del Dashboard (Medicina 12 semestres, demás 9 semestres)
 function calcularAniosRetornoRapido(sueldoCarrera: number, sueldoPrepa: number, cve: string, esPrivada: boolean) {
   const semestres = cve === '091100' ? 12 : 9;
   const capex = obtenerCapExCorto(cve);
@@ -312,21 +330,24 @@ function AnilloScoreDataROIGrande({
   compacto?: boolean;
 }) {
   const sem = obtenerSemaforoScoreDataROI(score);
-  const r = compacto ? 16 : 24;
-  const dim = compacto ? 40 : 60;
-  const strokeW = compacto ? 3.8 : 5.2;
+  const scoreEntero = Math.round(score);
+  const r = compacto ? 17 : 25;
+  const dim = compacto ? 42 : 62;
+  const strokeW = compacto ? 4.0 : 5.2;
   const circ = 2 * Math.PI * r;
-  const pct = Math.max(0, Math.min(100, score));
+  const pct = Math.max(0, Math.min(100, scoreEntero));
   const offset = circ - (pct / 100) * circ;
 
   if (compacto) {
     return (
       <div
-        title={`Score DataROI: ${score.toFixed(1)}/100 (${sem.etiqueta})`}
-        className="relative w-10 h-10 flex items-center justify-center shrink-0"
+        role="img"
+        aria-label={`Score DataROI: ${scoreEntero} de 100 puntos, Grado ${sem.grado}, ${sem.etiqueta}`}
+        title={`Score DataROI: ${scoreEntero}/100 (Grado ${sem.grado} · ${sem.etiqueta})`}
+        className="relative w-11 h-11 flex items-center justify-center shrink-0"
       >
-        <svg className="w-10 h-10 -rotate-90" viewBox={`0 0 ${dim} ${dim}`}>
-          <circle cx={dim / 2} cy={dim / 2} r={r} fill="none" stroke={sem.trackHex} strokeWidth={strokeW} />
+        <svg className="w-11 h-11 -rotate-90" viewBox={`0 0 ${dim} ${dim}`} aria-hidden="true">
+          <circle cx={dim / 2} cy={dim / 2} r={r} fill={sem.fillTintHex} stroke={sem.trackHex} strokeWidth={strokeW} />
           <circle
             cx={dim / 2}
             cy={dim / 2}
@@ -337,15 +358,20 @@ function AnilloScoreDataROIGrande({
             strokeLinecap="round"
             strokeDasharray={circ}
             strokeDashoffset={offset}
+            className="transition-all duration-700 ease-out"
           />
         </svg>
-        <span className="absolute text-[10.5px] font-black text-slate-900">{score.toFixed(1)}</span>
+        <span className="absolute text-xs font-black text-slate-900">{scoreEntero}</span>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-3">
+    <div
+      role="img"
+      aria-label={`Calificación Integral DataROI: ${scoreEntero} de 100 puntos, Grado ${sem.grado}, ${sem.etiqueta}`}
+      className="flex items-center gap-3"
+    >
       <div className="text-left lg:text-right">
         <span className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
           {rank ? `Calificación (#${rank})` : 'Score DataROI'}
@@ -354,12 +380,12 @@ function AnilloScoreDataROIGrande({
           Grado {sem.grado} · {sem.etiqueta}
         </span>
       </div>
-      <div className="relative w-15 h-15 flex items-center justify-center shrink-0">
-        <svg className="w-15 h-15 -rotate-90" viewBox="0 0 60 60">
-          <circle cx="30" cy="30" r={r} fill="none" stroke={sem.trackHex} strokeWidth={strokeW} />
+      <div className="relative w-16 h-16 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform duration-300">
+        <svg className="w-16 h-16 -rotate-90 drop-shadow-2xs" viewBox="0 0 62 62" aria-hidden="true">
+          <circle cx="31" cy="31" r={r} fill={sem.fillTintHex} stroke={sem.trackHex} strokeWidth={strokeW} />
           <circle
-            cx="30"
-            cy="30"
+            cx="31"
+            cy="31"
             r={r}
             fill="none"
             stroke={sem.colorHex}
@@ -367,10 +393,11 @@ function AnilloScoreDataROIGrande({
             strokeLinecap="round"
             strokeDasharray={circ}
             strokeDashoffset={offset}
+            className="transition-all duration-700 ease-out"
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
-          <span className="text-sm font-black text-slate-900">{score.toFixed(1)}</span>
+          <span className="text-xl font-black text-slate-900 tracking-tight">{scoreEntero}</span>
           <span className="text-[9px] font-bold text-slate-400">/100</span>
         </div>
       </div>
@@ -382,27 +409,27 @@ function BadgeTendencia({ codigo, etiqueta }: { codigo?: string; etiqueta?: stri
   if (codigo === 'crecimiento') {
     return (
       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-        <TrendingUp className="w-3.5 h-3.5" /> {etiqueta || 'En crecimiento'}
+        <TrendingUp className="w-3.5 h-3.5" aria-hidden="true" /> {etiqueta || 'En crecimiento'}
       </span>
     );
   }
   if (codigo === 'ajuste') {
     return (
       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
-        <TrendingDown className="w-3.5 h-3.5" /> {etiqueta || 'En ajuste'}
+        <TrendingDown className="w-3.5 h-3.5" aria-hidden="true" /> {etiqueta || 'En ajuste'}
       </span>
     );
   }
   if (codigo === 'volatil') {
     return (
       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
-        <Activity className="w-3.5 h-3.5" /> {etiqueta || 'Volátil'}
+        <Activity className="w-3.5 h-3.5" aria-hidden="true" /> {etiqueta || 'Volátil'}
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200">
-      <Minus className="w-3.5 h-3.5" /> {etiqueta || 'Estable'}
+      <Minus className="w-3.5 h-3.5" aria-hidden="true" /> {etiqueta || 'Estable'}
     </span>
   );
 }
@@ -460,19 +487,36 @@ function MapaMexicoMacroRegiones({
     <div className="relative w-full select-none">
       <svg
         viewBox="15 10 560 368"
+        role="group"
+        aria-label="Mapa interactivo de las 5 macro-regiones económicas de México"
         className="w-full h-auto drop-shadow-xs"
         onMouseLeave={() => onHoverRegion(null)}
       >
-        {(['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const).map((idReg) => (
-          <path
-            key={idReg}
-            d={PATHS_CARTOGRAFICOS_MEXICO[idReg]}
-            style={obtenerEstiloPoligono(idReg)}
-            className="cursor-pointer transition-all duration-200"
-            onClick={() => onSelectRegion(idReg)}
-            onMouseEnter={() => onHoverRegion(idReg)}
-          />
-        ))}
+        {(['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const).map((idReg) => {
+          const info = BENCHMARK_REGIONES_BASE[idReg];
+          return (
+            <path
+              key={idReg}
+              d={PATHS_CARTOGRAFICOS_MEXICO[idReg]}
+              style={obtenerEstiloPoligono(idReg)}
+              tabIndex={0}
+              role="button"
+              aria-label={`Seleccionar región ${info.nombre} (${info.estados})`}
+              aria-pressed={regionActiva === idReg}
+              className="cursor-pointer transition-all duration-200 focus:outline-none"
+              onClick={() => onSelectRegion(idReg)}
+              onMouseEnter={() => onHoverRegion(idReg)}
+              onFocus={() => onHoverRegion(idReg)}
+              onBlur={() => onHoverRegion(null)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectRegion(idReg);
+                }
+              }}
+            />
+          );
+        })}
 
         {ETIQUETAS_MAPA.map((et) => {
           const activa = regionActiva === et.id || regionHover === et.id;
@@ -526,10 +570,43 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   const [hidratado, setHidratado] = useState<boolean>(false);
 
   const [carrerasCompararCves, setCarrerasCompararCves] = useState<string[]>([]);
+  const [dockMinimizado, setDockMinimizado] = useState<boolean>(false);
   const [modalVersusAbierto, setModalVersusAbierto] = useState<boolean>(false);
   const [vistaGraficoVersus, setVistaGraficoVersus] = useState<'radar' | 'regiones'>('radar');
   const [copiadoRanking, setCopiadoRanking] = useState<boolean>(false);
   const [copiadoVersus, setCopiadoVersus] = useState<boolean>(false);
+
+  const ignorarSyncInternoRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!modalVersusAbierto) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setModalVersusAbierto(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [modalVersusAbierto]);
+
+  useEffect(() => {
+    const syncExterna = () => {
+      if (ignorarSyncInternoRef.current) return;
+      const est = leerEstadoDescubridorGlobal();
+      const nueva = est.carrerasCompararCves || [];
+      setCarrerasCompararCves(prev => (prev.join(',') === nueva.join(',') ? prev : nueva));
+    };
+    const abrirModalDesdeNavbar = () => {
+      setModalVersusAbierto(true);
+    };
+
+    window.addEventListener(EVENTO_VERSUS_SYNC, syncExterna);
+    window.addEventListener('dataroi-open-versus-modal', abrirModalDesdeNavbar);
+    return () => {
+      window.removeEventListener(EVENTO_VERSUS_SYNC, syncExterna);
+      window.removeEventListener('dataroi-open-versus-modal', abrirModalDesdeNavbar);
+    };
+  }, []);
 
   const benchmarksDinamicosPorRegion = useMemo(() => {
     const mapa: Record<string, typeof BENCHMARK_REGIONES_BASE['nacional']> = {};
@@ -622,6 +699,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const prioUrl = params.get('prio');
       const compUrl = params.get('comparar');
 
+      const guardadoRaw = sessionStorage.getItem(STORAGE_KEY_DESCUBRIDOR);
+      const parsedSession = guardadoRaw ? JSON.parse(guardadoRaw) : null;
+
       const tieneParamsUrl = Boolean(regUrl || genUrl || modoUrl || sueldoUrl || prioUrl || compUrl);
 
       if (tieneParamsUrl) {
@@ -629,15 +709,21 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         if (regUrl && BENCHMARK_REGIONES_BASE[regUrl]) {
           regInicial = regUrl;
           setRegionActiva(regUrl);
+        } else if (parsedSession?.regionActiva && BENCHMARK_REGIONES_BASE[parsedSession.regionActiva]) {
+          regInicial = parsedSession.regionActiva;
+          setRegionActiva(regInicial);
         }
 
         let genInicial: CodigoGenero = 0;
         if (genUrl === 'mujeres' || genUrl === '2') genInicial = 2;
         else if (genUrl === 'hombres' || genUrl === '1') genInicial = 1;
+        else if (parsedSession?.generoActivo === 1 || parsedSession?.generoActivo === 2) genInicial = parsedSession.generoActivo;
         setGeneroActivo(genInicial);
 
         if (sueldoUrl && Number(sueldoUrl) >= 6000) {
           setSueldoMinimo(Number(sueldoUrl));
+        } else if (typeof parsedSession?.sueldoMinimo === 'number' && parsedSession.sueldoMinimo >= 6000) {
+          setSueldoMinimo(parsedSession.sueldoMinimo);
         } else {
           const prepaRef = BENCHMARK_REGIONES_BASE[regInicial]?.sueldo_prepa[genInicial] || 10500;
           setSueldoMinimo(Math.floor(prepaRef / 500) * 500);
@@ -656,6 +742,19 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           }
         } else if (modoUrl === 'calificacion' || prioUrl === 'calificacion') {
           setModoEvaluacion('calificacion');
+          if (Array.isArray(parsedSession?.activos)) {
+            setActivos(parsedSession.activos.slice(0, MAX_PRIORIDADES));
+          }
+          setModoVistaFiltros('colapsado');
+        } else if (parsedSession) {
+          if (Array.isArray(parsedSession.activos) && parsedSession.activos.length > 0) {
+            setActivos(parsedSession.activos.slice(0, MAX_PRIORIDADES));
+          }
+          if (parsedSession.modoEvaluacion === 'afinidad' && Array.isArray(parsedSession.activos) && parsedSession.activos.length > 0) {
+            setModoEvaluacion('afinidad');
+          } else {
+            setModoEvaluacion('calificacion');
+          }
           setModoVistaFiltros('colapsado');
         }
 
@@ -674,31 +773,34 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               setModalVersusAbierto(true);
             }
           }
+        } else if (Array.isArray(parsedSession?.carrerasCompararCves) && parsedSession.carrerasCompararCves.length > 0) {
+          setCarrerasCompararCves(parsedSession.carrerasCompararCves.slice(0, MAX_COMPARAR));
+        }
+      } else if (parsedSession) {
+        if (parsedSession.regionActiva && BENCHMARK_REGIONES_BASE[parsedSession.regionActiva]) {
+          setRegionActiva(parsedSession.regionActiva);
+        }
+        if (parsedSession.generoActivo === 0 || parsedSession.generoActivo === 1 || parsedSession.generoActivo === 2) {
+          setGeneroActivo(parsedSession.generoActivo);
+        }
+        if (typeof parsedSession.sueldoMinimo === 'number' && parsedSession.sueldoMinimo >= 6000) {
+          setSueldoMinimo(parsedSession.sueldoMinimo);
+        }
+        if (Array.isArray(parsedSession.activos) && parsedSession.activos.length > 0) {
+          setActivos(parsedSession.activos.slice(0, MAX_PRIORIDADES));
+        }
+        if (Array.isArray(parsedSession.carrerasCompararCves) && parsedSession.carrerasCompararCves.length > 0) {
+          setCarrerasCompararCves(parsedSession.carrerasCompararCves.slice(0, MAX_COMPARAR));
+        }
+        if (parsedSession.modoEvaluacion === 'afinidad' && Array.isArray(parsedSession.activos) && parsedSession.activos.length > 0) {
+          setModoEvaluacion('afinidad');
+          setModoVistaFiltros(parsedSession.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
+        } else if (parsedSession.modoEvaluacion === 'calificacion' && parsedSession.modoVistaFiltros !== 'wizard') {
+          setModoEvaluacion('calificacion');
+          setModoVistaFiltros(parsedSession.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
         }
       } else {
-        const guardado = sessionStorage.getItem(STORAGE_KEY_DESCUBRIDOR);
-        if (guardado) {
-          const parsed = JSON.parse(guardado);
-          if (parsed.regionActiva && BENCHMARK_REGIONES_BASE[parsed.regionActiva]) {
-            setRegionActiva(parsed.regionActiva);
-          }
-          if (parsed.generoActivo === 0 || parsed.generoActivo === 1 || parsed.generoActivo === 2) {
-            setGeneroActivo(parsed.generoActivo);
-          }
-          if (typeof parsed.sueldoMinimo === 'number' && parsed.sueldoMinimo >= 6000) {
-            setSueldoMinimo(parsed.sueldoMinimo);
-          }
-          if (parsed.modoEvaluacion === 'afinidad' && Array.isArray(parsed.activos) && parsed.activos.length > 0) {
-            setModoEvaluacion('afinidad');
-            setActivos(parsed.activos.slice(0, MAX_PRIORIDADES));
-            setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
-          } else if (parsed.modoEvaluacion === 'calificacion' && parsed.modoVistaFiltros !== 'wizard') {
-            setModoEvaluacion('calificacion');
-            setModoVistaFiltros(parsed.modoVistaFiltros === 'expandido' ? 'expandido' : 'colapsado');
-          }
-        } else {
-          setSueldoMinimo(sueldoSugerido);
-        }
+        setSueldoMinimo(sueldoSugerido);
       }
     } catch {
       setSueldoMinimo(sueldoSugerido);
@@ -717,9 +819,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           sueldoMinimo,
           modoEvaluacion,
           activos,
-          modoVistaFiltros
+          modoVistaFiltros,
+          carrerasCompararCves
         })
       );
+
+      ignorarSyncInternoRef.current = true;
+      window.dispatchEvent(new CustomEvent(EVENTO_VERSUS_SYNC, { detail: carrerasCompararCves }));
+      ignorarSyncInternoRef.current = false;
 
       const url = new URL(window.location.href);
       url.searchParams.set('region', regionActiva);
@@ -743,7 +850,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       }
       window.history.replaceState({}, '', url.toString().replace(/%2C/gi, ','));
     } catch {
-      // Ignorar errores en modo privado
+      ignorarSyncInternoRef.current = false;
     }
   }, [hidratado, regionActiva, generoActivo, sueldoMinimo, modoEvaluacion, activos, modoVistaFiltros, carrerasCompararCves]);
 
@@ -764,7 +871,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   }, [activos, modoEvaluacion, sueldoMinimo, orden, regionActiva, generoActivo]);
 
   const togglePreferencia = (id: string) => {
-    setModoEvaluacion('afinidad');
+    if (modoEvaluacion === 'calificacion') return;
     setActivos(prev => {
       if (prev.includes(id)) return prev.filter(p => p !== id);
       if (prev.length >= MAX_PRIORIDADES) return prev;
@@ -778,6 +885,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     setCarrerasCompararCves(prev => {
       if (prev.includes(cve)) return prev.filter(c => c !== cve);
       if (prev.length >= MAX_COMPARAR) return prev;
+      setDockMinimizado(false);
       return [...prev, cve];
     });
   };
@@ -839,7 +947,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const pPyme = num(p.pct_pyme, 0);
       const pCorp = num(p.pct_corp, 0);
       const pHomeOffice = num(p.pct_home_office, 0);
-      const pMedioTiempo = num(p.pct_medio_tiempo, 15);
 
       const tasaCalidadOIT = Number((((Math.min(pContrato, pAfore) * 0.70 + pContrato * 0.30) * (1 - pPluri / 200))).toFixed(1));
       const rawFormalidad = tasaCalidadOIT + pSgmm * 0.001;
@@ -885,18 +992,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const radarFormalidad = Math.round(tasaFormalidadTotal);
       const radarEmpleo = Math.round(Math.max(10, Math.min(100, 100 - desempleo * 8.0)) * 0.60 + Math.max(10, Math.min(100, 168 - saturacion)) * 0.40);
       const radarMerito = Math.round(rawMovilidad);
-      const radarAutonomia = Math.round(Math.max(15, Math.min(100, Math.min(100, pHomeOffice * 5.0) * 0.40 + Math.min(100, pMicro * 1.5) * 0.35 + Math.min(100, pMedioTiempo * 2.0) * 0.25)));
       const radarEstabilidad = Math.round(
         Math.max(10, Math.min(100, 100 - pPluri * 5.0)) * 0.35 +
         Math.max(10, Math.min(100, 100 - pDesarr * 6.5)) * 0.30 +
         pContrato * 0.35
       );
 
-      // Cálculo de la Calificación Integral DataROI (0 a 100) con la función universal
       const evalUniversal = calcularScoreDataROIUniversal({
         Prima_vs_Prepa_Pct: premioVsPrepaPct,
-        Desempleo_Abierto_Pct: desempleo,
-        Saturacion_ANUIES_Pct: saturacion,
+        Desempleo_Abierto_Pct: Number(desempleo.toFixed(1)),
+        Saturacion_ANUIES_Pct: Math.round(saturacion),
         Empleo_Calidad_OIT_Pct: tasaCalidadOIT,
         Formalidad_Total_Pct: tasaFormalidadTotal,
         Meritocracia_Pct: Number(rawMovilidad.toFixed(1)),
@@ -923,7 +1028,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           Formalidad: radarFormalidad,
           Empleabilidad: radarEmpleo,
           Meritocracia: radarMerito,
-          Autonomía: radarAutonomia,
+          'Blindaje IA': evalUniversal.pilares.blindajeFuturo,
           Estabilidad: radarEstabilidad
         },
         crudos: {
@@ -947,7 +1052,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       };
     });
 
-    // En modo 'calificacion' se evalúan todas las carreras certificadas de la región; en 'afinidad' se aplica el piso salarial
     const filtroSueldo = modoEvaluacion === 'calificacion'
       ? listaConPerfil
       : listaConPerfil.filter(c => c.sueldo_esperado >= sueldoMinimo);
@@ -1020,21 +1124,21 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
       const datoRealPorDim: Record<string, string> = {
         empleabilidad: `Desempleo ${num(p.tasa_desempleo, 0).toFixed(1)}% · Saturación ${num(p.indice_saturacion_pct, 100)}%`,
-        formalidad: `${carrera.tasaCalidadOIT}% con Empleo de Calidad OIT`,
+        formalidad: `${Math.round(carrera.tasaCalidadOIT)}% con Empleo de Calidad OIT`,
         corporativo: `${num(p.pct_corp, 0).toFixed(1)}% en Grandes Corporativos`,
         emprendimiento: `${(num(p.pct_micro, 0) + num(p.pct_pyme, 0)).toFixed(1)}% en Independiente y PYME`,
         remoto: `${num(p.pct_home_office, 0).toFixed(1)}% en modalidad Home Office`,
-        movilidad: `${carrera.crudos.movilidad.toFixed(1)}% Mérito (${sinContactosPct}% Sin Contactos · Estrato ${num(p.indice_privilegio, 2.80).toFixed(2)})`,
+        movilidad: `${Math.round(carrera.crudos.movilidad)}% Mérito (${sinContactosPct}% Sin Contactos · Estrato ${num(p.indice_privilegio, 2.80).toFixed(2)})`,
         equidad: `${carrera.paridadSalarialPct}% Paridad Salarial · ${num(p.pct_materno ?? p.pct_materno_estructural, 23).toFixed(0)}% Lic. Parental`,
         ia: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje Humano ante IA`,
-        balance: `${carrera.pctEmpleoUnico}% Empleo Único · ${carrera.pctArraigoLocal}% Arraigo Local`,
+        balance: `${Math.round(carrera.pctEmpleoUnico)}% Empleo Único · ${Math.round(carrera.pctArraigoLocal)}% Arraigo Local`,
         publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gobierno · ${num(p.pct_sindicato, 0).toFixed(1)}% Sindicato`,
-        pilar_retorno: `${formatoMoneda(carrera.sueldo_esperado)}/mes (${carrera.premioVsPrepaPct >= 0 ? `+${carrera.premioVsPrepaPct}%` : `${carrera.premioVsPrepaPct}%`} vs. Prepa)`,
+        pilar_retorno: `${formatoMoneda(carrera.sueldo_esperado)}/mes (${Math.round(carrera.premioVsPrepaPct) >= 0 ? `+${Math.round(carrera.premioVsPrepaPct)}%` : `${Math.round(carrera.premioVsPrepaPct)}%`} vs. Prepa)`,
         pilar_empleo: `Desempleo ${num(p.tasa_desempleo, 0).toFixed(1)}% · Saturación ${num(p.indice_saturacion_pct, 100)}%`,
-        pilar_calidad: `${carrera.tasaCalidadOIT}% Calidad OIT (${carrera.tasaFormalidadTotal}% Formalidad)`,
-        pilar_merito: `${carrera.crudos.movilidad.toFixed(1)}% Mérito (${sinContactosPct}% Sin Contactos)`,
+        pilar_calidad: `${Math.round(carrera.tasaCalidadOIT)}% Calidad OIT (${Math.round(carrera.tasaFormalidadTotal)}% Formalidad)`,
+        pilar_merito: `${Math.round(carrera.crudos.movilidad)}% Mérito (${sinContactosPct}% Sin Contactos)`,
         pilar_futuro: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje IA · ${tendTexto}`,
-        pilar_estabilidad: `${carrera.pctEmpleoUnico}% Empleo Único · ${carrera.pctArraigoLocal}% Arraigo`
+        pilar_estabilidad: `${Math.round(carrera.pctEmpleoUnico)}% Empleo Único · ${Math.round(carrera.pctArraigoLocal)}% Arraigo`
       };
 
       const datoCortoPorDim: Record<string, string> = {
@@ -1131,19 +1235,24 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       };
     });
 
-    const listaOrdenada = [...rankingMaestro].sort((a, b) => {
-      if (orden === 'principal_desc') return a.rankAfinidad - b.rankAfinidad;
-      if (orden === 'principal_asc') return b.rankAfinidad - a.rankAfinidad;
-      if (orden === 'salario_desc') {
-        if (b.sueldo_esperado !== a.sueldo_esperado) return b.sueldo_esperado - a.sueldo_esperado;
-        return a.rankAfinidad - b.rankAfinidad;
-      }
-      if (orden === 'salario_asc') {
-        if (a.sueldo_esperado !== b.sueldo_esperado) return a.sueldo_esperado - b.sueldo_esperado;
-        return a.rankAfinidad - b.rankAfinidad;
-      }
-      return 0;
-    });
+    const listaOrdenada = [...rankingMaestro]
+      .sort((a, b) => {
+        if (orden === 'principal_desc') return a.rankAfinidad - b.rankAfinidad;
+        if (orden === 'principal_asc') return b.rankAfinidad - a.rankAfinidad;
+        if (orden === 'salario_desc') {
+          if (b.sueldo_esperado !== a.sueldo_esperado) return b.sueldo_esperado - a.sueldo_esperado;
+          return a.rankAfinidad - b.rankAfinidad;
+        }
+        if (orden === 'salario_asc') {
+          if (a.sueldo_esperado !== b.sueldo_esperado) return a.sueldo_esperado - b.sueldo_esperado;
+          return a.rankAfinidad - b.rankAfinidad;
+        }
+        return 0;
+      })
+      .map((item, idx) => ({
+        ...item,
+        posicionListaActual: idx + 1
+      }));
 
     const visibles = mostrarTodas ? listaOrdenada : listaOrdenada.slice(0, 10);
 
@@ -1177,6 +1286,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     ? Math.round(((sueldoMinimo - sueldoPrepaActual) / sueldoPrepaActual) * 100)
     : 0;
 
+  const pctSliderSueldo = Math.min(
+    100,
+    Math.max(0, ((sueldoMinimo - minSueldoCatalogo) / Math.max(500, maxSueldoCatalogo - minSueldoCatalogo)) * 100)
+  );
+
   const queryGeneroParam = generoActivo === 2 ? 'mujeres' : generoActivo === 1 ? 'hombres' : 'total';
   const etiquetaGeneroCorto = generoActivo === 2 ? 'Solo Mujeres' : generoActivo === 1 ? 'Solo Hombres' : 'Total General';
 
@@ -1187,7 +1301,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   }, [carrerasCompararCves, rankingCompleto, datos]);
 
   const datosRadarVersus = useMemo(() => {
-    const ejes = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Autonomía', 'Estabilidad'] as const;
+    const ejes = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Blindaje IA', 'Estabilidad'] as const;
     return ejes.map(eje => {
       const fila: Record<string, any> = { eje };
       carrerasEnVersus.forEach((c: any) => {
@@ -1232,7 +1346,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     setTimeout(() => setCopiadoRanking(false), 2200);
   };
 
-  // Construcción de Tablas del Ranking para Excel y CSV
   const construirTablasRanking = () => {
     const colsRubrosCabeceras: string[] = [];
     if (modoEvaluacion === 'calificacion') {
@@ -1315,9 +1428,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         celdaId(pos === 1 ? '🥇 #1' : pos === 2 ? '🥈 #2' : pos === 3 ? '🥉 #3' : `#${pos}`),
         celdaId(c.cve_carrera),
         celdaId(c.nombre_carrera),
-        celdaId(Number(c.matchScore.toFixed(1))),
+        celdaId(Math.round(c.matchScore)),
         modoEvaluacion === 'afinidad'
-          ? { v: c.scoreDataROI, s: sem.grado === 'A' ? 'winner' : sem.grado === 'C' ? 'warning' : 'bold' }
+          ? { v: Math.round(c.scoreDataROI), s: sem.grado === 'A' ? 'winner' : sem.grado === 'C' ? 'warning' : 'bold' }
           : { v: `Grado ${sem.grado} — ${sem.etiqueta}`, s: sem.grado === 'A' ? 'winner' : sem.grado === 'C' ? 'warning' : 'default' },
         { v: c.sueldo_esperado, s: 'bold' },
         c.premioVsPrepaPct,
@@ -1498,7 +1611,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           })
         : [];
 
-    const ejesRadar = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Autonomía', 'Estabilidad'] as const;
+    const ejesRadar = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Blindaje IA', 'Estabilidad'] as const;
     const filasRadar: ValorCeldaExcel[][] = ejesRadar.map(eje => {
       const vals = carrerasEnVersus.map((c: any) => Number(c.pilaresRadar?.[eje] ?? 50));
       return registrarFilaNumerica('3. Huella de 6 Pilares (0-100)', `Pilar ${eje} (Score 0-100)`, vals, v => `${v} / 100`, true);
@@ -1510,9 +1623,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       ['1. Contexto y Trazabilidad', 'Macro-Región y Perfil Evaluado', ...carrerasEnVersus.map(() => `${infoRegActiva.nombre} (${etiquetaGeneroCorto})`), 'Contexto Activo'],
       ['1. Contexto y Trazabilidad', 'Sueldo Base Preparatoria de Referencia', ...carrerasEnVersus.map(() => `${formatoMoneda(sueldoPrepaActual)} / mes`), 'Referencia Regional'],
       registrarFilaNumerica('1. Contexto y Trazabilidad', 'Muestra Física Certificada INEGI', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.n_encuestados_reales, 0)), v => `${v} encuestados`, true),
-      registrarFilaNumerica('2. Calificación Global', 'Calificación Integral DataROI (0 a 100)', carrerasEnVersus.map((c: any) => Number(c.scoreDataROI ?? 60)), v => `${v.toFixed(1)} / 100 pts`, true),
+      registrarFilaNumerica('2. Calificación Global', 'Calificación Integral DataROI (0 a 100)', carrerasEnVersus.map((c: any) => Math.round(Number(c.scoreDataROI ?? 60))), v => `${v} / 100 pts`, true),
       ...(modoEvaluacion === 'afinidad' && activos.length > 0
-        ? [registrarFilaNumerica('2. Calificación Global', 'Afinidad Personal con tus Prioridades (%)', carrerasEnVersus.map((c: any) => Number((c.matchScore ?? 50).toFixed(1))), v => `${v}%`, true)]
+        ? [registrarFilaNumerica('2. Calificación Global', 'Afinidad Personal con tus Prioridades (%)', carrerasEnVersus.map((c: any) => Math.round(Number(c.matchScore ?? 50))), v => `${v}%`, true)]
         : []),
       ...filasPrioridadesActivas,
       ...filasRadar,
@@ -1643,9 +1756,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         return {
           cve_carrera: c.cve_carrera,
           nombre_carrera: c.nombre_carrera,
-          scoreDataROI: c.scoreDataROI,
+          scoreDataROI: Math.round(c.scoreDataROI),
           sueldo_esperado: c.sueldo_esperado,
-          premioVsPrepaPct: c.premioVsPrepaPct,
+          premioVsPrepaPct: Math.round(c.premioVsPrepaPct),
           roiPublica: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false),
           roiPrivada: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true),
           costoEquipo: obtenerCapExCorto(c.cve_carrera).costoEquipo,
@@ -1664,10 +1777,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     });
   };
 
+  const totalPasosWizardDinamico = modoEvaluacion === 'calificacion' && pasoWizard <= 3 ? 3 : 4;
+
   return (
-    <div className="max-w-6xl mx-auto pb-24">
+    <div className={`max-w-6xl mx-auto ${carrerasEnVersus.length > 0 ? 'pb-40' : 'pb-20'}`}>
       
-      {/* CABECERA */}
+      {/* CABECERA CONECTADA CON LA BARRA SUPERIOR GLOBAL */}
       <div className="no-print mb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight">
@@ -1678,15 +1793,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <Link
-            href="/laboratorio"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-emerald-500 text-xs font-bold text-slate-700 shadow-2xs transition-all"
-          >
-            <FlaskConical className="w-3.5 h-3.5 text-emerald-600" />
-            Laboratorio Crudo
-          </Link>
-
+        <nav aria-label="Controles de configuración del descubridor" className="flex flex-wrap items-center gap-2 shrink-0">
           {modoVistaFiltros !== 'wizard' && (
             <>
               <button
@@ -1694,50 +1801,56 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   setPasoWizard(1);
                   setModoVistaFiltros('wizard');
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs active:scale-95 transition-all cursor-pointer"
               >
-                <Wand2 className="w-3.5 h-3.5 text-blue-600" />
+                <Wand2 className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
                 Guía paso a paso
               </button>
 
               <button
+                aria-expanded={modoVistaFiltros === 'expandido'}
                 onClick={() => setModoVistaFiltros(prev => (prev === 'colapsado' ? 'expandido' : 'colapsado'))}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold border transition-all active:scale-95 cursor-pointer ${
                   modoVistaFiltros === 'expandido'
                     ? 'bg-slate-900 text-white border-slate-900'
                     : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
                 }`}
               >
-                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
                 {modoVistaFiltros === 'expandido' ? 'Contraer panel' : 'Configurar región / prioridades'}
               </button>
             </>
           )}
-        </div>
+        </nav>
       </div>
 
       {/* ========================================================================= */}
-      {/* MODO 1: ASISTENTE PASO A PASO (CON BIFURCACIÓN EN EL PASO 3)             */}
+      {/* MODO 1: ASISTENTE PASO A PASO (GRAMÁTICA DE 2 TIEMPOS EN LOS 4 PASOS)     */}
       {/* ========================================================================= */}
       {modoVistaFiltros === 'wizard' && (
         <div className="no-print bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-8 max-w-3xl mx-auto mb-8 animate-in fade-in duration-200">
           
           <div className="flex items-center justify-between gap-2 mb-4">
             <span className="text-xs font-black uppercase tracking-wider text-blue-600">
-              Paso {pasoWizard} de {modoEvaluacion === 'calificacion' ? 3 : 4}
+              Paso {pasoWizard} de {totalPasosWizardDinamico}
+              {pasoWizard === 3 && modoEvaluacion === 'calificacion' ? ' · Paso final' : ''}
             </span>
             <button
               onClick={() => setModoVistaFiltros('colapsado')}
               className="text-xs font-bold text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
             >
-              Ir directo al Ranking General {'→'}
+              Saltar guía e ir al Ranking {'→'}
             </button>
           </div>
 
           <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden mb-6">
             <div
-              className="h-full bg-blue-600 rounded-full transition-all duration-300"
-              style={{ width: `${(pasoWizard / (modoEvaluacion === 'calificacion' ? 3 : 4)) * 100}%` }}
+              className={`h-full rounded-full transition-all duration-300 ${
+                pasoWizard === 3 && modoEvaluacion === 'calificacion'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-400'
+                  : 'bg-gradient-to-r from-blue-600 to-indigo-500'
+              }`}
+              style={{ width: `${(pasoWizard / totalPasosWizardDinamico) * 100}%` }}
             />
           </div>
 
@@ -1748,19 +1861,20 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 1. ¿En qué región de México planeas ejercer?
               </h2>
               <p className="text-xs md:text-sm text-slate-500 mb-4">
-                Haz clic directamente sobre cualquier zona del mapa para explorar tu región o mantén <strong>Todo México</strong> para el promedio nacional.
+                Haz clic o usa el teclado sobre cualquier zona del mapa para explorar tu región, o mantén <strong>Todo México</strong> para el promedio nacional.
               </p>
 
-              <div className="flex flex-wrap gap-2 mb-4">
+              <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Botones de selección de región">
                 {Object.entries(benchmarksDinamicosPorRegion).map(([idReg, meta]) => {
                   const activa = regionActiva === idReg;
                   return (
                     <button
                       key={idReg}
+                      aria-pressed={activa}
                       onClick={() => cambiarRegionConCalibracion(idReg)}
                       onMouseEnter={() => setRegionHover(idReg)}
                       onMouseLeave={() => setRegionHover(null)}
-                      className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 cursor-pointer ${
                         activa
                           ? meta.badgeActivo
                           : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
@@ -1842,8 +1956,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   return (
                     <button
                       key={op.id}
+                      aria-pressed={act}
                       onClick={() => cambiarGeneroConCalibracion(op.id)}
-                      className={`text-left p-4 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                      className={`text-left p-4 rounded-2xl border-2 transition-all active:scale-95 cursor-pointer flex flex-col justify-between ${
                         act
                           ? estGen.activoCard
                           : 'border-slate-200 hover:border-slate-300 bg-white'
@@ -1851,7 +1966,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                     >
                       <div>
                         <div className="flex items-center justify-between mb-2">
-                          <Users className={`w-5 h-5 ${act ? estGen.iconoActivo : 'text-slate-400'}`} />
+                          <Users className={`w-5 h-5 ${act ? estGen.iconoActivo : 'text-slate-400'}`} aria-hidden="true" />
                           {act && (
                             <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${estGen.badgeActivo}`}>
                               Seleccionado
@@ -1871,36 +1986,44 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* PASO 3: BIFURCACIÓN PRINCIPAL (CALIFICACIÓN INTEGRAL 0-100 VS. AFINIDAD PERSONAL) */}
+          {/* PASO 3: SELECCIÓN DE MODO EN 2 TIEMPOS (SELECCIONAR TARJETA -> CONFIRMAR EN BOTÓN INFERIOR) */}
           {pasoWizard === 3 && (
             <div key="paso3" className="animate-in fade-in slide-in-from-right-4 duration-200">
               <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-1">
                 3. ¿Cómo deseas evaluar las carreras en {infoRegActiva.corto}?
               </h2>
               <p className="text-xs md:text-sm text-slate-500 mb-5">
-                Elige si quieres ver el <strong>Ranking General por Calificación Integral (0–100)</strong> o personalizar tu búsqueda eligiendo un piso salarial y hasta <strong>5 prioridades personales</strong>.
+                Selecciona una de las dos modalidades y pulsa el botón inferior derecho para continuar.
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <button
-                  onClick={() => {
-                    setModoEvaluacion('calificacion');
-                    setModoVistaFiltros('colapsado');
-                  }}
-                  className={`text-left p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                  type="button"
+                  aria-pressed={modoEvaluacion === 'calificacion'}
+                  onClick={() => setModoEvaluacion('calificacion')}
+                  className={`text-left p-5 rounded-2xl border-2 transition-all active:scale-98 cursor-pointer flex flex-col justify-between ${
                     modoEvaluacion === 'calificacion'
-                      ? 'border-emerald-600 bg-emerald-50/40 ring-2 ring-emerald-600/15 shadow-xs'
-                      : 'border-slate-200 hover:border-emerald-400 bg-white'
+                      ? 'border-emerald-600 bg-emerald-50/45 ring-2 ring-emerald-600/15 shadow-xs'
+                      : 'border-slate-200 hover:border-emerald-300 bg-white'
                   }`}
                 >
                   <div>
                     <div className="flex items-center justify-between mb-3">
-                      <div className="p-2.5 rounded-xl bg-emerald-600 text-white">
-                        <Trophy className="w-5 h-5" />
+                      <div className={`p-2.5 rounded-xl transition-colors ${
+                        modoEvaluacion === 'calificacion' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        <Trophy className="w-5 h-5" aria-hidden="true" />
                       </div>
-                      <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                        Visión Integral Objetiva
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          Visión Integral
+                        </span>
+                        {modoEvaluacion === 'calificacion' && (
+                          <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-emerald-600 text-white">
+                            Seleccionado
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <h3 className="text-lg font-black text-slate-900 mb-1.5">
                       Ranking General por Calificación DataROI (0–100)
@@ -1909,55 +2032,63 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                       Clasifica las <strong>{totalEnRegion} carreras</strong> de {infoRegActiva.corto} según su solidez integral en los <strong>6 Pilares Universales</strong> (Retorno salarial, Empleabilidad, Calidad OIT, Mérito, Blindaje IA y Estabilidad) con semáforo Verde, Amarillo y Rojo.
                     </p>
                   </div>
-                  <div className="mt-5 pt-3 border-t border-emerald-200/70 flex items-center justify-between text-xs font-black text-emerald-700">
-                    <span>Abrir Ranking General ahora</span>
-                    <ChevronRight className="w-4 h-4" />
+                  <div className="mt-5 pt-3 border-t border-emerald-200/70 flex items-center justify-between text-xs font-bold text-emerald-800">
+                    <span>No requiere configurar prioridades individuales</span>
+                    <span className="font-black">3 de 3 pasos</span>
                   </div>
                 </button>
 
                 <button
-                  onClick={() => {
-                    setModoEvaluacion('afinidad');
-                    setPasoWizard(4);
-                  }}
-                  className={`text-left p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                  type="button"
+                  aria-pressed={modoEvaluacion === 'afinidad'}
+                  onClick={() => setModoEvaluacion('afinidad')}
+                  className={`text-left p-5 rounded-2xl border-2 transition-all active:scale-98 cursor-pointer flex flex-col justify-between ${
                     modoEvaluacion === 'afinidad'
-                      ? 'border-blue-600 bg-blue-50/40 ring-2 ring-blue-600/15 shadow-xs'
-                      : 'border-slate-200 hover:border-blue-400 bg-white'
+                      ? 'border-blue-600 bg-blue-50/45 ring-2 ring-blue-600/15 shadow-xs'
+                      : 'border-slate-200 hover:border-blue-300 bg-white'
                   }`}
                 >
                   <div>
                     <div className="flex items-center justify-between mb-3">
-                      <div className="p-2.5 rounded-xl bg-blue-600 text-white">
-                        <Target className="w-5 h-5" />
+                      <div className={`p-2.5 rounded-xl transition-colors ${
+                        modoEvaluacion === 'afinidad' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        <Target className="w-5 h-5" aria-hidden="true" />
                       </div>
-                      <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
-                        A tu Medida (% Match)
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                          A tu Medida (% Match)
+                        </span>
+                        {modoEvaluacion === 'afinidad' && (
+                          <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-blue-600 text-white">
+                            Seleccionado
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <h3 className="text-lg font-black text-slate-900 mb-1.5">
                       Descubridor por Afinidad Personal (Tus 5 Prioridades)
                     </h3>
                     <p className="text-xs text-slate-600 leading-relaxed">
-                      Fija tu meta salarial mínima y selecciona de <strong>1 a 5 prioridades</strong> específicas (ej. <em>Trabajo Remoto</em>, <em>Sector Público</em>, <em>Independencia</em> o <em>Corporativo</em>) para encontrar las carreras que mejor se adaptan a ti.
+                      En el siguiente paso fijarás tu meta salarial mínima y elegirás de <strong>1 a 5 prioridades</strong> específicas (ej. <em>Trabajo Remoto</em>, <em>Sector Público</em>, <em>Independencia</em> o <em>Corporativo</em>) para encontrar las carreras que mejor se adaptan a ti.
                     </p>
                   </div>
-                  <div className="mt-5 pt-3 border-t border-slate-200/70 flex items-center justify-between text-xs font-black text-blue-600">
-                    <span>Configurar mis prioridades</span>
-                    <ChevronRight className="w-4 h-4" />
+                  <div className="mt-5 pt-3 border-t border-slate-200/70 flex items-center justify-between text-xs font-bold text-blue-700">
+                    <span>Continúa al Paso 4 para elegir tus prioridades</span>
+                    <span className="font-black">4 pasos en total</span>
                   </div>
                 </button>
               </div>
             </div>
           )}
 
-          {/* PASO 4: PISO SALARIAL + SELECCIÓN DE HASTA 5 PRIORIDADES (MODO AFINIDAD) */}
+          {/* PASO 4: PISO SALARIAL CON RIEL COLOREADO Y QUICK-PRESETS + 5 PRIORIDADES */}
           {pasoWizard === 4 && (
             <div key="paso4" className="animate-in fade-in slide-in-from-right-4 duration-200">
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 mb-5">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                   <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                    <Banknote className="w-4 h-4 text-emerald-600" />
+                    <Banknote className="w-4 h-4 text-emerald-600" aria-hidden="true" />
                     Piso Salarial Mensual Mínimo en {infoRegActiva.corto}:
                   </span>
                   <div className="flex items-center gap-2">
@@ -1969,17 +2100,48 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 </div>
                 <input
                   type="range"
+                  aria-label="Piso salarial mensual mínimo esperado"
                   min={minSueldoCatalogo}
                   max={maxSueldoCatalogo}
                   step="500"
                   value={sueldoMinimo}
                   onChange={(e) => setSueldoMinimo(Number(e.target.value))}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                  style={{
+                    background: `linear-gradient(to right, #059669 0%, #059669 ${pctSliderSueldo}%, #E2E8F0 ${pctSliderSueldo}%, #E2E8F0 100%)`
+                  }}
+                  className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-600"
                 />
                 <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono">
                   <span>Mín: {formatoMoneda(minSueldoCatalogo)}</span>
                   <span>Prepa: {formatoMoneda(sueldoPrepaActual)} · Cumplen: {totalFiltradas}/{totalEnRegion} carreras</span>
                   <span>Máx: {formatoMoneda(maxSueldoCatalogo)}+</span>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-1.5 mt-2.5 pt-2.5 border-t border-slate-200/70">
+                  <span className="text-[10.5px] font-bold text-slate-500">Preajustes rápidos:</span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSueldoMinimo(Math.ceil(sueldoPrepaActual / 500) * 500)}
+                      className="px-2.5 py-1 rounded-lg text-[10.5px] font-bold bg-white border border-slate-200 hover:border-emerald-500 text-slate-700 active:scale-95 transition-all cursor-pointer"
+                    >
+                      Igualar Prepa ({formatoMoneda(Math.ceil(sueldoPrepaActual / 500) * 500)})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSueldoMinimo(Math.round(infoRegActiva.sueldo_lic / 500) * 500)}
+                      className="px-2.5 py-1 rounded-lg text-[10.5px] font-bold bg-white border border-slate-200 hover:border-emerald-500 text-slate-700 active:scale-95 transition-all cursor-pointer"
+                    >
+                      Media Lic. ({formatoMoneda(Math.round(infoRegActiva.sueldo_lic / 500) * 500)})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSueldoMinimo(Math.min(maxSueldoCatalogo, 18000))}
+                      className="px-2.5 py-1 rounded-lg text-[10.5px] font-bold bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 active:scale-95 transition-all cursor-pointer"
+                    >
+                      Meta Alta ($18,000)
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -2004,7 +2166,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
               {alertaConflictoEcosistema && (
                 <div className="mb-3 flex items-center gap-2 bg-amber-50 border border-amber-200 px-3.5 py-2.5 rounded-xl text-xs text-amber-900 animate-in fade-in duration-150">
-                  <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                  <Info className="w-4 h-4 text-amber-600 shrink-0" aria-hidden="true" />
                   <span>
                     <strong>Nota de balance:</strong> Seleccionaste sectores empleadores opuestos (ej. <em>Corporativo</em> e <em>Independiente/Gobierno</em>). El ranking buscará carreras híbridas.
                   </span>
@@ -2021,9 +2183,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   return (
                     <button
                       key={pref.id}
+                      aria-pressed={isActive}
                       onClick={() => togglePreferencia(pref.id)}
                       disabled={bloqueadaPorTope}
-                      className={`text-left p-3 rounded-xl border-2 transition-all flex items-start gap-3 ${
+                      className={`text-left p-3 rounded-xl border-2 transition-all active:scale-98 flex items-start gap-3 ${
                         bloqueadaPorTope
                           ? 'border-slate-100 bg-slate-50/50 opacity-45 cursor-not-allowed'
                           : `${estilo.btn} cursor-pointer`
@@ -2050,14 +2213,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* CONTROLES DE NAVEGACIÓN DEL WIZARD */}
+          {/* PIE DE NAVEGACIÓN DEL WIZARD CON BOTÓN DINÁMICO EN EL PASO 3 */}
           <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
             {pasoWizard > 1 ? (
               <button
                 onClick={() => setPasoWizard(p => p - 1)}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 active:scale-95 transition-all cursor-pointer"
               >
-                <ChevronLeft className="w-4 h-4" /> Anterior
+                <ChevronLeft className="w-4 h-4" aria-hidden="true" /> Anterior
               </button>
             ) : (
               <div />
@@ -2066,21 +2229,27 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             {pasoWizard < 3 ? (
               <button
                 onClick={() => setPasoWizard(p => p + 1)}
-                className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs md:text-sm font-black text-white shadow-xs transition-all cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs md:text-sm font-black text-white shadow-xs active:scale-95 transition-all cursor-pointer"
               >
-                Siguiente paso <ChevronRight className="w-4 h-4" />
+                Siguiente paso <ChevronRight className="w-4 h-4" aria-hidden="true" />
               </button>
             ) : pasoWizard === 3 ? (
-              <button
-                onClick={() => {
-                  setModoEvaluacion('calificacion');
-                  setModoVistaFiltros('colapsado');
-                }}
-                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs md:text-sm font-black text-white shadow-sm transition-all cursor-pointer"
-              >
-                <Trophy className="w-4 h-4" />
-                Ver Ranking General DataROI (0–100)
-              </button>
+              modoEvaluacion === 'calificacion' ? (
+                <button
+                  onClick={() => setModoVistaFiltros('colapsado')}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs md:text-sm font-black text-white shadow-sm active:scale-95 transition-all cursor-pointer"
+                >
+                  <Trophy className="w-4 h-4" aria-hidden="true" />
+                  Abrir Ranking General DataROI (0–100) <ChevronRight className="w-4 h-4" aria-hidden="true" />
+                </button>
+              ) : (
+                <button
+                  onClick={() => setPasoWizard(4)}
+                  className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs md:text-sm font-black text-white shadow-xs active:scale-95 transition-all cursor-pointer"
+                >
+                  Siguiente paso: Elegir prioridades <ChevronRight className="w-4 h-4" aria-hidden="true" />
+                </button>
+              )
             ) : (
               <button
                 disabled={activos.length === 0}
@@ -2088,13 +2257,13 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   setModoEvaluacion('afinidad');
                   setModoVistaFiltros('colapsado');
                 }}
-                className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs md:text-sm font-black transition-all ${
+                className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs md:text-sm font-black transition-all active:scale-95 ${
                   activos.length > 0
                     ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm cursor-pointer'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 }`}
               >
-                <Sparkles className="w-4 h-4" />
+                <Sparkles className="w-4 h-4" aria-hidden="true" />
                 {activos.length > 0 ? `Ver mis ${totalFiltradas} carreras por Afinidad` : 'Elige al menos 1 prioridad'}
               </button>
             )}
@@ -2109,50 +2278,53 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       {modoVistaFiltros === 'colapsado' && (
         <div className="no-print bg-white rounded-2xl border border-slate-200 shadow-xs p-3.5 mb-6 flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-150">
           <div className="flex flex-wrap items-center gap-2">
-            {/* Switch Principal: Calificación Integral (0-100) vs. Afinidad Personal (% Match) */}
-            <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+            <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200" role="group" aria-label="Modo de evaluación">
               <button
+                aria-pressed={modoEvaluacion === 'calificacion'}
                 onClick={() => setModoEvaluacion('calificacion')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-black transition-all active:scale-95 cursor-pointer ${
                   modoEvaluacion === 'calificacion'
                     ? 'bg-emerald-600 text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <Trophy className="w-3.5 h-3.5" />
+                <Trophy className="w-3.5 h-3.5" aria-hidden="true" />
                 Calificación DataROI (0–100)
               </button>
               <button
+                aria-pressed={modoEvaluacion === 'afinidad'}
                 onClick={() => {
                   setModoEvaluacion('afinidad');
                   if (activos.length === 0) {
                     setModoVistaFiltros('expandido');
                   }
                 }}
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-black transition-all active:scale-95 cursor-pointer ${
                   modoEvaluacion === 'afinidad'
                     ? 'bg-blue-600 text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <Target className="w-3.5 h-3.5" />
+                <Target className="w-3.5 h-3.5" aria-hidden="true" />
                 Por Afinidad ({activos.length}/{MAX_PRIORIDADES})
               </button>
             </div>
 
             <button
               onClick={() => setModoVistaFiltros('expandido')}
+              title="Clic para cambiar la macro-región"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-blue-50 text-xs font-bold text-slate-800 border border-slate-200/80 transition-colors cursor-pointer"
             >
-              <MapPin className="w-3.5 h-3.5 text-blue-600" />
+              <MapPin className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
               <span>{infoRegActiva.corto}</span>
             </button>
 
             <button
               onClick={() => setModoVistaFiltros('expandido')}
+              title="Clic para cambiar la perspectiva de género"
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${ESTILOS_GENERO[generoActivo].activoBtn}`}
             >
-              <Users className="w-3.5 h-3.5" />
+              <Users className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{etiquetaGeneroCorto}</span>
             </button>
 
@@ -2160,9 +2332,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               <>
                 <button
                   onClick={() => setModoVistaFiltros('expandido')}
+                  title="Clic para ajustar el piso salarial"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 text-xs font-black text-emerald-800 border border-emerald-200 transition-colors cursor-pointer"
                 >
-                  <Banknote className="w-3.5 h-3.5 text-emerald-600" />
+                  <Banknote className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
                   <span>Mín. {formatoMoneda(sueldoMinimo)}/mes</span>
                 </button>
 
@@ -2185,27 +2358,22 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </>
             )}
           </div>
-
-          <button
-            onClick={() => setModoVistaFiltros('expandido')}
-            className="text-xs font-bold text-blue-600 hover:underline inline-flex items-center gap-1 cursor-pointer ml-auto"
-          >
-            Cambiar región o prioridades <ChevronDown className="w-3.5 h-3.5" />
-          </button>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* MODO 3: PANEL EXPANDIDO DE 2 COLUMNAS PARA EDICIÓN RÁPIDA                 */}
+      {/* MODO 3: PANEL EXPANDIDO DE 2 COLUMNAS (CON BLOQUEO HONESTO EN MODO SCORE) */}
       {/* ========================================================================= */}
       {modoVistaFiltros === 'expandido' && (
-        <div className="no-print grid grid-cols-1 lg:grid-cols-12 gap-5 mb-7 animate-in fade-in duration-200">
+        <div className={`no-print grid grid-cols-1 lg:grid-cols-12 gap-5 animate-in fade-in duration-200 ${
+          carrerasEnVersus.length > 0 ? 'mb-16' : 'mb-7'
+        }`}>
           
           <div className="lg:col-span-5 space-y-4">
             <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-xs">
               <div className="flex items-center justify-between mb-2.5">
                 <div className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-blue-600" />
+                  <MapPin className="w-4 h-4 text-blue-600" aria-hidden="true" />
                   <h2 className="font-black text-sm text-slate-900">1. Macro-Región Económica</h2>
                 </div>
                 <span className="text-[11px] font-bold text-slate-400">Clic en mapa o botones</span>
@@ -2217,10 +2385,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   return (
                     <button
                       key={idReg}
+                      aria-pressed={activa}
                       onClick={() => cambiarRegionConCalibracion(idReg)}
                       onMouseEnter={() => setRegionHover(idReg)}
                       onMouseLeave={() => setRegionHover(null)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all active:scale-95 cursor-pointer ${
                         activa
                           ? meta.badgeActivo
                           : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
@@ -2265,7 +2434,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
               <div>
                 <span className="font-black text-sm text-slate-900 flex items-center gap-2 mb-2">
-                  <Users className="w-4 h-4 text-blue-600" />
+                  <Users className="w-4 h-4 text-blue-600" aria-hidden="true" />
                   2. Perspectiva del Ranking
                 </span>
                 <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
@@ -2278,8 +2447,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                     return (
                       <button
                         key={op.id}
+                        aria-pressed={act}
                         onClick={() => cambiarGeneroConCalibracion(op.id)}
-                        className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all active:scale-95 cursor-pointer ${
                           act ? ESTILOS_GENERO[op.id].activoBtn : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
@@ -2294,7 +2464,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 <div className="pt-3.5 border-t border-slate-100">
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-black text-sm text-slate-900 flex items-center gap-2">
-                      <Banknote className="w-4 h-4 text-emerald-600" />
+                      <Banknote className="w-4 h-4 text-emerald-600" aria-hidden="true" />
                       3. Piso Salarial Mensual
                     </span>
                     <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${
@@ -2313,17 +2483,48 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
                   <input
                     type="range"
+                    aria-label="Piso salarial mensual mínimo"
                     min={minSueldoCatalogo}
                     max={maxSueldoCatalogo}
                     step="500"
                     value={sueldoMinimo}
                     onChange={(e) => setSueldoMinimo(Number(e.target.value))}
-                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                    style={{
+                      background: `linear-gradient(to right, #059669 0%, #059669 ${pctSliderSueldo}%, #E2E8F0 ${pctSliderSueldo}%, #E2E8F0 100%)`
+                    }}
+                    className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-600"
                   />
                   <div className="flex justify-between text-[11px] text-slate-400 mt-1.5 font-mono">
                     <span>{formatoMoneda(minSueldoCatalogo)}</span>
                     <span>Ref. Prepa: {formatoMoneda(sueldoPrepaActual)}</span>
                     <span>{formatoMoneda(maxSueldoCatalogo)}+</span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 mt-2.5 pt-2.5 border-t border-slate-100">
+                    <span className="text-[10px] font-bold text-slate-400">Preajustes:</span>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setSueldoMinimo(Math.ceil(sueldoPrepaActual / 500) * 500)}
+                        className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-50 border border-slate-200 hover:border-emerald-500 text-slate-700 active:scale-95 cursor-pointer"
+                      >
+                        Prepa ({formatoMoneda(Math.ceil(sueldoPrepaActual / 500) * 500)})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSueldoMinimo(Math.round(infoRegActiva.sueldo_lic / 500) * 500)}
+                        className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-50 border border-slate-200 hover:border-emerald-500 text-slate-700 active:scale-95 cursor-pointer"
+                      >
+                        Media Lic. ({formatoMoneda(Math.round(infoRegActiva.sueldo_lic / 500) * 500)})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSueldoMinimo(Math.min(maxSueldoCatalogo, 18000))}
+                        className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 active:scale-95 cursor-pointer"
+                      >
+                        $18,000
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2332,7 +2533,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
           <div className="lg:col-span-7 flex flex-col justify-between bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
             <div>
-              {/* Conmutador Superior en el Panel Derecho */}
               <div className="flex flex-wrap items-center justify-between gap-2 pb-3.5 mb-3.5 border-b border-slate-100">
                 <div>
                   <span className="text-[11px] font-black uppercase tracking-wider text-blue-600 block">
@@ -2347,47 +2547,59 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
                 <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
                   <button
+                    aria-pressed={modoEvaluacion === 'calificacion'}
                     onClick={() => setModoEvaluacion('calificacion')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 cursor-pointer ${
                       modoEvaluacion === 'calificacion'
                         ? 'bg-emerald-600 text-white shadow-2xs'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    <Trophy className="w-3.5 h-3.5" />
+                    <Trophy className="w-3.5 h-3.5" aria-hidden="true" />
                     Calificación (0–100)
                   </button>
                   <button
+                    aria-pressed={modoEvaluacion === 'afinidad'}
                     onClick={() => setModoEvaluacion('afinidad')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 cursor-pointer ${
                       modoEvaluacion === 'afinidad'
                         ? 'bg-blue-600 text-white shadow-2xs'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    <Target className="w-3.5 h-3.5" />
+                    <Target className="w-3.5 h-3.5" aria-hidden="true" />
                     Por Afinidad (% Match)
                   </button>
                 </div>
               </div>
 
               {modoEvaluacion === 'calificacion' && (
-                <div className="mb-3.5 p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-950 flex items-start gap-2.5">
-                  <Trophy className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="block font-black mb-0.5">
-                      Modo Calificación Integral DataROI (0–100) activo:
-                    </strong>
-                    <span>
-                      Evalúa todas las carreras de {infoRegActiva.corto} sin sesgo de preferencias individuales mediante los <strong>6 Pilares Universales</strong> (25% Retorno Salarial, 20% Empleabilidad, 20% Calidad OIT, 15% Mérito, 10% Blindaje IA y 10% Estabilidad). Si prefieres personalizar por tus gustos, haz clic en cualquiera de las 10 tarjetas de abajo.
-                    </span>
+                <div className="mb-3.5 p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <Trophy className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
+                    <div>
+                      <strong className="block font-black mb-0.5">
+                        Modo Calificación Integral DataROI (0–100) activo:
+                      </strong>
+                      <span>
+                        Evalúa todas las carreras mediante los <strong>6 Pilares Universales fijos</strong> (25% Retorno, 20% Empleo, 20% Calidad OIT, 15% Mérito, 10% Blindaje IA y 10% Estabilidad). Las prioridades individuales están bloqueadas en este modo.
+                      </span>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setModoEvaluacion('afinidad')}
+                    className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-[11px] shrink-0 active:scale-95 transition-all cursor-pointer inline-flex items-center gap-1.5 self-end sm:self-center shadow-2xs"
+                  >
+                    <Target className="w-3.5 h-3.5" aria-hidden="true" />
+                    Desbloquear Afinidad
+                  </button>
                 </div>
               )}
 
               {alertaConflictoEcosistema && (
                 <div className="mb-3 flex items-center gap-2 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl text-xs text-amber-900">
-                  <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                  <Info className="w-4 h-4 text-amber-600 shrink-0" aria-hidden="true" />
                   <span>
                     <strong>Nota de balance:</strong> Seleccionaste sectores empleadores opuestos (ej. <em>Corporativo</em> e <em>Independiente/Gobierno</em>). El ranking buscará carreras híbridas.
                   </span>
@@ -2395,60 +2607,81 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               )}
 
               <div className="flex items-center justify-between text-xs mb-2">
-                <span className="font-bold text-slate-600">
-                  Prioridades para el Modo Afinidad ({activos.length}/{MAX_PRIORIDADES}):
+                <span className="font-bold text-slate-600 flex items-center gap-1.5">
+                  {modoEvaluacion === 'calificacion' && <Lock className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />}
+                  Prioridades para el Modo Afinidad ({activos.length}/{MAX_PRIORIDADES} {modoEvaluacion === 'calificacion' ? 'guardadas en pausa' : 'activas'}):
                 </span>
-                {activos.length > 0 && (
+                {activos.length > 0 && modoEvaluacion === 'afinidad' && (
                   <button
                     onClick={() => setActivos([])}
                     className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-rose-600 cursor-pointer"
                   >
-                    <RotateCcw className="w-3 h-3" /> Limpiar prioridades
+                    <RotateCcw className="w-3 h-3" aria-hidden="true" /> Limpiar prioridades
                   </button>
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
-                {PREFERENCIAS.map((pref) => {
-                  const isActive = modoEvaluacion === 'afinidad' && activos.includes(pref.id);
-                  const infoPeso = pesosPrioridad[pref.id];
-                  const bloqueadaPorTope = modoEvaluacion === 'afinidad' && !isActive && activos.length >= MAX_PRIORIDADES;
-                  const estilo = obtenerEstiloJerarquiaPrioridad(isActive ? infoPeso?.orden : undefined);
-
-                  return (
+              {/* Cuadrícula de Prioridades: Bloqueada explícitamente cuando modoEvaluacion === 'calificacion' pero mostrando honestamente las guardadas */}
+              <div className="relative">
+                {modoEvaluacion === 'calificacion' && (
+                  <div className="absolute inset-0 z-10 bg-slate-100/45 backdrop-blur-[1px] rounded-xl flex items-center justify-center p-4">
                     <button
-                      key={pref.id}
-                      onClick={() => togglePreferencia(pref.id)}
-                      disabled={bloqueadaPorTope}
-                      className={`text-left p-3 rounded-xl border-2 transition-all duration-150 flex flex-col justify-between relative ${
-                        bloqueadaPorTope
-                          ? 'border-slate-100 bg-slate-50/50 opacity-45 cursor-not-allowed'
-                          : `${estilo.btn} cursor-pointer`
-                      }`}
+                      type="button"
+                      onClick={() => setModoEvaluacion('afinidad')}
+                      className="px-4 py-2.5 rounded-2xl bg-slate-900/95 hover:bg-blue-600 text-white text-xs font-black shadow-lg border border-slate-700 inline-flex items-center gap-2 active:scale-95 transition-all cursor-pointer"
                     >
-                      <div className="flex items-start justify-between gap-2 w-full mb-1">
-                        <div className={`p-1.5 rounded-lg shrink-0 transition-colors ${estilo.icono}`}>
-                          {pref.icon}
+                      <Lock className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
+                      <span>Prioridades en pausa · Clic aquí para cambiar a “Por Afinidad” y editarlas</span>
+                    </button>
+                  </div>
+                )}
+
+                <div className={`grid grid-cols-2 gap-2.5 ${modoEvaluacion === 'calificacion' ? 'opacity-55 pointer-events-none select-none' : ''}`}>
+                  {PREFERENCIAS.map((pref) => {
+                    const estaGuardada = activos.includes(pref.id);
+                    const infoPeso = pesosPrioridad[pref.id];
+                    const bloqueadaPorModo = modoEvaluacion === 'calificacion';
+                    const bloqueadaPorTope = !estaGuardada && activos.length >= MAX_PRIORIDADES;
+                    const deshabilitada = bloqueadaPorModo || bloqueadaPorTope;
+                    const estilo = obtenerEstiloJerarquiaPrioridad(estaGuardada ? infoPeso?.orden : undefined);
+
+                    return (
+                      <button
+                        key={pref.id}
+                        type="button"
+                        aria-pressed={estaGuardada}
+                        onClick={() => togglePreferencia(pref.id)}
+                        disabled={deshabilitada}
+                        className={`text-left p-3 rounded-xl border-2 transition-all duration-150 flex flex-col justify-between relative ${
+                          bloqueadaPorTope && !bloqueadaPorModo
+                            ? 'border-slate-100 bg-slate-50/50 opacity-45 cursor-not-allowed'
+                            : `${estilo.btn} ${deshabilitada ? 'cursor-not-allowed' : 'cursor-pointer'}`
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2 w-full mb-1">
+                          <div className={`p-1.5 rounded-lg shrink-0 transition-colors ${estilo.icono}`}>
+                            {pref.icon}
+                          </div>
+
+                          {estaGuardada && infoPeso && (
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black tracking-wide shrink-0 ${estilo.badge}`}>
+                              {bloqueadaPorModo ? `Guardada #${infoPeso.orden}` : `Prioridad #${infoPeso.orden} · ${infoPeso.pesoPct}%`}
+                            </span>
+                          )}
                         </div>
 
-                        {isActive && infoPeso && (
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-black tracking-wide shrink-0 ${estilo.badge}`}>
-                            Prioridad #{infoPeso.orden} · {infoPeso.pesoPct}%
-                          </span>
-                        )}
-                      </div>
-
-                      <div>
-                        <h3 className="font-black text-xs md:text-sm text-slate-900 mb-0.5 leading-snug">
-                          {pref.label}
-                        </h3>
-                        <p className="text-[11px] text-slate-600 leading-tight hidden sm:block">
-                          {pref.desc}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
+                        <div>
+                          <h3 className="font-black text-xs md:text-sm text-slate-900 mb-0.5 leading-snug">
+                            {pref.label}
+                          </h3>
+                          <p className="text-[11px] text-slate-600 leading-tight hidden sm:block">
+                            {pref.desc}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -2475,7 +2708,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       )}
 
       {/* ========================================================================= */}
-      {/* ZONA DE RESULTADOS DEL RANKING                                            */}
+      {/* ZONA DE RESULTADOS DEL RANKING (UN SOLO PROTAGONISTA NUMÉRICO POR MODO)   */}
       {/* ========================================================================= */}
       {tieneResultadosActivos && modoVistaFiltros !== 'wizard' && (
         <div className="animate-in fade-in duration-200">
@@ -2485,12 +2718,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               <h2 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2">
                 {modoEvaluacion === 'calificacion' ? (
                   <>
-                    <Trophy className="w-5 h-5 text-emerald-600" />
+                    <Trophy className="w-5 h-5 text-emerald-600" aria-hidden="true" />
                     Ranking General por Calificación DataROI en {infoRegActiva.corto} ({etiquetaGeneroCorto})
                   </>
                 ) : (
                   <>
-                    <Target className="w-5 h-5 text-blue-600" />
+                    <Target className="w-5 h-5 text-blue-600" aria-hidden="true" />
                     Ranking por Afinidad Personal en {infoRegActiva.corto} ({etiquetaGeneroCorto})
                   </>
                 )}
@@ -2505,37 +2738,38 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             <div className="no-print flex flex-wrap items-center gap-2 shrink-0">
               <button
                 onClick={compartirRankingLink}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs active:scale-95 transition-all cursor-pointer"
               >
-                {copiadoRanking ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" />}
+                {copiadoRanking ? <Check className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />}
                 {copiadoRanking ? '¡Link copiado!' : 'Compartir'}
               </button>
 
               <button
                 onClick={exportarRankingExcel}
                 title="Descargar Libro de Excel (.xlsx) con 2 Hojas, medallas Oro/Plata/Bronce y alineación uniforme"
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs transition-all cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs active:scale-95 transition-all cursor-pointer"
               >
-                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
                 Excel (2 Hojas)
               </button>
 
               <button
                 onClick={exportarRankingCSV}
                 title="Descargar tabla en formato CSV limpio"
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs transition-all cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 shadow-2xs active:scale-95 transition-all cursor-pointer"
               >
-                <Download className="w-3.5 h-3.5 text-blue-600" />
+                <Download className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
                 CSV
               </button>
 
-              <span className="text-xs font-bold text-slate-700 bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs">
+              <span aria-live="polite" className="text-xs font-bold text-slate-700 bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs">
                 Evaluando <strong>{totalFiltradas}</strong> carreras
               </span>
 
               <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
-                <ArrowUpDown className="w-4 h-4 text-blue-600 shrink-0" />
+                <ArrowUpDown className="w-4 h-4 text-blue-600 shrink-0" aria-hidden="true" />
                 <select
+                  aria-label="Criterio de ordenamiento del ranking"
                   value={orden}
                   onChange={(e) => setOrden(e.target.value as CriterioOrden)}
                   className="bg-transparent border-none text-xs md:text-sm font-bold text-slate-800 focus:ring-0 cursor-pointer outline-none pr-2"
@@ -2568,57 +2802,85 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </button>
             </div>
           ) : (
-            <div className="space-y-3.5">
+            <div className="space-y-4">
               {rankingVisible.map((carrera) => {
+                const esOrdenSalarial = orden === 'salario_desc' || orden === 'salario_asc';
                 const isGold = carrera.rankAfinidad === 1;
                 const isSilver = carrera.rankAfinidad === 2;
                 const isBronze = carrera.rankAfinidad === 3;
                 const isPodium = isGold || isSilver || isBronze;
-                const isBottom3 = orden === 'principal_asc' && totalFiltradas > 5 && carrera.rankAfinidad > totalFiltradas - 3;
 
-                const enComparador = carrerasCompararCves.includes(carrera.cve_carrera);
-                const topeComparador = !enComparador && carrerasCompararCves.length >= MAX_COMPARAR;
-                const capexInfo = obtenerCapExCorto(carrera.cve_carrera);
                 const semScore = obtenerSemaforoScoreDataROI(carrera.scoreDataROI);
+                const isEnRiesgo =
+                  (totalFiltradas > 5 && carrera.rankAfinidad > totalFiltradas - 3) ||
+                  (modoEvaluacion === 'calificacion' && semScore.grado === 'C');
 
-                let borderClass = "border-slate-200 hover:border-blue-400";
+                const idxSlotVersus = carrerasCompararCves.indexOf(carrera.cve_carrera);
+                const enComparador = idxSlotVersus !== -1;
+                const topeComparador = !enComparador && carrerasCompararCves.length >= MAX_COMPARAR;
+                const slotEstilo = enComparador ? COLORES_VERSUS[idxSlotVersus] || COLORES_VERSUS[0] : null;
+
+                const capexInfo = obtenerCapExCorto(carrera.cve_carrera);
+                const primaEntero = Math.round(carrera.premioVsPrepaPct);
+                const afinidadEntero = Math.round(carrera.matchScore);
+
+                const numPrincipalBadge = esOrdenSalarial ? carrera.posicionListaActual : carrera.rankAfinidad;
+
+                let borderClass = "border-slate-200 hover:border-blue-400 hover:shadow-[0_18px_35px_-12px_rgba(37,99,235,0.16)]";
                 let badgeColor = "bg-slate-100 text-slate-700";
-                let badgeContent = <span className="font-black text-base">#{carrera.rankAfinidad}</span>;
+                let badgeContent = (
+                  <div className="flex flex-col items-center leading-none">
+                    <span className="font-black text-sm">#{numPrincipalBadge}{esOrdenSalarial ? ' $' : ''}</span>
+                    {esOrdenSalarial && (
+                      <span className="text-[9.5px] font-bold text-slate-500 mt-0.5">
+                        Rank #{carrera.rankAfinidad}
+                      </span>
+                    )}
+                  </div>
+                );
 
                 if (isGold) {
-                  borderClass = "border-amber-400 shadow-sm ring-2 ring-amber-400/20";
+                  borderClass = "border-amber-400 shadow-sm ring-2 ring-amber-400/20 hover:shadow-[0_20px_38px_-12px_rgba(245,158,11,0.25)]";
                   badgeColor = "bg-amber-100 text-amber-800";
                   badgeContent = (
                     <div className="flex flex-col items-center leading-none">
-                      <Trophy className="w-5 h-5 text-amber-600 mb-0.5" />
-                      <span className="text-[11px] font-black">#1</span>
+                      <Trophy className="w-5 h-5 text-amber-600 mb-0.5" aria-hidden="true" />
+                      <span className="text-[11px] font-black">
+                        {esOrdenSalarial ? `#${numPrincipalBadge} $` : '#1'}
+                      </span>
                     </div>
                   );
                 } else if (isSilver) {
-                  borderClass = "border-slate-300 shadow-xs ring-2 ring-slate-300/30";
+                  borderClass = "border-slate-300 shadow-xs ring-2 ring-slate-300/30 hover:shadow-md";
                   badgeColor = "bg-slate-200 text-slate-800";
                   badgeContent = (
                     <div className="flex flex-col items-center leading-none">
-                      <Medal className="w-5 h-5 text-slate-600 mb-0.5" />
-                      <span className="text-[11px] font-black">#2</span>
+                      <Medal className="w-5 h-5 text-slate-600 mb-0.5" aria-hidden="true" />
+                      <span className="text-[11px] font-black">
+                        {esOrdenSalarial ? `#${numPrincipalBadge} $` : '#2'}
+                      </span>
                     </div>
                   );
                 } else if (isBronze) {
-                  borderClass = "border-orange-300 shadow-xs ring-2 ring-orange-300/20";
+                  borderClass = "border-orange-300 shadow-xs ring-2 ring-orange-300/20 hover:shadow-md";
                   badgeColor = "bg-orange-100 text-orange-900";
                   badgeContent = (
                     <div className="flex flex-col items-center leading-none">
-                      <Medal className="w-5 h-5 text-orange-600 mb-0.5" />
-                      <span className="text-[11px] font-black">#3</span>
+                      <Medal className="w-5 h-5 text-orange-600 mb-0.5" aria-hidden="true" />
+                      <span className="text-[11px] font-black">
+                        {esOrdenSalarial ? `#${numPrincipalBadge} $` : '#3'}
+                      </span>
                     </div>
                   );
-                } else if (isBottom3) {
-                  borderClass = "border-rose-200 hover:border-rose-400 bg-rose-50/10";
+                } else if (isEnRiesgo) {
+                  borderClass = "border-rose-200 hover:border-rose-400 bg-rose-50/10 hover:shadow-[0_18px_35px_-12px_rgba(225,29,72,0.18)]";
                   badgeColor = "bg-rose-50 text-rose-700 border border-rose-200";
                   badgeContent = (
                     <div className="flex flex-col items-center leading-none">
-                      <AlertTriangle className="w-4 h-4 text-rose-500 mb-0.5" />
-                      <span className="text-[11px] font-black">#{carrera.rankAfinidad}</span>
+                      <AlertTriangle className="w-4 h-4 text-rose-500 mb-0.5" aria-hidden="true" />
+                      <span className="text-[11px] font-black">
+                        {esOrdenSalarial ? `#${numPrincipalBadge} $` : `#${carrera.rankAfinidad}`}
+                      </span>
                     </div>
                   );
                 }
@@ -2627,25 +2889,28 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   <Link
                     key={carrera.cve_carrera}
                     href={`/carrera/${carrera.cve_carrera}?region=${regionActiva}&genero=${queryGeneroParam}`}
-                    className={`print-avoid-break block bg-white p-5 rounded-2xl border-2 transition-all group relative overflow-hidden ${borderClass}`}
+                    className={`print-avoid-break block bg-gradient-to-b from-white via-white to-slate-50/75 p-5 rounded-2xl border-2 transition-all duration-300 hover:-translate-y-1 group relative overflow-hidden ${borderClass}`}
                   >
                     <div
                       className={`absolute bottom-0 left-0 h-1 opacity-25 ${
-                        isGold ? 'bg-amber-500' : isBottom3 ? 'bg-rose-500' : 'bg-blue-600'
+                        isGold ? 'bg-amber-500' : isEnRiesgo ? 'bg-rose-500' : 'bg-blue-600'
                       }`}
-                      style={{ width: `${carrera.matchScore}%` }}
+                      style={{ width: `${afinidadEntero}%` }}
                     />
 
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                       
                       <div className="flex items-start gap-4 flex-1">
-                        <div className={`flex items-center justify-center w-13 h-13 shrink-0 rounded-xl font-black ${badgeColor}`}>
+                        <div className={`flex items-center justify-center w-14 h-14 shrink-0 rounded-xl font-black ${badgeColor}`}>
                           {badgeContent}
                         </div>
 
                         <div className="flex-1 min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <h3 className={`font-black tracking-tight ${isPodium ? 'text-lg md:text-xl text-slate-900' : 'text-base md:text-lg text-slate-800'}`}>
+                            <h3
+                              title={carrera.nombre_oficial_inegi || carrera.nombre_carrera}
+                              className={`font-black tracking-tight group-hover:text-blue-600 transition-colors ${isPodium ? 'text-lg md:text-xl text-slate-900' : 'text-base md:text-lg text-slate-800'}`}
+                            >
                               {carrera.nombre_carrera}
                             </h3>
                             {isPodium && orden !== 'principal_desc' && (
@@ -2657,7 +2922,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
                           <div className="flex flex-wrap items-center gap-2 mt-1 mb-3">
                             <span className={`text-sm font-black ${
-                              orden === 'salario_desc' || orden === 'salario_asc'
+                              esOrdenSalarial
                                 ? 'bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-lg border border-emerald-200'
                                 : 'text-emerald-600'
                             }`}>
@@ -2665,11 +2930,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                             </span>
 
                             <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
-                              carrera.premioVsPrepaPct >= 0
+                              primaEntero >= 0
                                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                 : 'bg-rose-50 text-rose-700 border-rose-200'
                             }`}>
-                              {carrera.premioVsPrepaPct >= 0 ? `+${carrera.premioVsPrepaPct}%` : `${carrera.premioVsPrepaPct}%`} vs. Prepa
+                              {primaEntero >= 0 ? `+${primaEntero}%` : `${primaEntero}%`} vs. Prepa
                             </span>
 
                             <BadgeTendencia
@@ -2681,10 +2946,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                               {capexInfo.corto}
                             </span>
 
-                            {/* Si está en modo Afinidad, mostramos también su Score DataROI con su color de semáforo */}
                             {modoEvaluacion === 'afinidad' && (
                               <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${semScore.bgBadgeClass}`}>
-                                Score DataROI: {carrera.scoreDataROI}/100 ({semScore.etiqueta})
+                                Viabilidad: Grado {semScore.grado} ({semScore.etiqueta})
                               </span>
                             )}
                           </div>
@@ -2696,31 +2960,31 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                               const esBronceRubro = item.rankRubro === 3;
                               const esFondo3Rubro = item.totalViables > 6 && item.rankRubro > item.totalViables - 3;
 
-                              let cardStyle = 'bg-slate-50/90 border-slate-200/80';
-                              let barColor = 'bg-blue-600';
-                              let rankBadgeStyle = 'bg-slate-200/80 text-slate-700';
+                              let cardStyle = 'bg-white border-slate-200/80 shadow-2xs';
+                              let barColor = 'bg-gradient-to-r from-blue-600 to-indigo-500';
+                              let rankBadgeStyle = 'bg-slate-100 text-slate-700';
                               let rankIcon = null;
 
                               if (esOroRubro) {
-                                cardStyle = 'bg-amber-50/45 border-amber-300 shadow-2xs';
-                                barColor = 'bg-amber-500';
+                                cardStyle = 'bg-amber-50/50 border-amber-300 shadow-2xs';
+                                barColor = 'bg-gradient-to-r from-amber-500 to-yellow-400';
                                 rankBadgeStyle = 'bg-amber-100 text-amber-900 border border-amber-300';
-                                rankIcon = <Trophy className="w-3 h-3 text-amber-600 shrink-0" />;
+                                rankIcon = <Trophy className="w-3 h-3 text-amber-600 shrink-0" aria-hidden="true" />;
                               } else if (esPlataRubro) {
                                 cardStyle = 'bg-slate-100/80 border-slate-300';
-                                barColor = 'bg-slate-600';
+                                barColor = 'bg-gradient-to-r from-slate-600 to-slate-500';
                                 rankBadgeStyle = 'bg-slate-200 text-slate-900 border border-slate-300';
-                                rankIcon = <Medal className="w-3 h-3 text-slate-600 shrink-0" />;
+                                rankIcon = <Medal className="w-3 h-3 text-slate-600 shrink-0" aria-hidden="true" />;
                               } else if (esBronceRubro) {
-                                cardStyle = 'bg-orange-50/40 border-orange-300';
-                                barColor = 'bg-orange-500';
+                                cardStyle = 'bg-orange-50/45 border-orange-300';
+                                barColor = 'bg-gradient-to-r from-orange-500 to-amber-500';
                                 rankBadgeStyle = 'bg-orange-100 text-orange-900 border border-orange-300';
-                                rankIcon = <Medal className="w-3 h-3 text-orange-600 shrink-0" />;
+                                rankIcon = <Medal className="w-3 h-3 text-orange-600 shrink-0" aria-hidden="true" />;
                               } else if (esFondo3Rubro) {
-                                cardStyle = 'bg-rose-50/40 border-rose-200';
-                                barColor = 'bg-rose-500';
+                                cardStyle = 'bg-rose-50/45 border-rose-200';
+                                barColor = 'bg-gradient-to-r from-rose-600 to-orange-500';
                                 rankBadgeStyle = 'bg-rose-100 text-rose-800 border border-rose-200';
-                                rankIcon = <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />;
+                                rankIcon = <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" aria-hidden="true" />;
                               }
 
                               return (
@@ -2741,9 +3005,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                                     </span>
                                   </div>
 
-                                  <div className="w-full h-1.5 bg-slate-200/90 rounded-full overflow-hidden mb-1.5">
+                                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden mb-1.5">
                                     <div
-                                      className={`h-full rounded-full ${barColor}`}
+                                      className={`h-full rounded-full transition-all duration-500 ${barColor}`}
                                       style={{ width: `${Math.max(8, Math.min(100, item.score))}%` }}
                                     />
                                   </div>
@@ -2758,41 +3022,42 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                         </div>
                       </div>
 
-                      {/* Columna Derecha: Anillo Circular Semáforo (en modo Calificación) o % Match (en modo Afinidad) */}
+                      {/* Columna Derecha: EXCLUSIVIDAD FOCAL + BOTÓN VERSUS CON NÚMERO DE SLOT */}
                       <div className="flex items-center justify-between lg:flex-col lg:items-end lg:justify-between gap-3 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0">
                         {modoEvaluacion === 'calificacion' ? (
                           <AnilloScoreDataROIGrande score={carrera.scoreDataROI} rank={carrera.rankAfinidad} />
                         ) : (
                           <div className="text-left lg:text-right">
-                            <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">
+                            <p className="text-[10.5px] text-slate-400 font-black uppercase tracking-wider mb-0.5">
                               Afinidad (#{carrera.rankAfinidad})
                             </p>
-                            <p className={`font-black ${isPodium ? 'text-3xl md:text-4xl' : 'text-2xl md:text-3xl'} ${
-                              isBottom3 ? 'text-rose-600' : 'text-blue-600'
+                            <p className={`font-black leading-none ${isPodium ? 'text-3xl md:text-4xl' : 'text-2xl md:text-3xl'} ${
+                              isEnRiesgo ? 'text-rose-600' : 'text-blue-600'
                             }`}>
-                              {carrera.matchScore.toFixed(1)}%
+                              {afinidadEntero}%
                             </p>
                           </div>
                         )}
 
                         <div className="no-print flex items-center gap-2">
                           <button
+                            aria-pressed={enComparador}
                             onClick={(e) => toggleCarreraComparar(e, carrera.cve_carrera)}
                             disabled={topeComparador}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all inline-flex items-center gap-1.5 ${
-                              enComparador
-                                ? 'bg-slate-900 text-white border-slate-900 cursor-pointer'
+                            className={`px-3 py-1.5 rounded-xl text-xs font-black border transition-all active:scale-95 inline-flex items-center gap-1.5 ${
+                              enComparador && slotEstilo
+                                ? `${slotEstilo.btnClass} cursor-pointer`
                                 : topeComparador
                                   ? 'bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed'
-                                  : 'bg-white text-slate-700 border-slate-200 hover:border-blue-500 hover:text-blue-600 cursor-pointer'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:border-blue-500 hover:text-blue-600 shadow-2xs cursor-pointer'
                             }`}
                           >
-                            {enComparador ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Scale className="w-3.5 h-3.5" />}
-                            {enComparador ? 'Comparando' : 'Comparar'}
+                            {enComparador ? <Check className="w-3.5 h-3.5" aria-hidden="true" /> : <Scale className="w-3.5 h-3.5" aria-hidden="true" />}
+                            {enComparador ? `En Versus #${idxSlotVersus + 1}` : '+ Comparar'}
                           </button>
 
                           <div className="bg-slate-100 p-2 rounded-full group-hover:bg-blue-600 transition-colors">
-                            <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-white" />
+                            <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all" aria-hidden="true" />
                           </div>
                         </div>
                       </div>
@@ -2806,16 +3071,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 <div className="no-print pt-5 text-center">
                   <button
                     onClick={() => setMostrarTodas(prev => !prev)}
-                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white border-2 border-slate-200 hover:border-blue-600 hover:text-blue-600 font-bold text-xs md:text-sm text-slate-700 shadow-2xs transition-all cursor-pointer"
+                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white border-2 border-slate-200 hover:border-blue-600 hover:text-blue-600 font-bold text-xs md:text-sm text-slate-700 shadow-2xs active:scale-95 transition-all cursor-pointer"
                   >
                     {mostrarTodas ? (
                       <>
-                        <ChevronUp className="w-4 h-4" />
+                        <ChevronUp className="w-4 h-4" aria-hidden="true" />
                         Contraer lista y volver al Top 10
                       </>
                     ) : (
                       <>
-                        <ChevronDown className="w-4 h-4" />
+                        <ChevronDown className="w-4 h-4" aria-hidden="true" />
                         Mostrar las {carrerasRestantes} carreras restantes
                       </>
                     )}
@@ -2828,58 +3093,109 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       )}
 
       {/* ========================================================================= */}
-      {/* BANDEJA FLOTANTE INFERIOR DEL COMPARADOR CARA A CARA (DOCK)               */}
+      {/* BANDEJA FLOTANTE INFERIOR DEL COMPARADOR CARA A CARA (MINIMIZABLE)        */}
       {/* ========================================================================= */}
       {carrerasEnVersus.length > 0 && (
-        <div className="no-print fixed bottom-4 left-4 right-4 z-40 max-w-4xl mx-auto bg-slate-900/95 backdrop-blur-md text-white p-3.5 rounded-2xl shadow-2xl border border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in slide-in-from-bottom-4 duration-200">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-black uppercase tracking-wider text-blue-400 mr-1 flex items-center gap-1.5">
-              <Scale className="w-4 h-4" /> Versus ({carrerasEnVersus.length}/{MAX_COMPARAR}):
-            </span>
-            {carrerasEnVersus.map((c: any, idx: number) => (
-              <span
-                key={c.cve_carrera}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs font-bold"
-              >
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORES_VERSUS[idx]?.hex }} />
-                <span className="max-w-[170px] truncate">{c.nombre_carrera}</span>
-                <button
-                  onClick={() => setCarrerasCompararCves(prev => prev.filter(id => id !== c.cve_carrera))}
-                  className="text-slate-400 hover:text-white ml-1 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+        <div
+          role="region"
+          aria-label="Bandeja de carreras seleccionadas para comparar"
+          className="no-print fixed bottom-4 left-4 right-4 z-40 flex justify-center pointer-events-none"
+        >
+          {dockMinimizado ? (
+            <div className="pointer-events-auto bg-slate-900/95 backdrop-blur-md text-white px-4 py-2.5 rounded-full shadow-2xl border border-slate-700 flex items-center gap-3 animate-in fade-in duration-150">
+              <span className="text-xs font-black text-blue-400 flex items-center gap-1.5">
+                <Scale className="w-4 h-4" aria-hidden="true" />
+                Versus ({carrerasEnVersus.length}/{MAX_COMPARAR})
               </span>
-            ))}
-          </div>
+              {carrerasEnVersus.length >= 2 && (
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('dataroi-open-versus-modal'))}
+                  className="px-3 py-1 rounded-full bg-blue-600 hover:bg-blue-500 text-xs font-black text-white cursor-pointer"
+                >
+                  ⚡ Comparar ahora
+                </button>
+              )}
+              <button
+                onClick={() => setDockMinimizado(false)}
+                aria-label="Expandir bandeja de comparación"
+                className="inline-flex items-center gap-1 text-xs font-bold text-slate-300 hover:text-white px-2 py-1 rounded-lg bg-slate-800 cursor-pointer"
+              >
+                Expandir <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          ) : (
+            <div className="pointer-events-auto max-w-4xl w-full bg-slate-900/95 backdrop-blur-md text-white p-3.5 rounded-2xl shadow-2xl border border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in slide-in-from-bottom-4 duration-200">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-black uppercase tracking-wider text-blue-400 mr-1 flex items-center gap-1.5">
+                  <Scale className="w-4 h-4" aria-hidden="true" /> Versus ({carrerasEnVersus.length}/{MAX_COMPARAR}):
+                </span>
+                {carrerasEnVersus.map((c: any, idx: number) => (
+                  <span
+                    key={c.cve_carrera}
+                    className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs font-bold"
+                  >
+                    <span
+                      className="w-4 h-4 rounded-full text-[9.5px] font-black text-white flex items-center justify-center shrink-0"
+                      style={{ backgroundColor: COLORES_VERSUS[idx]?.hex }}
+                    >
+                      #{idx + 1}
+                    </span>
+                    <span className="max-w-[165px] truncate">{c.nombre_carrera}</span>
+                    <button
+                      onClick={() => setCarrerasCompararCves(prev => prev.filter(id => id !== c.cve_carrera))}
+                      aria-label={`Quitar ${c.nombre_carrera} del comparador`}
+                      className="w-6 h-6 rounded-md inline-flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-700 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </span>
+                ))}
+              </div>
 
-          <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
-            <button
-              onClick={() => setCarrerasCompararCves([])}
-              className="text-xs font-bold text-slate-400 hover:text-white px-2.5 py-1.5 cursor-pointer"
-            >
-              Limpiar
-            </button>
-            <button
-              disabled={carrerasEnVersus.length < 2}
-              onClick={() => setModalVersusAbierto(true)}
-              className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${
-                carrerasEnVersus.length >= 2
-                  ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm cursor-pointer'
-                  : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-              }`}
-            >
-              {carrerasEnVersus.length >= 2 ? '⚡ Comparar Cara a Cara' : 'Elige al menos 2 carreras'}
-            </button>
-          </div>
+              <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+                <button
+                  onClick={() => setDockMinimizado(true)}
+                  title="Minimizar barra para ver tarjetas inferiores"
+                  className="inline-flex items-center gap-1 text-xs font-bold text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 cursor-pointer"
+                >
+                  Minimizar <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+                <button
+                  onClick={() => setCarrerasCompararCves([])}
+                  className="text-xs font-bold text-slate-400 hover:text-white px-2.5 py-1.5 cursor-pointer"
+                >
+                  Limpiar
+                </button>
+                <button
+                  disabled={carrerasEnVersus.length < 2}
+                  onClick={() => window.dispatchEvent(new CustomEvent('dataroi-open-versus-modal'))}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition-all active:scale-95 ${
+                    carrerasEnVersus.length >= 2
+                      ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm cursor-pointer'
+                      : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                  }`}
+                >
+                  {carrerasEnVersus.length >= 2 ? '⚡ Comparar Cara a Cara' : 'Elige al menos 2 carreras'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL EJECUTIVO DE COMPARACIÓN CARA A CARA (CON ANILLO SCORE DATAROI)     */}
+      {/* MODAL EJECUTIVO DE COMPARACIÓN CARA A CARA (CON ENTEROS ROTUNDOS)         */}
       {/* ========================================================================= */}
       {modalVersusAbierto && carrerasEnVersus.length >= 2 && (
-        <div className="versus-print-modal fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Comparador ejecutivo cara a cara de licenciaturas"
+          className="versus-print-modal fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setModalVersusAbierto(false);
+          }}
+        >
           <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-5xl w-full max-h-[92vh] overflow-y-auto p-6 md:p-8 animate-in zoom-in-95 duration-200">
             
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
@@ -2897,16 +3213,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   onClick={compartirVersusLink}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
                 >
-                  {copiadoVersus ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" />}
+                  {copiadoVersus ? <Check className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />}
                   {copiadoVersus ? '¡Link copiado!' : 'Compartir Versus'}
                 </button>
 
                 <button
                   onClick={exportarVersusExcel}
-                  title="Descargar Libro de Excel (.xlsx) con 2 Hojas, celdas ganadoras en verde y podio Oro/Plata/Bronce"
+                  title="Descargar Libro de Excel (.xlsx) con 2 Hojas"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white cursor-pointer"
                 >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
                   Excel (2 Hojas)
                 </button>
 
@@ -2915,7 +3231,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   title="Descargar comparativa en formato CSV limpio"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
                 >
-                  <Download className="w-3.5 h-3.5 text-blue-600" />
+                  <Download className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
                   CSV
                 </button>
 
@@ -2923,7 +3239,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   onClick={descargarPDFVersusDirecto}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
                 >
-                  <Printer className="w-3.5 h-3.5 text-blue-600" />
+                  <Printer className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
                   Descargar PDF
                 </button>
 
@@ -2934,7 +3250,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                       vistaGraficoVersus === 'radar' ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    <Compass className="w-3.5 h-3.5" /> 6 Pilares
+                    <Compass className="w-3.5 h-3.5" aria-hidden="true" /> 6 Pilares
                   </button>
                   <button
                     onClick={() => setVistaGraficoVersus('regiones')}
@@ -2942,64 +3258,70 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                       vistaGraficoVersus === 'regiones' ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    <BarChart3 className="w-3.5 h-3.5" /> Sueldos por Región
+                    <BarChart3 className="w-3.5 h-3.5" aria-hidden="true" /> Sueldos por Región
                   </button>
                 </div>
 
                 <button
                   onClick={() => setModalVersusAbierto(false)}
+                  aria-label="Cerrar comparador (Escape)"
+                  title="Cerrar comparador (Tecla Escape)"
                   className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-5 h-5" aria-hidden="true" />
                 </button>
               </div>
             </div>
 
-            {/* BLOQUE VISUAL SUPERIOR CON ANILLO CIRCULAR SCORE DATAROI EN CADA CARRERA */}
             <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6 my-6 items-center bg-slate-50 p-5 rounded-2xl border border-slate-200/80">
               <div className="lg:col-span-5 space-y-3">
                 <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
                   {vistaGraficoVersus === 'radar' ? (
                     <>
-                      <Compass className="w-4 h-4 text-blue-600" />
+                      <Compass className="w-4 h-4 text-blue-600" aria-hidden="true" />
                       Superposición de los 6 Pilares
                     </>
                   ) : (
                     <>
-                      <BarChart3 className="w-4 h-4 text-blue-600" />
+                      <BarChart3 className="w-4 h-4 text-blue-600" aria-hidden="true" />
                       Comparativa Salarial en las 5 Regiones
                     </>
                   )}
                 </h3>
                 <p className="text-xs text-slate-500 leading-relaxed">
                   {vistaGraficoVersus === 'radar'
-                    ? `Las líneas de alto contraste y el anillo de calificación muestran qué carrera envuelve a las demás en ${infoRegActiva.nombre}.`
+                    ? `Las líneas de alto contraste y el medallón entero de calificación muestran qué carrera envuelve a las demás en ${infoRegActiva.nombre}.`
                     : 'Contrasta cuánto paga cada una de las carreras seleccionadas a lo largo de las 5 macro-regiones económicas del país.'}
                 </p>
 
                 <div className="space-y-2.5 pt-1">
-                  {carrerasEnVersus.map((c: any, idx: number) => (
-                    <div
-                      key={c.cve_carrera}
-                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${COLORES_VERSUS[idx]?.light}`}
-                    >
-                      <div className="flex items-start gap-2.5 min-w-0">
-                        <span
-                          className="w-3.5 h-3.5 rounded-full shrink-0 mt-1 shadow-2xs"
-                          style={{ backgroundColor: COLORES_VERSUS[idx]?.hex }}
-                        />
-                        <div className="min-w-0">
-                          <span className="text-xs font-black text-slate-900 leading-snug block">
-                            {c.nombre_carrera}
+                  {carrerasEnVersus.map((c: any, idx: number) => {
+                    const primaEnt = Math.round(c.premioVsPrepaPct);
+                    return (
+                      <div
+                        key={c.cve_carrera}
+                        className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${COLORES_VERSUS[idx]?.light}`}
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <span
+                            className="w-5 h-5 rounded-full text-[10px] font-black text-white flex items-center justify-center shrink-0 mt-0.5 shadow-2xs"
+                            style={{ backgroundColor: COLORES_VERSUS[idx]?.hex }}
+                          >
+                            #{idx + 1}
                           </span>
-                          <span className="text-[11px] font-black text-emerald-700">
-                            {formatoMoneda(c.sueldo_esperado)}/mes ({c.premioVsPrepaPct >= 0 ? `+${c.premioVsPrepaPct}%` : `${c.premioVsPrepaPct}%`} vs. Prepa)
-                          </span>
+                          <div className="min-w-0">
+                            <span className="text-xs font-black text-slate-900 leading-snug block">
+                              {c.nombre_carrera}
+                            </span>
+                            <span className="text-[11px] font-black text-emerald-700">
+                              {formatoMoneda(c.sueldo_esperado)}/mes ({primaEnt >= 0 ? `+${primaEnt}%` : `${primaEnt}%`} vs. Prepa)
+                            </span>
+                          </div>
                         </div>
+                        <AnilloScoreDataROIGrande score={c.scoreDataROI ?? 60} compacto />
                       </div>
-                      <AnilloScoreDataROIGrande score={c.scoreDataROI ?? 60} compacto />
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -3019,7 +3341,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                           strokeWidth={3}
                           strokeDasharray={idx === 2 ? '5 3' : undefined}
                           fill={COLORES_VERSUS[idx]?.hex}
-                          fillOpacity={0.09}
+                          fillOpacity={0.12}
                           dot={{ r: 4, fill: COLORES_VERSUS[idx]?.hex, strokeWidth: 1.5, stroke: '#FFFFFF' }}
                         />
                       ))}
@@ -3075,10 +3397,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                   {([
                     {
                       label: 'Calificación Integral DataROI (0–100)',
-                      valores: carrerasEnVersus.map((c: any) => Number(c.scoreDataROI ?? 60)),
+                      valores: carrerasEnVersus.map((c: any) => Math.round(Number(c.scoreDataROI ?? 60))),
                       formato: (v: number) => {
                         const s = obtenerSemaforoScoreDataROI(v);
-                        return `${v.toFixed(1)} / 100 (${s.etiqueta})`;
+                        return `${v} / 100 (Grado ${s.grado} · ${s.etiqueta})`;
                       },
                       mejorAlto: true,
                       invalidoSiMayorIgualA: Infinity
@@ -3092,7 +3414,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                     },
                     {
                       label: 'Prima Salarial vs. Preparatoria',
-                      valores: carrerasEnVersus.map((c: any) => c.premioVsPrepaPct),
+                      valores: carrerasEnVersus.map((c: any) => Math.round(c.premioVsPrepaPct)),
                       formato: (v: number) => `${v >= 0 ? `+${v}%` : `${v}%`} vs. Prepa`,
                       mejorAlto: true,
                       invalidoSiMayorIgualA: Infinity
@@ -3127,7 +3449,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                     },
                     {
                       label: 'Empleo de Calidad (Estándar OIT)',
-                      valores: carrerasEnVersus.map((c: any) => c.tasaCalidadOIT),
+                      valores: carrerasEnVersus.map((c: any) => Math.round(c.tasaCalidadOIT)),
                       formato: (v: number) => `${v}% de ocupados`,
                       mejorAlto: true,
                       invalidoSiMayorIgualA: Infinity
@@ -3148,8 +3470,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                     },
                     {
                       label: 'Apertura y Movilidad Social (Mérito)',
-                      valores: carrerasEnVersus.map((c: any) => Number((c.crudos?.movilidad ?? 50).toFixed(1))),
-                      formato: (v: number) => `${v.toFixed(1)}% Mérito`,
+                      valores: carrerasEnVersus.map((c: any) => Math.round(Number(c.crudos?.movilidad ?? 50))),
+                      formato: (v: number) => `${v}% Mérito`,
                       mejorAlto: true,
                       invalidoSiMayorIgualA: Infinity
                     },
@@ -3162,7 +3484,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                     },
                     {
                       label: 'Empleo Único (Sin Pluriempleo)',
-                      valores: carrerasEnVersus.map((c: any) => c.pctEmpleoUnico),
+                      valores: carrerasEnVersus.map((c: any) => Math.round(c.pctEmpleoUnico)),
                       formato: (v: number) => `${v}% un solo empleo`,
                       mejorAlto: true,
                       invalidoSiMayorIgualA: Infinity
@@ -3193,7 +3515,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                                 </span>
                                 {esGanador && (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-[10px] shrink-0">
-                                    <Trophy className="w-2.5 h-2.5 text-emerald-700" /> Líder
+                                    <Trophy className="w-2.5 h-2.5 text-emerald-700" aria-hidden="true" /> Líder
                                   </span>
                                 )}
                               </div>
@@ -3221,7 +3543,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 onClick={() => setModalVersusAbierto(false)}
                 className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
               >
-                Cerrar comparador
+                Cerrar comparador (Esc)
               </button>
             </div>
 

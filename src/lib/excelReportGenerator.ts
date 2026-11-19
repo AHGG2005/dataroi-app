@@ -1,5 +1,5 @@
 // src/lib/excelReportGenerator.ts
-// Motor Nativo OpenXML (.xlsx Multi-Hoja con Alineación Par/Impar Idéntica) + Exportador CSV RFC 4180 + Score DataROI Universal
+// Motor Nativo OpenXML (.xlsx Multi-Hoja) + Exportador CSV RFC 4180 + Score DataROI Universal + Nombres Ejecutivos y Estado Global Versus
 
 export type EstiloCeldaExcel =
   | 'default'
@@ -28,7 +28,114 @@ export interface HojaExcelConfig {
 }
 
 // ============================================================================
-// 0. MOTOR MATEMÁTICO UNIFICADO: CALIFICACIÓN INTEGRAL DATAROI (0 A 100)
+// 0. DICCIONARIO DE NOMBRES EJECUTIVOS (EVITA TÍTULOS BUROCRÁTICOS DE 6 LÍNEAS)
+// ============================================================================
+export const NOMBRES_EJECUTIVOS_CARRERAS: Record<string, string> = {
+  '061000': 'Innovación en TIC y Sistemas Digitales',
+  '042000': 'Administración y Gestión Empresarial',
+  '071300': 'Ingeniería Electrónica y Automatización',
+  '042400': 'Administración en Ingeniería y Construcción',
+  '012100': 'Docencia en Educación Preescolar',
+  '012300': 'Docencia en Educación Secundaria',
+  '012200': 'Docencia en Educación Primaria',
+  '021400': 'Producción y Tecnologías Audiovisuales',
+  '071100': 'Ingeniería Mecánica y Metalmecánica',
+  '071600': 'Ingeniería y Tecnología Ambiental',
+  '072400': 'Ingeniería en Minería y Metalurgia',
+  '081100': 'Ingeniería Agronómica y Zootecnia',
+  '042200': 'Administración Turística y Restaurantera',
+  '071500': 'Ingeniería Automotriz y Aeronáutica',
+  '021500': 'Diseño Gráfico y Comunicación Editorial',
+  '012702': 'Docencia en Educación Especial',
+  '021600': 'Diseño Industrial, de Moda e Interiores',
+  '012601': 'Docencia en Cultura Física y Deporte',
+  '093100': 'Odontología y Estomatología General',
+  '022200': 'Enseñanza y Lenguas Extranjeras',
+  '092100': 'Enfermería y Obstetricia',
+  '073200': 'Ingeniería Civil y Construcción'
+};
+
+export function formatearNombreCarreraEjecutivo(cve: string, nombreOficial: string): string {
+  const cvePad = String(cve || '').trim().padStart(6, '0');
+  return NOMBRES_EJECUTIVOS_CARRERAS[cvePad] || nombreOficial;
+}
+
+// ============================================================================
+// 0.1 SINCRONIZACIÓN GLOBAL DEL COMPARADOR CARA A CARA (VERSUS) ENTRE PÁGINAS
+// ============================================================================
+export const STORAGE_KEY_DESCUBRIDOR = 'dataroi_descubridor_state_v2';
+export const EVENTO_VERSUS_SYNC = 'dataroi-versus-sync';
+
+export function leerEstadoDescubridorGlobal(): {
+  regionActiva: string;
+  generoActivo: 0 | 1 | 2;
+  sueldoMinimo: number;
+  modoEvaluacion: 'calificacion' | 'afinidad';
+  activos: string[];
+  carrerasCompararCves: string[];
+} {
+  const fallback = {
+    regionActiva: 'nacional',
+    generoActivo: 0 as 0 | 1 | 2,
+    sueldoMinimo: 10500,
+    modoEvaluacion: 'calificacion' as 'calificacion' | 'afinidad',
+    activos: [] as string[],
+    carrerasCompararCves: [] as string[]
+  };
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY_DESCUBRIDOR);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return {
+      regionActiva: parsed.regionActiva || 'nacional',
+      generoActivo: parsed.generoActivo === 1 || parsed.generoActivo === 2 ? parsed.generoActivo : 0,
+      sueldoMinimo: typeof parsed.sueldoMinimo === 'number' ? parsed.sueldoMinimo : 10500,
+      modoEvaluacion: parsed.modoEvaluacion === 'afinidad' ? 'afinidad' : 'calificacion',
+      activos: Array.isArray(parsed.activos) ? parsed.activos.slice(0, 5) : [],
+      carrerasCompararCves: Array.isArray(parsed.carrerasCompararCves)
+        ? parsed.carrerasCompararCves.map((c: any) => String(c).padStart(6, '0')).slice(0, 3)
+        : []
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export function toggleCarreraComparadorGlobal(cve: string): string[] {
+  if (typeof window === 'undefined') return [];
+  const cvePad = String(cve).trim().padStart(6, '0');
+  try {
+    const actual = leerEstadoDescubridorGlobal();
+    let nuevaLista = [...actual.carrerasCompararCves];
+    if (nuevaLista.includes(cvePad)) {
+      nuevaLista = nuevaLista.filter(item => item !== cvePad);
+    } else if (nuevaLista.length < 3) {
+      nuevaLista.push(cvePad);
+    }
+    const nuevoEstado = { ...actual, carrerasCompararCves: nuevaLista };
+    sessionStorage.setItem(STORAGE_KEY_DESCUBRIDOR, JSON.stringify(nuevoEstado));
+    window.dispatchEvent(new CustomEvent(EVENTO_VERSUS_SYNC, { detail: nuevaLista }));
+    return nuevaLista;
+  } catch {
+    return [];
+  }
+}
+
+export function limpiarComparadorGlobal(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const actual = leerEstadoDescubridorGlobal();
+    const nuevoEstado = { ...actual, carrerasCompararCves: [] };
+    sessionStorage.setItem(STORAGE_KEY_DESCUBRIDOR, JSON.stringify(nuevoEstado));
+    window.dispatchEvent(new CustomEvent(EVENTO_VERSUS_SYNC, { detail: [] }));
+  } catch {
+    // Ignorar errores en modo privado
+  }
+}
+
+// ============================================================================
+// 0.2 MOTOR MATEMÁTICO UNIFICADO: CALIFICACIÓN INTEGRAL DATAROI (0 A 100)
 // ============================================================================
 export interface ParametrosScoreDataROI {
   Prima_vs_Prepa_Pct: number;
@@ -46,6 +153,7 @@ export interface ParametrosScoreDataROI {
 
 export interface ResultadoScoreDataROI {
   score: number;
+  scoreEntero: number;
   pilares: {
     retornoSalarial: number;
     empleabilidad: number;
@@ -105,6 +213,7 @@ export function calcularScoreDataROIUniversal(p: ParametrosScoreDataROI): Result
 
   return {
     score,
+    scoreEntero: Math.round(score),
     pilares: {
       retornoSalarial: pRetorno,
       empleabilidad: pEmpleo,
@@ -117,26 +226,31 @@ export function calcularScoreDataROIUniversal(p: ParametrosScoreDataROI): Result
 }
 
 export function obtenerSemaforoScoreDataROI(score: number) {
-  if (score >= 70.0) {
+  const entero = Math.round(score);
+  if (entero >= 70) {
     return {
       grado: 'A',
       etiqueta: 'Sobresaliente',
       colorHex: '#059669',
       trackHex: '#D1FAE5',
+      fillTintHex: '#ECFDF5',
       textClass: 'text-emerald-700',
       bgBadgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-      ringBgClass: 'bg-emerald-50/60 border-emerald-200'
+      ringBgClass: 'bg-emerald-50/70 border-emerald-200',
+      topBorderClass: 'border-t-emerald-500'
     };
   }
-  if (score >= 56.0) {
+  if (entero >= 56) {
     return {
       grado: 'B',
       etiqueta: 'Viable',
       colorHex: '#D97706',
       trackHex: '#FEF3C7',
+      fillTintHex: '#FFFBEB',
       textClass: 'text-amber-700',
       bgBadgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
-      ringBgClass: 'bg-amber-50/60 border-amber-200'
+      ringBgClass: 'bg-amber-50/70 border-amber-200',
+      topBorderClass: 'border-t-amber-500'
     };
   }
   return {
@@ -144,9 +258,11 @@ export function obtenerSemaforoScoreDataROI(score: number) {
     etiqueta: 'En Riesgo',
     colorHex: '#E11D48',
     trackHex: '#FFE4E6',
+    fillTintHex: '#FFF1F2',
     textClass: 'text-rose-700',
     bgBadgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
-    ringBgClass: 'bg-rose-50/60 border-rose-200'
+    ringBgClass: 'bg-rose-50/70 border-rose-200',
+    topBorderClass: 'border-t-rose-500'
   };
 }
 
@@ -187,8 +303,6 @@ export function descargarCSVEstilizado(
 // ============================================================================
 // 2. GENERADOR NATIVO DE LIBROS DE EXCEL (.XLSX MULTI-HOJA CON ALINEACIÓN UNIFORME)
 // ============================================================================
-// Nota crítica OpenXML: el índice 0 se reserva para el estilo Normal base de Excel.
-// Todas las celdas de datos usan índices >= 1 para que Excel respete siempre <alignment horizontal="left" vertical="center"/>.
 const STYLE_INDEX_MAP: Record<EstiloCeldaExcel, number> = {
   default: 1,
   header: 2,
@@ -312,7 +426,6 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
 
   const rowsXml: string[] = [];
 
-  // Fila 1: Cabeceras (s="2" -> header)
   const celdasHeader = hoja.cabeceras
     .map((cab, cIdx) => {
       const ref = `${colIndexToLetter(cIdx)}1`;
@@ -321,7 +434,6 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
     .join('');
   rowsXml.push(`<row r="1" ht="23" customHeight="1">${celdasHeader}</row>`);
 
-  // Filas de datos con alineación idéntica en pares e impares
   hoja.filas.forEach((fila, rIdx) => {
     const numFila = rIdx + 2;
     const esFilaCebra = rIdx % 2 === 1;
@@ -335,7 +447,6 @@ function construirSheetXml(hoja: HojaExcelConfig): string {
         let estilo: EstiloCeldaExcel =
           esObj && (celda as CeldaExcelObj).s ? (celda as CeldaExcelObj).s! : estiloDefaultFila;
 
-        // Si la celda pide 'default', respetamos la franja cebra; si pide 'bold' en fila cebra, usamos 'bold_zebra'
         if (estilo === 'default' && esFilaCebra) {
           estilo = 'zebra';
         } else if (estilo === 'bold' && esFilaCebra) {

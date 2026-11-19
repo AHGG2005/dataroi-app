@@ -1,6 +1,9 @@
 import { Suspense } from 'react';
 import { supabase } from '@/lib/supabase';
-import { calcularScoreDataROIUniversal } from '@/lib/excelReportGenerator';
+import {
+  calcularScoreDataROIUniversal,
+  formatearNombreCarreraEjecutivo
+} from '@/lib/excelReportGenerator';
 import DirectorioClient, { CarreraDirectorioItem } from '@/components/DirectorioClient';
 import { Loader2 } from 'lucide-react';
 
@@ -176,6 +179,12 @@ async function DirectorioCargador() {
     mapaSatNac[padCve(s.cve_carrera)] = s;
   });
 
+  const satsValidos = satelitesNac.filter(s => Number(s.n_encuestados_reales || 0) >= 180);
+  const sumaPesoSatNac = satsValidos.reduce((acc, s) => acc + Math.max(1, Number(s.volumen_muestra_nacional || 1)), 0);
+  const mediaEstratoNac = sumaPesoSatNac > 0
+    ? Number((satsValidos.reduce((acc, s) => acc + Number(s.indice_privilegio || 2.8) * Math.max(1, Number(s.volumen_muestra_nacional || 1)), 0) / sumaPesoSatNac).toFixed(2))
+    : 2.80;
+
   const mapaSeriesNac0: Record<string, any[]> = {};
   const mapaSeriesNac12: Record<string, any[]> = {};
 
@@ -236,13 +245,13 @@ async function DirectorioCargador() {
     const pCorp = Number(sat.pct_corp || 12);
     const pSind = Number(sat.pct_sindicato || 15);
     const pNep = Number(sat.pct_nepotismo || 37.2);
-    const priv = Number(sat.indice_privilegio || 2.80);
+    const priv = Number(sat.indice_privilegio || mediaEstratoNac);
     const riesgoIA = Number(sat.riesgo_ia_score ?? 40);
 
     const calidadOitPct = Number((((Math.min(pCont, pAfor) * 0.70 + pCont * 0.30) * (1 - pPlur / 200))).toFixed(1));
     const formalidadTotalPct = Number((pCont * 0.45 + pAgui * 0.30 + pAfor * 0.25).toFixed(1));
 
-    const diffEst = priv - 2.80;
+    const diffEst = priv - mediaEstratoNac;
     const penElit = diffEst > 0.05 ? (diffEst - 0.05) * 110 : diffEst * 35;
     const incOrig = Math.max(15, Math.min(92, 70 - penElit));
     const apContr = Math.max(10, Math.min(95, 100 - (pNep + pSind * 0.22)));
@@ -252,8 +261,9 @@ async function DirectorioCargador() {
 
     const tendencia = clasificarTendenciaNacional(filas);
     const premioVsPrepaPct = Number((((sueldoMensual - SUELDO_PREPA_NAC) / SUELDO_PREPA_NAC) * 100).toFixed(1));
+    const pctEmpleoUnico = Number(Math.max(0, 100 - pPlur).toFixed(1));
+    const pctArraigoLocal = Number(Math.max(0, 100 - pDesa).toFixed(1));
 
-    // Score DataROI Universal (0 a 100)
     const evalScore = calcularScoreDataROIUniversal({
       Prima_vs_Prepa_Pct: premioVsPrepaPct,
       Desempleo_Abierto_Pct: desempleoPct,
@@ -262,23 +272,23 @@ async function DirectorioCargador() {
       Formalidad_Total_Pct: formalidadTotalPct,
       Meritocracia_Pct: rawMov,
       Blindaje_IA_Pct: 100 - riesgoIA,
-      Cambio_Real_PostPandemia_Pct: tendencia.cambioRealPct,
       Tendencia_Codigo: tendencia.codigo,
-      Empleo_Unico_Pct: Math.max(0, 100 - pPlur),
-      Arraigo_Local_Pct: Math.max(0, 100 - pDesa)
+      Empleo_Unico_Pct: pctEmpleoUnico,
+      Arraigo_Local_Pct: pctArraigoLocal
     });
 
     const semestresBase = cve === '091100' ? 12 : 9;
     const capex = obtenerCostoCapEx(cve);
     const invPub = semestresBase * 1800 + 8500 + capex;
-    const invPrivMedia = semestresBase * (6500 * 5 + 6500) + 22000 + capex;
+    const invPrivMedia = semestresBase * (6500 * 6) + 22000 + capex;
     const bonoAnual = (sueldoMensual - SUELDO_PREPA_NAC) * 12;
     const roiPub = bonoAnual > 0 ? Number((invPub / bonoAnual).toFixed(1)) : 99.9;
     const roiPriv = bonoAnual > 0 ? Number((invPrivMedia / bonoAnual).toFixed(1)) : 99.9;
 
     directorioAumentado.push({
       cve_carrera: cve,
-      nombre_carrera: carrera.nombre_carrera,
+      nombre_carrera: formatearNombreCarreraEjecutivo(cve, carrera.nombre_carrera),
+      nombre_oficial_inegi: carrera.nombre_carrera,
       is_stem: isStem,
       riesgo_ia_score: riesgoIA,
       sueldo_mensual: sueldoMensual,
@@ -309,9 +319,9 @@ async function DirectorioCargador() {
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-slate-50 font-sans">
+    <main className="font-sans">
       <Suspense fallback={
-        <div className="min-h-screen flex flex-col items-center justify-center">
+        <div className="min-h-[80vh] flex flex-col items-center justify-center">
           <Loader2 className="w-10 h-10 animate-spin text-blue-600 mb-4" />
           <p className="text-slate-500 text-sm font-medium animate-pulse">
             Cargando catálogo nacional de 64 carreras certificadas...
