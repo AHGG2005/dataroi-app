@@ -2,7 +2,6 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { descargarComparativaVersusPDF } from '@/lib/pdfReportGenerator';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
@@ -15,19 +14,14 @@ import {
   EstiloCeldaExcel
 } from '@/lib/excelReportGenerator';
 import {
-  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  ResponsiveContainer, Tooltip as RechartsTooltip
-} from 'recharts';
-import {
   Home, ShieldAlert, Scale, ChevronRight, ChevronLeft, Trophy,
   ShieldCheck, Sparkles, Building, CheckCircle2,
   Briefcase, Medal, Banknote, AlertCircle,
   TrendingUp, TrendingDown, Minus, Activity,
   ArrowUpDown, ChevronDown, ChevronUp, AlertTriangle,
   MapPin, Users, Landmark, RotateCcw, Info, Anchor,
-  SlidersHorizontal, Wand2, X, Check, BarChart3, Compass,
-  Share2, Download, Printer, FileSpreadsheet, Target, Lock
+  SlidersHorizontal, Wand2, X, Check,
+  Share2, Download, FileSpreadsheet, Target, Lock
 } from 'lucide-react';
 
 type ModoEvaluacionRanking = 'calificacion' | 'afinidad';
@@ -310,61 +304,20 @@ function calcularAniosRetornoRapido(sueldoCarrera: number, sueldoPrepa: number, 
   return Number((inversionTotal / bonoAnual).toFixed(1));
 }
 
-function obtenerSectorDominante(p: any) {
-  const sectores = [
-    { label: 'PYME', val: num(p?.pct_pyme, 0) },
-    { label: 'Independiente / Micro', val: num(p?.pct_micro, 0) },
-    { label: 'Gran Corporativo', val: num(p?.pct_corp, 0) },
-    { label: 'Gobierno', val: num(p?.pct_gobierno, 0) }
-  ].sort((a, b) => b.val - a.val);
-  return `${sectores[0].val.toFixed(1)}% ${sectores[0].label}`;
-}
-
 function AnilloScoreDataROIGrande({
   score,
-  rank,
-  compacto = false
+  rank
 }: {
   score: number;
   rank?: number;
-  compacto?: boolean;
 }) {
   const sem = obtenerSemaforoScoreDataROI(score);
   const scoreEntero = Math.round(score);
-  const r = compacto ? 17 : 25;
-  const dim = compacto ? 42 : 62;
-  const strokeW = compacto ? 4.0 : 5.2;
+  const r = 25;
+  const strokeW = 5.2;
   const circ = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(100, scoreEntero));
   const offset = circ - (pct / 100) * circ;
-
-  if (compacto) {
-    return (
-      <div
-        role="img"
-        aria-label={`Score DataROI: ${scoreEntero} de 100 puntos, Grado ${sem.grado}, ${sem.etiqueta}`}
-        title={`Score DataROI: ${scoreEntero}/100 (Grado ${sem.grado} · ${sem.etiqueta})`}
-        className="relative w-11 h-11 flex items-center justify-center shrink-0"
-      >
-        <svg className="w-11 h-11 -rotate-90" viewBox={`0 0 ${dim} ${dim}`} aria-hidden="true">
-          <circle cx={dim / 2} cy={dim / 2} r={r} fill={sem.fillTintHex} stroke={sem.trackHex} strokeWidth={strokeW} />
-          <circle
-            cx={dim / 2}
-            cy={dim / 2}
-            r={r}
-            fill="none"
-            stroke={sem.colorHex}
-            strokeWidth={strokeW}
-            strokeLinecap="round"
-            strokeDasharray={circ}
-            strokeDashoffset={offset}
-            className="transition-all duration-700 ease-out"
-          />
-        </svg>
-        <span className="absolute text-xs font-black text-slate-900">{scoreEntero}</span>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -571,24 +524,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
   const [carrerasCompararCves, setCarrerasCompararCves] = useState<string[]>([]);
   const [dockMinimizado, setDockMinimizado] = useState<boolean>(false);
-  const [modalVersusAbierto, setModalVersusAbierto] = useState<boolean>(false);
-  const [vistaGraficoVersus, setVistaGraficoVersus] = useState<'radar' | 'regiones'>('radar');
   const [copiadoRanking, setCopiadoRanking] = useState<boolean>(false);
-  const [copiadoVersus, setCopiadoVersus] = useState<boolean>(false);
 
   const ignorarSyncInternoRef = useRef<boolean>(false);
+  const abrirVersusAlHidratarRef = useRef<boolean>(false);
 
-  useEffect(() => {
-    if (!modalVersusAbierto) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setModalVersusAbierto(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [modalVersusAbierto]);
-
+  // Sincronización con cambios realizados desde el Popover o el Modal Global de NavbarGlobal
   useEffect(() => {
     const syncExterna = () => {
       if (ignorarSyncInternoRef.current) return;
@@ -596,15 +537,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const nueva = est.carrerasCompararCves || [];
       setCarrerasCompararCves(prev => (prev.join(',') === nueva.join(',') ? prev : nueva));
     };
-    const abrirModalDesdeNavbar = () => {
-      setModalVersusAbierto(true);
-    };
 
     window.addEventListener(EVENTO_VERSUS_SYNC, syncExterna);
-    window.addEventListener('dataroi-open-versus-modal', abrirModalDesdeNavbar);
     return () => {
       window.removeEventListener(EVENTO_VERSUS_SYNC, syncExterna);
-      window.removeEventListener('dataroi-open-versus-modal', abrirModalDesdeNavbar);
     };
   }, []);
 
@@ -770,7 +706,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             setCarrerasCompararCves(listaComp);
             setModoVistaFiltros('colapsado');
             if (listaComp.length >= 2) {
-              setModalVersusAbierto(true);
+              abrirVersusAlHidratarRef.current = true;
             }
           }
         } else if (Array.isArray(parsedSession?.carrerasCompararCves) && parsedSession.carrerasCompararCves.length > 0) {
@@ -827,6 +763,11 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       ignorarSyncInternoRef.current = true;
       window.dispatchEvent(new CustomEvent(EVENTO_VERSUS_SYNC, { detail: carrerasCompararCves }));
       ignorarSyncInternoRef.current = false;
+
+      if (abrirVersusAlHidratarRef.current && carrerasCompararCves.length >= 2) {
+        abrirVersusAlHidratarRef.current = false;
+        window.dispatchEvent(new CustomEvent('dataroi-open-versus-modal'));
+      }
 
       const url = new URL(window.location.href);
       url.searchParams.set('region', regionActiva);
@@ -888,6 +829,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       setDockMinimizado(false);
       return [...prev, cve];
     });
+  };
+
+  const abrirComparadorGlobal = () => {
+    window.dispatchEvent(new CustomEvent('dataroi-open-versus-modal'));
   };
 
   const pesosPrioridad = useMemo(() => {
@@ -988,16 +933,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         ? Number((((sueldoEsp - sueldoPrepaBase) / sueldoPrepaBase) * 100).toFixed(1))
         : 0;
 
-      const radarSalario = Math.round(Math.max(15, Math.min(100, ((sueldoEsp - 9500) / (22000 - 9500)) * 100)));
-      const radarFormalidad = Math.round(tasaFormalidadTotal);
-      const radarEmpleo = Math.round(Math.max(10, Math.min(100, 100 - desempleo * 8.0)) * 0.60 + Math.max(10, Math.min(100, 168 - saturacion)) * 0.40);
-      const radarMerito = Math.round(rawMovilidad);
-      const radarEstabilidad = Math.round(
-        Math.max(10, Math.min(100, 100 - pPluri * 5.0)) * 0.35 +
-        Math.max(10, Math.min(100, 100 - pDesarr * 6.5)) * 0.30 +
-        pContrato * 0.35
-      );
-
       const evalUniversal = calcularScoreDataROIUniversal({
         Prima_vs_Prepa_Pct: premioVsPrepaPct,
         Desempleo_Abierto_Pct: Number(desempleo.toFixed(1)),
@@ -1023,14 +958,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         pctArraigoLocal,
         scoreDataROI: evalUniversal.score,
         pilaresScoreUniversal: evalUniversal.pilares,
-        pilaresRadar: {
-          Salario: radarSalario,
-          Formalidad: radarFormalidad,
-          Empleabilidad: radarEmpleo,
-          Meritocracia: radarMerito,
-          'Blindaje IA': evalUniversal.pilares.blindajeFuturo,
-          Estabilidad: radarEstabilidad
-        },
         crudos: {
           empleabilidad: rawEmpleabilidad,
           formalidad: rawFormalidad,
@@ -1300,33 +1227,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       .filter(Boolean);
   }, [carrerasCompararCves, rankingCompleto, datos]);
 
-  const datosRadarVersus = useMemo(() => {
-    const ejes = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Blindaje IA', 'Estabilidad'] as const;
-    return ejes.map(eje => {
-      const fila: Record<string, any> = { eje };
-      carrerasEnVersus.forEach((c: any) => {
-        fila[c.cve_carrera] = c.pilaresRadar?.[eje] ?? 50;
-      });
-      return fila;
-    });
-  }, [carrerasEnVersus]);
-
-  const datosRegionesVersus = useMemo(() => {
-    const regs = ['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
-    return regs.map(rKey => {
-      const fila: Record<string, any> = {
-        region: BENCHMARK_REGIONES_BASE[rKey]?.corto || rKey
-      };
-      carrerasEnVersus.forEach((c: any) => {
-        const perfReg = c.perfiles?.[rKey]?.[generoActivo];
-        fila[c.cve_carrera] = perfReg && perfReg.celdaValida !== false && Number(perfReg.sueldo_esperado) > 0
-          ? Number(perfReg.sueldo_esperado)
-          : null;
-      });
-      return fila;
-    });
-  }, [carrerasEnVersus, generoActivo]);
-
   const compartirRankingLink = async () => {
     const url = window.location.href.replace(/%2C/gi, ',');
     if (navigator.share) {
@@ -1510,271 +1410,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       cabeceras,
       filas
     );
-  };
-
-  const compartirVersusLink = async () => {
-    const url = new URL(window.location.href);
-    url.searchParams.set('region', regionActiva);
-    url.searchParams.set('genero', queryGeneroParam);
-    url.searchParams.set('modo', modoEvaluacion);
-    url.searchParams.set('comparar', carrerasCompararCves.join(','));
-    const linkFinal = url.toString().replace(/%2C/gi, ',');
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `DataROI Versus — ${carrerasEnVersus.map((c: any) => c.nombre_carrera).join(' vs. ')}`,
-          text: `Comparativa ejecutiva Cara a Cara en ${infoRegActiva.nombre} (${etiquetaGeneroCorto}).`,
-          url: linkFinal
-        });
-        return;
-      } catch {
-        // Fallback al portapapeles
-      }
-    }
-    await navigator.clipboard.writeText(linkFinal);
-    setCopiadoVersus(true);
-    setTimeout(() => setCopiadoVersus(false), 2200);
-  };
-
-  const construirHojasVersus = () => {
-    const conteoVictorias = new Array(carrerasEnVersus.length).fill(0);
-
-    const encontrarLider = (valores: number[], mejorAlto: boolean, invalido = Infinity): ValorCeldaExcel => {
-      const validos = valores.filter(v => Number.isFinite(v) && v < invalido);
-      if (validos.length === 0) return 'Sin muestra';
-      const mejor = mejorAlto ? Math.max(...validos) : Math.min(...validos);
-      const ganadores = carrerasEnVersus
-        .filter((_, idx) => valores[idx] === mejor && valores[idx] < invalido)
-        .map((c: any) => c.nombre_carrera);
-      return ganadores.length > 0 ? { v: `★ ${ganadores.join(' / ')}`, s: 'winner' } : '-';
-    };
-
-    const registrarFilaNumerica = (
-      cat: string,
-      ind: string,
-      vals: number[],
-      fmt: (v: number) => string,
-      mejorAlto: boolean,
-      invalido = Infinity
-    ): ValorCeldaExcel[] => {
-      const validos = vals.filter(v => Number.isFinite(v) && v < invalido);
-      const mejor = validos.length > 0 ? (mejorAlto ? Math.max(...validos) : Math.min(...validos)) : null;
-
-      const celdasCarreras: ValorCeldaExcel[] = vals.map((v, idx) => {
-        const esGanador = mejor !== null && v === mejor && v < invalido;
-        if (esGanador) conteoVictorias[idx] += 1;
-        const txt = fmt(v);
-        return esGanador ? { v: `★ ${txt}`, s: 'winner' } : txt;
-      });
-
-      return [
-        cat,
-        ind,
-        ...celdasCarreras,
-        encontrarLider(vals, mejorAlto, invalido)
-      ];
-    };
-
-    const cabecerasMatriz = [
-      'Categoria',
-      'Indicador_Auditado',
-      ...carrerasEnVersus.map((c: any) => `${c.nombre_carrera} (${c.cve_carrera})`),
-      'Carrera_Lider_del_Rubro'
-    ];
-
-    const filasPrioridadesActivas: ValorCeldaExcel[][] =
-      modoEvaluacion === 'afinidad' && activos.length > 0
-        ? activos.map((idPref, idx) => {
-            const prefMeta = PREFERENCIAS.find(pr => pr.id === idPref);
-            const valsRank = carrerasEnVersus.map((c: any) => {
-              const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
-              return itemP ? itemP.rankRubro : 999;
-            });
-            const mejorRank = Math.min(...valsRank);
-
-            const celdasPrio: ValorCeldaExcel[] = carrerasEnVersus.map((c: any, cIdx) => {
-              const itemP = (c.desglosePrioridades || []).find((d: any) => d.orden === idx + 1);
-              if (!itemP) return '-';
-              const gana = valsRank[cIdx] === mejorRank && mejorRank < 900;
-              if (gana) conteoVictorias[cIdx] += 1;
-              const txt = `#${itemP.rankRubro} de ${itemP.totalViables} (${itemP.datoCorto || itemP.datoReal})`;
-              return gana ? { v: `★ ${txt}`, s: 'winner' } : txt;
-            });
-
-            return [
-              '2. Prioridades Seleccionadas',
-              `Prioridad #${idx + 1}: ${prefMeta?.label || idPref}`,
-              ...celdasPrio,
-              encontrarLider(valsRank, false, 900)
-            ];
-          })
-        : [];
-
-    const ejesRadar = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Blindaje IA', 'Estabilidad'] as const;
-    const filasRadar: ValorCeldaExcel[][] = ejesRadar.map(eje => {
-      const vals = carrerasEnVersus.map((c: any) => Number(c.pilaresRadar?.[eje] ?? 50));
-      return registrarFilaNumerica('3. Huella de 6 Pilares (0-100)', `Pilar ${eje} (Score 0-100)`, vals, v => `${v} / 100`, true);
-    });
-
-    const fmtAnios = (v: number) => (v >= 900 ? 'Retorno negativo' : v === 1 ? '1 año' : `${v} años`);
-
-    const filasHoja1: ValorCeldaExcel[][] = [
-      ['1. Contexto y Trazabilidad', 'Macro-Región y Perfil Evaluado', ...carrerasEnVersus.map(() => `${infoRegActiva.nombre} (${etiquetaGeneroCorto})`), 'Contexto Activo'],
-      ['1. Contexto y Trazabilidad', 'Sueldo Base Preparatoria de Referencia', ...carrerasEnVersus.map(() => `${formatoMoneda(sueldoPrepaActual)} / mes`), 'Referencia Regional'],
-      registrarFilaNumerica('1. Contexto y Trazabilidad', 'Muestra Física Certificada INEGI', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.n_encuestados_reales, 0)), v => `${v} encuestados`, true),
-      registrarFilaNumerica('2. Calificación Global', 'Calificación Integral DataROI (0 a 100)', carrerasEnVersus.map((c: any) => Math.round(Number(c.scoreDataROI ?? 60))), v => `${v} / 100 pts`, true),
-      ...(modoEvaluacion === 'afinidad' && activos.length > 0
-        ? [registrarFilaNumerica('2. Calificación Global', 'Afinidad Personal con tus Prioridades (%)', carrerasEnVersus.map((c: any) => Math.round(Number(c.matchScore ?? 50))), v => `${v}%`, true)]
-        : []),
-      ...filasPrioridadesActivas,
-      ...filasRadar,
-      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Salario Mensual Consolidado', carrerasEnVersus.map((c: any) => c.sueldo_esperado), v => `${formatoMoneda(v)} / mes`, true),
-      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Prima Salarial vs. Preparatoria', carrerasEnVersus.map((c: any) => c.premioVsPrepaPct), v => `${v >= 0 ? `+${v}%` : `${v}%`} vs. Prepa`, true),
-      ['4. Salario y Retorno (ROI)', 'Tendencia Salarial Real (2021–2026)', ...carrerasEnVersus.map((c: any) => c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable'), 'Trayectoria INPC'],
-      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Retorno Inversión Univ. Pública', carrerasEnVersus.map((c: any) => calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false) ?? 999), fmtAnios, false, 900),
-      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Retorno Inversión Univ. Privada Media', carrerasEnVersus.map((c: any) => calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true) ?? 999), fmtAnios, false, 900),
-      registrarFilaNumerica('4. Salario y Retorno (ROI)', 'Inversión Requerida en Equipo (CapEx)', carrerasEnVersus.map((c: any) => obtenerCapExCorto(c.cve_carrera).costoEquipo), v => formatoMoneda(v), false),
-      registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Empleo de Calidad (Estándar OIT)', carrerasEnVersus.map((c: any) => c.tasaCalidadOIT), v => `${v}%`, true),
-      registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Formalidad Laboral Total', carrerasEnVersus.map((c: any) => c.tasaFormalidadTotal), v => `${v}%`, true),
-      registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Tasa de Desempleo Abierto', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.tasa_desempleo, 3.5)), v => `${v.toFixed(1)}%`, false),
-      registrarFilaNumerica('5. Calidad y Mercado Laboral', 'Índice de Saturación ANUIES', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_saturacion_pct, 100)), v => `${v}%`, false),
-      ['5. Calidad y Mercado Laboral', 'Sector Empleador Dominante', ...carrerasEnVersus.map((c: any) => obtenerSectorDominante(c.perfilActivo)), 'Composición INEGI'],
-      registrarFilaNumerica('5. Ecosistema Empleador', 'Inserción en Grandes Corporativos', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_corp, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('5. Ecosistema Empleador', 'Inserción en PYMEs', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_pyme, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('5. Ecosistema Empleador', 'Práctica Independiente / Microempresa', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_micro, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('5. Ecosistema Empleador', 'Sector Público y Gobierno', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_gobierno, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('6. Escalera de Prestaciones', 'Contrato Escrito Estable', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_contrato, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('6. Escalera de Prestaciones', 'Aguinaldo de Ley', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_aguinaldo, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('6. Escalera de Prestaciones', 'Fondo de Retiro (AFORE)', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_afore, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('6. Escalera de Prestaciones', 'Protección Materna / Paterna', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_materno, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('6. Escalera de Prestaciones', 'Afiliación Sindical / Gremial', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_sindicato, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('6. Escalera de Prestaciones', 'Seguro Médico Privado (SGMM)', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_sgmm, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Apertura y Movilidad Social (% Mérito)', carrerasEnVersus.map((c: any) => Number((c.crudos?.movilidad ?? 50).toFixed(1))), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Estrato Socioeconómico de Origen (1 a 4)', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_privilegio, 2.8)), v => `${v.toFixed(2)} / 4`, false),
-      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Contratación por Contactos / Nepotismo', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_nepotismo, 37)), v => `${v.toFixed(1)}%`, false),
-      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Blindaje Humano ante IA', carrerasEnVersus.map((c: any) => 100 - num(c.perfilActivo?.riesgo_ia_score, 40)), v => `${v}%`, true),
-      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Trabajo Remoto / Home Office', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_home_office, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Empleo Único sin Pluriempleo', carrerasEnVersus.map((c: any) => c.pctEmpleoUnico), v => `${v}%`, true),
-      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Arraigo Local sin Migrar de Estado', carrerasEnVersus.map((c: any) => c.pctArraigoLocal), v => `${v}%`, true)
-    ];
-
-    const victoriasUnicas = Array.from(new Set(conteoVictorias)).sort((a, b) => b - a);
-    const celdasPodioFinal: ValorCeldaExcel[] = conteoVictorias.map(v => {
-      const posPodio = victoriasUnicas.indexOf(v) + 1;
-      const medalla = posPodio === 1 ? '🥇 1° LUGAR (ORO)' : posPodio === 2 ? '🥈 2° LUGAR (PLATA)' : '🥉 3° LUGAR (BRONCE)';
-      const estilo: EstiloCeldaExcel = posPodio === 1 ? 'gold' : posPodio === 2 ? 'silver' : 'bronze';
-      return { v: `${medalla} — ${v} rubros ganados`, s: estilo };
-    });
-
-    filasHoja1.push([
-      { v: '8. Veredicto y Podio Global', s: 'section' },
-      { v: 'Podio por Total de Indicadores Liderados', s: 'section' },
-      ...celdasPodioFinal,
-      encontrarLider(conteoVictorias, true)
-    ]);
-
-    const regs = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
-    const filasHoja2: ValorCeldaExcel[][] = regs.map(rKey => {
-      const metaR = BENCHMARK_REGIONES_BASE[rKey];
-      const prepaR = metaR.sueldo_prepa[generoActivo];
-      const vals = carrerasEnVersus.map((c: any) => {
-        const pr = c.perfiles?.[rKey]?.[generoActivo];
-        return pr && pr.celdaValida !== false && Number(pr.sueldo_esperado) > 0 ? Number(pr.sueldo_esperado) : -1;
-      });
-      const validos = vals.filter(v => v > 0);
-      const mejor = validos.length > 0 ? Math.max(...validos) : null;
-
-      const celdasReg: ValorCeldaExcel[] = vals.map(v => {
-        if (v <= 0) return 'Sin muestra';
-        const prima = prepaR > 0 ? Number((((v - prepaR) / prepaR) * 100).toFixed(1)) : 0;
-        const txt = `${formatoMoneda(v)} (${prima >= 0 ? `+${prima}%` : `${prima}%`} vs Prepa)`;
-        return mejor !== null && v === mejor ? { v: `★ ${txt}`, s: 'winner' } : txt;
-      });
-
-      return [
-        metaR.nombre,
-        formatoMoneda(prepaR),
-        ...celdasReg,
-        encontrarLider(vals.map(v => (v > 0 ? v : -999)), true, 9999999)
-      ];
-    });
-
-    return { cabecerasMatriz, filasHoja1, filasHoja2 };
-  };
-
-  const exportarVersusExcel = () => {
-    if (carrerasEnVersus.length < 2) return;
-    const { cabecerasMatriz, filasHoja1, filasHoja2 } = construirHojasVersus();
-    descargarLibroExcelXLSX(
-      `DataROI_Versus_${regionActiva}_${queryGeneroParam}_${carrerasCompararCves.join('_')}.xlsx`,
-      [
-        {
-          nombre: '1_Matriz_Cara_a_Cara',
-          cabeceras: cabecerasMatriz,
-          filas: filasHoja1
-        },
-        {
-          nombre: '2_Sueldos_5_MacroRegiones',
-          cabeceras: [
-            'Macro_Region',
-            'Base_Prepa_MXN',
-            ...carrerasEnVersus.map((c: any) => `${c.nombre_carrera} (${c.cve_carrera})`),
-            'Lider_Regional'
-          ],
-          filas: filasHoja2
-        }
-      ]
-    );
-  };
-
-  const exportarVersusCSV = () => {
-    if (carrerasEnVersus.length < 2) return;
-    const { cabecerasMatriz, filasHoja1 } = construirHojasVersus();
-    descargarCSVEstilizado(
-      `DataROI_Versus_${regionActiva}_${queryGeneroParam}_${carrerasCompararCves.join('_')}.csv`,
-      cabecerasMatriz,
-      filasHoja1
-    );
-  };
-
-  const descargarPDFVersusDirecto = () => {
-    if (carrerasEnVersus.length < 2) return;
-    descargarComparativaVersusPDF({
-      regionNombre: infoRegActiva.nombre,
-      regionCorto: infoRegActiva.corto,
-      perfilEtiqueta: etiquetaGeneroCorto,
-      sueldoPrepa: sueldoPrepaActual,
-      carreras: carrerasEnVersus.map((c: any) => {
-        const sueldosRegMap: Record<string, number | null> = {};
-        (['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const).forEach(rk => {
-          const pr = c.perfiles?.[rk]?.[generoActivo];
-          sueldosRegMap[rk] = pr && pr.celdaValida !== false && Number(pr.sueldo_esperado) > 0
-            ? Number(pr.sueldo_esperado)
-            : null;
-        });
-        return {
-          cve_carrera: c.cve_carrera,
-          nombre_carrera: c.nombre_carrera,
-          scoreDataROI: Math.round(c.scoreDataROI),
-          sueldo_esperado: c.sueldo_esperado,
-          premioVsPrepaPct: Math.round(c.premioVsPrepaPct),
-          roiPublica: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false),
-          roiPrivada: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true),
-          costoEquipo: obtenerCapExCorto(c.cve_carrera).costoEquipo,
-          tasaCalidadOIT: c.tasaCalidadOIT,
-          tasaDesempleo: num(c.perfilActivo?.tasa_desempleo, 3.5),
-          saturacionPct: num(c.perfilActivo?.indice_saturacion_pct, 100),
-          meritoPct: Number((c.crudos?.movilidad ?? 50).toFixed(1)),
-          blindajeIA: 100 - num(c.perfilActivo?.riesgo_ia_score, 40),
-          empleoUnicoPct: c.pctEmpleoUnico,
-          sectorPrincipal: obtenerSectorDominante(c.perfilActivo),
-          pilaresRadar: c.pilaresRadar || {},
-          sueldosPorRegion: sueldosRegMap
-        };
-      }),
-      nombreArchivo: `DataROI_Comparativa_Versus_${regionActiva}_${queryGeneroParam}_${carrerasCompararCves.join('_')}.pdf`
-    });
   };
 
   const totalPasosWizardDinamico = modoEvaluacion === 'calificacion' && pasoWizard <= 3 ? 3 : 4;
@@ -1986,7 +1621,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* PASO 3: SELECCIÓN DE MODO EN 2 TIEMPOS (SELECCIONAR TARJETA -> CONFIRMAR EN BOTÓN INFERIOR) */}
+          {/* PASO 3: SELECCIÓN DE MODO EN 2 TIEMPOS */}
           {pasoWizard === 3 && (
             <div key="paso3" className="animate-in fade-in slide-in-from-right-4 duration-200">
               <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-1">
@@ -2621,7 +2256,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 )}
               </div>
 
-              {/* Cuadrícula de Prioridades: Bloqueada explícitamente cuando modoEvaluacion === 'calificacion' pero mostrando honestamente las guardadas */}
               <div className="relative">
                 {modoEvaluacion === 'calificacion' && (
                   <div className="absolute inset-0 z-10 bg-slate-100/45 backdrop-blur-[1px] rounded-xl flex items-center justify-center p-4">
@@ -3022,7 +2656,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                         </div>
                       </div>
 
-                      {/* Columna Derecha: EXCLUSIVIDAD FOCAL + BOTÓN VERSUS CON NÚMERO DE SLOT */}
+                      {/* Columna Derecha: EXCLUSIVIDAD FOCAL + BOTÓN VERSUS */}
                       <div className="flex items-center justify-between lg:flex-col lg:items-end lg:justify-between gap-3 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0">
                         {modoEvaluacion === 'calificacion' ? (
                           <AnilloScoreDataROIGrande score={carrera.scoreDataROI} rank={carrera.rankAfinidad} />
@@ -3093,7 +2727,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       )}
 
       {/* ========================================================================= */}
-      {/* BANDEJA FLOTANTE INFERIOR DEL COMPARADOR CARA A CARA (MINIMIZABLE)        */}
+      {/* BANDEJA FLOTANTE INFERIOR (CONECTADA AL MODAL GLOBAL DE NAVBARGLOBAL)     */}
       {/* ========================================================================= */}
       {carrerasEnVersus.length > 0 && (
         <div
@@ -3109,7 +2743,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </span>
               {carrerasEnVersus.length >= 2 && (
                 <button
-                  onClick={() => window.dispatchEvent(new CustomEvent('dataroi-open-versus-modal'))}
+                  onClick={abrirComparadorGlobal}
                   className="px-3 py-1 rounded-full bg-blue-600 hover:bg-blue-500 text-xs font-black text-white cursor-pointer"
                 >
                   ⚡ Comparar ahora
@@ -3168,7 +2802,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 </button>
                 <button
                   disabled={carrerasEnVersus.length < 2}
-                  onClick={() => window.dispatchEvent(new CustomEvent('dataroi-open-versus-modal'))}
+                  onClick={abrirComparadorGlobal}
                   className={`px-4 py-2 rounded-xl text-xs font-black transition-all active:scale-95 ${
                     carrerasEnVersus.length >= 2
                       ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm cursor-pointer'
@@ -3180,374 +2814,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL EJECUTIVO DE COMPARACIÓN CARA A CARA (CON ENTEROS ROTUNDOS)         */}
-      {/* ========================================================================= */}
-      {modalVersusAbierto && carrerasEnVersus.length >= 2 && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Comparador ejecutivo cara a cara de licenciaturas"
-          className="versus-print-modal fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setModalVersusAbierto(false);
-          }}
-        >
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-5xl w-full max-h-[92vh] overflow-y-auto p-6 md:p-8 animate-in zoom-in-95 duration-200">
-            
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-              <div>
-                <span className="text-xs font-black uppercase tracking-wider text-blue-600 block mb-0.5">
-                  Comparador Ejecutivo Cara a Cara · {infoRegActiva.corto} ({etiquetaGeneroCorto})
-                </span>
-                <h2 className="text-xl md:text-2xl font-black text-slate-900">
-                  Contraste Directo de Calificación DataROI, Indicadores y Retorno
-                </h2>
-              </div>
-
-              <div className="no-print flex flex-wrap items-center gap-2 self-end lg:self-center">
-                <button
-                  onClick={compartirVersusLink}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
-                >
-                  {copiadoVersus ? <Check className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" /> : <Share2 className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />}
-                  {copiadoVersus ? '¡Link copiado!' : 'Compartir Versus'}
-                </button>
-
-                <button
-                  onClick={exportarVersusExcel}
-                  title="Descargar Libro de Excel (.xlsx) con 2 Hojas"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white cursor-pointer"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
-                  Excel (2 Hojas)
-                </button>
-
-                <button
-                  onClick={exportarVersusCSV}
-                  title="Descargar comparativa en formato CSV limpio"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
-                  CSV
-                </button>
-
-                <button
-                  onClick={descargarPDFVersusDirecto}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 text-xs font-bold text-slate-700 cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
-                  Descargar PDF
-                </button>
-
-                <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-                  <button
-                    onClick={() => setVistaGraficoVersus('radar')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${
-                      vistaGraficoVersus === 'radar' ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <Compass className="w-3.5 h-3.5" aria-hidden="true" /> 6 Pilares
-                  </button>
-                  <button
-                    onClick={() => setVistaGraficoVersus('regiones')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${
-                      vistaGraficoVersus === 'regiones' ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <BarChart3 className="w-3.5 h-3.5" aria-hidden="true" /> Sueldos por Región
-                  </button>
-                </div>
-
-                <button
-                  onClick={() => setModalVersusAbierto(false)}
-                  aria-label="Cerrar comparador (Escape)"
-                  title="Cerrar comparador (Tecla Escape)"
-                  className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
-                >
-                  <X className="w-5 h-5" aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-
-            <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6 my-6 items-center bg-slate-50 p-5 rounded-2xl border border-slate-200/80">
-              <div className="lg:col-span-5 space-y-3">
-                <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
-                  {vistaGraficoVersus === 'radar' ? (
-                    <>
-                      <Compass className="w-4 h-4 text-blue-600" aria-hidden="true" />
-                      Superposición de los 6 Pilares
-                    </>
-                  ) : (
-                    <>
-                      <BarChart3 className="w-4 h-4 text-blue-600" aria-hidden="true" />
-                      Comparativa Salarial en las 5 Regiones
-                    </>
-                  )}
-                </h3>
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  {vistaGraficoVersus === 'radar'
-                    ? `Las líneas de alto contraste y el medallón entero de calificación muestran qué carrera envuelve a las demás en ${infoRegActiva.nombre}.`
-                    : 'Contrasta cuánto paga cada una de las carreras seleccionadas a lo largo de las 5 macro-regiones económicas del país.'}
-                </p>
-
-                <div className="space-y-2.5 pt-1">
-                  {carrerasEnVersus.map((c: any, idx: number) => {
-                    const primaEnt = Math.round(c.premioVsPrepaPct);
-                    return (
-                      <div
-                        key={c.cve_carrera}
-                        className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${COLORES_VERSUS[idx]?.light}`}
-                      >
-                        <div className="flex items-start gap-2.5 min-w-0">
-                          <span
-                            className="w-5 h-5 rounded-full text-[10px] font-black text-white flex items-center justify-center shrink-0 mt-0.5 shadow-2xs"
-                            style={{ backgroundColor: COLORES_VERSUS[idx]?.hex }}
-                          >
-                            #{idx + 1}
-                          </span>
-                          <div className="min-w-0">
-                            <span className="text-xs font-black text-slate-900 leading-snug block">
-                              {c.nombre_carrera}
-                            </span>
-                            <span className="text-[11px] font-black text-emerald-700">
-                              {formatoMoneda(c.sueldo_esperado)}/mes ({primaEnt >= 0 ? `+${primaEnt}%` : `${primaEnt}%`} vs. Prepa)
-                            </span>
-                          </div>
-                        </div>
-                        <AnilloScoreDataROIGrande score={c.scoreDataROI ?? 60} compacto />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="lg:col-span-7 h-72 w-full bg-white rounded-2xl p-4 border border-slate-200/70 shadow-2xs">
-                <ResponsiveContainer width="100%" height="100%">
-                  {vistaGraficoVersus === 'radar' ? (
-                    <RadarChart cx="50%" cy="50%" outerRadius="78%" data={datosRadarVersus}>
-                      <PolarGrid stroke="#CBD5E1" />
-                      <PolarAngleAxis dataKey="eje" tick={{ fill: '#0F172A', fontSize: 11.5, fontWeight: 800 }} />
-                      <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                      {carrerasEnVersus.map((c: any, idx: number) => (
-                        <Radar
-                          key={c.cve_carrera}
-                          name={c.nombre_carrera}
-                          dataKey={c.cve_carrera}
-                          stroke={COLORES_VERSUS[idx]?.hex}
-                          strokeWidth={3}
-                          strokeDasharray={idx === 2 ? '5 3' : undefined}
-                          fill={COLORES_VERSUS[idx]?.hex}
-                          fillOpacity={0.12}
-                          dot={{ r: 4, fill: COLORES_VERSUS[idx]?.hex, strokeWidth: 1.5, stroke: '#FFFFFF' }}
-                        />
-                      ))}
-                      <RechartsTooltip />
-                    </RadarChart>
-                  ) : (
-                    <BarChart data={datosRegionesVersus} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                      <XAxis dataKey="region" tick={{ fill: '#334155', fontSize: 11, fontWeight: 700 }} axisLine={false} tickLine={false} />
-                      <YAxis
-                        tickFormatter={(v) => `$${Math.round(Number(v) / 1000)}k`}
-                        width={44}
-                        tick={{ fill: '#64748B', fontSize: 11, fontWeight: 600 }}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <RechartsTooltip formatter={(value: any) => (value ? formatoMoneda(Number(value)) : 'Sin muestra')} />
-                      {carrerasEnVersus.map((c: any, idx: number) => (
-                        <Bar
-                          key={c.cve_carrera}
-                          name={c.nombre_carrera}
-                          dataKey={c.cve_carrera}
-                          fill={COLORES_VERSUS[idx]?.hex}
-                          radius={[6, 6, 0, 0]}
-                        />
-                      ))}
-                    </BarChart>
-                  )}
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* TABLA COMPARATIVA */}
-            <div className="print-avoid-break overflow-x-auto rounded-2xl border border-slate-200">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-900 text-white text-xs">
-                    <th className="py-3.5 px-4 font-bold uppercase tracking-wider w-1/4">Indicador Auditado</th>
-                    {carrerasEnVersus.map((c: any, idx: number) => (
-                      <th key={c.cve_carrera} className="py-3.5 px-4 font-black min-w-[200px] align-top">
-                        <div className="flex items-start gap-2">
-                          <span
-                            className="w-3 h-3 rounded-full shrink-0 mt-0.5 border border-white/50"
-                            style={{ backgroundColor: COLORES_VERSUS[idx]?.hex }}
-                          />
-                          <span className="leading-snug">{c.nombre_carrera}</span>
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-xs">
-                  {([
-                    {
-                      label: 'Calificación Integral DataROI (0–100)',
-                      valores: carrerasEnVersus.map((c: any) => Math.round(Number(c.scoreDataROI ?? 60))),
-                      formato: (v: number) => {
-                        const s = obtenerSemaforoScoreDataROI(v);
-                        return `${v} / 100 (Grado ${s.grado} · ${s.etiqueta})`;
-                      },
-                      mejorAlto: true,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Salario Mensual Consolidado',
-                      valores: carrerasEnVersus.map((c: any) => c.sueldo_esperado),
-                      formato: (v: number) => `${formatoMoneda(v)} / mes`,
-                      mejorAlto: true,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Prima Salarial vs. Preparatoria',
-                      valores: carrerasEnVersus.map((c: any) => Math.round(c.premioVsPrepaPct)),
-                      formato: (v: number) => `${v >= 0 ? `+${v}%` : `${v}%`} vs. Prepa`,
-                      mejorAlto: true,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Retorno de Inversión (Univ. Pública)',
-                      valores: carrerasEnVersus.map((c: any) =>
-                        calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false) ?? 999
-                      ),
-                      formato: (v: number) =>
-                        v >= 900 ? 'Retorno negativo' : v === 1 ? '1 año de trabajo' : `${v} años de trabajo`,
-                      mejorAlto: false,
-                      invalidoSiMayorIgualA: 900
-                    },
-                    {
-                      label: 'Retorno de Inversión (Univ. Privada Media)',
-                      valores: carrerasEnVersus.map((c: any) =>
-                        calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true) ?? 999
-                      ),
-                      formato: (v: number) =>
-                        v >= 900 ? 'Retorno negativo' : v === 1 ? '1 año de trabajo' : `${v} años de trabajo`,
-                      mejorAlto: false,
-                      invalidoSiMayorIgualA: 900
-                    },
-                    {
-                      label: 'Inversión Requerida en Equipo (CapEx)',
-                      valores: carrerasEnVersus.map((c: any) => obtenerCapExCorto(c.cve_carrera).costoEquipo),
-                      formato: (v: number) =>
-                        v === 18000 ? 'Básica ($18,000 MXN)' : v === 42000 ? 'Media ($42,000 MXN)' : 'Alta ($85,000 MXN)',
-                      mejorAlto: false,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Empleo de Calidad (Estándar OIT)',
-                      valores: carrerasEnVersus.map((c: any) => Math.round(c.tasaCalidadOIT)),
-                      formato: (v: number) => `${v}% de ocupados`,
-                      mejorAlto: true,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Tasa de Desempleo Abierto',
-                      valores: carrerasEnVersus.map((c: any) => num(c.perfilActivo?.tasa_desempleo, 3.5)),
-                      formato: (v: number) => `${v.toFixed(1)}%`,
-                      mejorAlto: false,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Índice de Saturación ANUIES',
-                      valores: carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_saturacion_pct, 100)),
-                      formato: (v: number) => `${v}%`,
-                      mejorAlto: false,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Apertura y Movilidad Social (Mérito)',
-                      valores: carrerasEnVersus.map((c: any) => Math.round(Number(c.crudos?.movilidad ?? 50))),
-                      formato: (v: number) => `${v}% Mérito`,
-                      mejorAlto: true,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Blindaje Humano ante IA',
-                      valores: carrerasEnVersus.map((c: any) => 100 - num(c.perfilActivo?.riesgo_ia_score, 40)),
-                      formato: (v: number) => `${v}% blindaje`,
-                      mejorAlto: true,
-                      invalidoSiMayorIgualA: Infinity
-                    },
-                    {
-                      label: 'Empleo Único (Sin Pluriempleo)',
-                      valores: carrerasEnVersus.map((c: any) => Math.round(c.pctEmpleoUnico)),
-                      formato: (v: number) => `${v}% un solo empleo`,
-                      mejorAlto: true,
-                      invalidoSiMayorIgualA: Infinity
-                    }
-                  ]).map((fila, rIdx) => {
-                    const valoresValidos = fila.valores.filter((v: number) => v < fila.invalidoSiMayorIgualA);
-                    const mejorValor = valoresValidos.length > 0
-                      ? (fila.mejorAlto ? Math.max(...valoresValidos) : Math.min(...valoresValidos))
-                      : null;
-
-                    return (
-                      <tr key={rIdx} className="even:bg-slate-50/60 hover:bg-slate-100/50 transition-colors">
-                        <td className="py-3 px-4 font-bold text-slate-700">{fila.label}</td>
-                        {fila.valores.map((val: number, cIdx: number) => {
-                          const esGanador = mejorValor !== null && val === mejorValor && val < fila.invalidoSiMayorIgualA;
-                          return (
-                            <td
-                              key={cIdx}
-                              className={`py-3 px-4 transition-colors ${
-                                esGanador ? 'bg-emerald-50/70' : ''
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className={`whitespace-nowrap ${
-                                  esGanador ? 'font-black text-slate-950 text-xs sm:text-sm' : 'font-semibold text-slate-600'
-                                }`}>
-                                  {fila.formato(val)}
-                                </span>
-                                {esGanador && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-[10px] shrink-0">
-                                    <Trophy className="w-2.5 h-2.5 text-emerald-700" aria-hidden="true" /> Líder
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-
-                  <tr className="bg-slate-50/90">
-                    <td className="py-3 px-4 font-bold text-slate-700">Sector Empleador Principal</td>
-                    {carrerasEnVersus.map((c: any) => (
-                      <td key={c.cve_carrera} className="py-3 px-4 font-bold text-slate-800">
-                        {obtenerSectorDominante(c.perfilActivo)}
-                      </td>
-                    ))}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div className="no-print mt-6 pt-4 border-t border-slate-200 flex justify-end">
-              <button
-                onClick={() => setModalVersusAbierto(false)}
-                className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
-              >
-                Cerrar comparador (Esc)
-              </button>
-            </div>
-
-          </div>
         </div>
       )}
 

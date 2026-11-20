@@ -21,8 +21,9 @@ import {
 } from 'recharts';
 import {
   FlaskConical, Search, Microscope, ArrowUpDown, Download,
-  FileSpreadsheet, MapPin, Users, Scale, Check, ChevronRight,
-  ChevronDown, ChevronUp, TrendingUp, TrendingDown, Sparkles, Filter
+  FileSpreadsheet, MapPin, Users, ChevronRight,
+  ChevronDown, ChevronUp, TrendingUp, TrendingDown, Sparkles, Filter,
+  Info, Crosshair, X
 } from 'lucide-react';
 
 type CodigoGenero = 0 | 1 | 2;
@@ -92,12 +93,12 @@ const CATALOGO_VARIABLES_CRUDAS: VariableCrudaMeta[] = [
 ];
 
 const PRESETS_CORRELACION = [
-  { label: '🎓 Estrato Origen vs. Salario', x: 'indice_privilegio', y: 'sueldo_mensual' },
-  { label: '🤖 Riesgo IA vs. Salario', x: 'riesgo_ia_score', y: 'sueldo_mensual' },
-  { label: '🏥 Seguro SGMM vs. Salario', x: 'pct_sgmm', y: 'sueldo_mensual' },
-  { label: '🤝 Nepotismo vs. Calidad OIT', x: 'pct_nepotismo', y: 'calidad_oit_pct' },
-  { label: '📈 Saturación vs. Desempleo', x: 'saturacion_pct', y: 'tasa_desempleo' },
-  { label: '🏠 Home Office vs. Salario', x: 'pct_home_office', y: 'sueldo_mensual' }
+  { label: '🎓 Estrato vs. Salario', x: 'indice_privilegio', y: 'sueldo_mensual' },
+  { label: '🤖 IA vs. Salario', x: 'riesgo_ia_score', y: 'sueldo_mensual' },
+  { label: '🏥 SGMM vs. Salario', x: 'pct_sgmm', y: 'sueldo_mensual' },
+  { label: '🤝 Nepotismo vs. OIT', x: 'pct_nepotismo', y: 'calidad_oit_pct' },
+  { label: '📈 Saturación vs. Desemp.', x: 'saturacion_pct', y: 'tasa_desempleo' },
+  { label: '🏠 Remoto vs. Salario', x: 'pct_home_office', y: 'sueldo_mensual' }
 ];
 
 const formatoMoneda = (valor: number) =>
@@ -110,6 +111,32 @@ function formatearValorVariable(val: number, unidad: VariableCrudaMeta['unidad']
   if (unidad === 'hrs') return `${val.toFixed(1)} hrs`;
   if (unidad === 'personas') return Math.round(val).toLocaleString('es-MX');
   return `${val.toFixed(1)}%`;
+}
+
+function formatearTickEje(val: number, unidad: VariableCrudaMeta['unidad']): string {
+  if (!Number.isFinite(val)) return '';
+  if (unidad === 'MXN') {
+    if (Math.abs(val) >= 1000) {
+      const k = val / 1000;
+      return `$${Number.isInteger(k) ? k : k.toFixed(1)}k`;
+    }
+    return `$${Math.round(val)}`;
+  }
+  if (unidad === 'estrato') return val.toFixed(1);
+  if (unidad === 'hrs') return `${Math.round(val)}h`;
+  if (unidad === 'personas') return `${Math.round(val / 1000)}k`;
+  return `${Math.round(val)}%`;
+}
+
+function formatearDiferencialMedia(diff: number, unidad: VariableCrudaMeta['unidad']): string {
+  if (!Number.isFinite(diff)) return '0';
+  const signo = diff > 0 ? '+' : diff < 0 ? '-' : '';
+  const absVal = Math.abs(diff);
+  if (unidad === 'MXN') return `${signo}${formatoMoneda(absVal)}`;
+  if (unidad === 'estrato') return `${signo}${absVal.toFixed(2)} pts`;
+  if (unidad === 'hrs') return `${signo}${absVal.toFixed(1)} hrs`;
+  if (unidad === 'personas') return `${signo}${Math.round(absVal).toLocaleString('es-MX')}`;
+  return `${signo}${absVal.toFixed(1)}%`;
 }
 
 function calcularSueldoRegionalBuhlmann(
@@ -178,7 +205,8 @@ function calcularPercentil(valoresOrdenadosAsc: number[], p: number): number {
 function LaboratorioContenido() {
   const [regionActiva, setRegionActiva] = useState<string>('nacional');
   const [generoActivo, setGeneroActivo] = useState<CodigoGenero>(0);
-  const [busqueda, setBusqueda] = useState<string>('');
+  const [busquedaTabla, setBusquedaTabla] = useState<string>('');
+  const [carreraDestacadaCve, setCarreraDestacadaCve] = useState<string>('');
   const [soloStem, setSoloStem] = useState<boolean>(false);
   const [filtroCuadrante, setFiltroCuadrante] = useState<FiltroCuadrante>('todos');
 
@@ -250,7 +278,6 @@ function LaboratorioContenido() {
     cargarDatosCrudos();
   }, []);
 
-  // Resetear el filtro de cuadrante cuando cambian los ejes o la región
   useEffect(() => {
     setFiltroCuadrante('todos');
   }, [ejeXId, ejeYId, regionActiva, generoActivo]);
@@ -322,7 +349,6 @@ function LaboratorioContenido() {
         : 0;
     };
 
-    // Cálculo de composición de género regional (Hombres vs Mujeres) en la región activa
     let peaAcumHombres = 0;
     let prodSueldoHombres = 0;
     let peaAcumMujeres = 0;
@@ -532,22 +558,17 @@ function LaboratorioContenido() {
   const metaEjeX = CATALOGO_VARIABLES_CRUDAS.find(v => v.id === ejeXId) || CATALOGO_VARIABLES_CRUDAS[8];
   const metaEjeY = CATALOGO_VARIABLES_CRUDAS.find(v => v.id === ejeYId) || CATALOGO_VARIABLES_CRUDAS[0];
 
-  const filasBaseSinCuadrante = useMemo(() => {
-    const q = busqueda.toLowerCase().trim();
-    return filasActivas.filter(f => {
-      const pasaTexto = !q || f.nombre_carrera.toLowerCase().includes(q) || f.nombre_oficial.toLowerCase().includes(q) || f.cve_carrera.includes(q);
-      const pasaStem = soloStem ? f.is_stem : true;
-      return pasaTexto && pasaStem;
-    });
-  }, [filasActivas, busqueda, soloStem]);
+  // Universo para el Scatter Plot (solo filtrado por región, género y STEM; nunca mutilado por el buscador de la tabla)
+  const filasUniversoPlano = useMemo(() => {
+    return soloStem ? filasActivas.filter(f => f.is_stem) : filasActivas;
+  }, [filasActivas, soloStem]);
 
   const mediaXActual = mediaVariables[ejeXId] ?? 0;
   const mediaYActual = mediaVariables[ejeYId] ?? 0;
 
-  // Conteo de carreras en cada uno de los 4 cuadrantes del plano cartesiano
   const conteoCuadrantes = useMemo(() => {
     let q1 = 0, q2 = 0, q3 = 0, q4 = 0;
-    filasBaseSinCuadrante.forEach(f => {
+    filasUniversoPlano.forEach(f => {
       const vx = Number(f[ejeXId] || 0);
       const vy = Number(f[ejeYId] || 0);
       if (vx < mediaXActual && vy >= mediaYActual) q1++;
@@ -556,10 +577,10 @@ function LaboratorioContenido() {
       else q4++;
     });
     return { q1, q2, q3, q4 };
-  }, [filasBaseSinCuadrante, ejeXId, ejeYId, mediaXActual, mediaYActual]);
+  }, [filasUniversoPlano, ejeXId, ejeYId, mediaXActual, mediaYActual]);
 
-  const filasFiltradasYOrdenadas = useMemo(() => {
-    const filtradasPorCuadrante = filasBaseSinCuadrante.filter(f => {
+  const filasPlanoVisibles = useMemo(() => {
+    return filasUniversoPlano.filter(f => {
       if (filtroCuadrante === 'todos') return true;
       const vx = Number(f[ejeXId] || 0);
       const vy = Number(f[ejeYId] || 0);
@@ -569,52 +590,151 @@ function LaboratorioContenido() {
       if (filtroCuadrante === 'q4_inf_der') return vx >= mediaXActual && vy < mediaYActual;
       return true;
     });
+  }, [filasUniversoPlano, filtroCuadrante, ejeXId, ejeYId, mediaXActual, mediaYActual]);
 
-    return [...filtradasPorCuadrante].sort((a, b) => {
+  const filasTablaFiltradasYOrdenadas = useMemo(() => {
+    const q = busquedaTabla.toLowerCase().trim();
+    const filtradas = filasPlanoVisibles.filter(f => {
+      return !q || f.nombre_carrera.toLowerCase().includes(q) || f.nombre_oficial.toLowerCase().includes(q) || f.cve_carrera.includes(q);
+    });
+
+    return [...filtradas].sort((a, b) => {
       const va = Number(a[varRankingId] || 0);
       const vb = Number(b[varRankingId] || 0);
       if (va !== vb) return ordenDesc ? vb - va : va - vb;
       return b.sueldo_mensual - a.sueldo_mensual;
     });
-  }, [filasBaseSinCuadrante, filtroCuadrante, ejeXId, ejeYId, mediaXActual, mediaYActual, varRankingId, ordenDesc]);
+  }, [filasPlanoVisibles, busquedaTabla, varRankingId, ordenDesc]);
 
-  // Regresión Lineal OLS (r, R², Pendiente y Puntos para la Recta Diagonal)
+  const carrerasOrdenAlfabetico = useMemo(() => {
+    return [...filasUniversoPlano].sort((a, b) => a.nombre_carrera.localeCompare(b.nombre_carrera, 'es'));
+  }, [filasUniversoPlano]);
+
+  // Regresión Lineal OLS sobre el universo activo del plano
   const regresionOLS = useMemo(() => {
-    const xs = filasBaseSinCuadrante.map(f => Number(f[ejeXId] || 0));
-    const ys = filasBaseSinCuadrante.map(f => Number(f[ejeYId] || 0));
+    const xs = filasUniversoPlano.map(f => Number(f[ejeXId] || 0));
+    const ys = filasUniversoPlano.map(f => Number(f[ejeYId] || 0));
     return calcularRegresionLinealOLS(xs, ys);
-  }, [filasBaseSinCuadrante, ejeXId, ejeYId]);
+  }, [filasUniversoPlano, ejeXId, ejeYId]);
 
   const puntosLineaOLS = useMemo(() => {
-    if (filasBaseSinCuadrante.length < 3 || regresionOLS.minX === regresionOLS.maxX) return [];
+    if (filasUniversoPlano.length < 3 || regresionOLS.minX === regresionOLS.maxX) return [];
     return [
       { [ejeXId]: regresionOLS.minX, [ejeYId]: Number((regresionOLS.intercept + regresionOLS.slope * regresionOLS.minX).toFixed(2)) },
       { [ejeXId]: regresionOLS.maxX, [ejeYId]: Number((regresionOLS.intercept + regresionOLS.slope * regresionOLS.maxX).toFixed(2)) }
     ];
-  }, [filasBaseSinCuadrante.length, regresionOLS, ejeXId, ejeYId]);
+  }, [filasUniversoPlano.length, regresionOLS, ejeXId, ejeYId]);
 
-  // Identificación de los 6 casos extremos (outliers) para etiquetarlos directamente en el gráfico
-  const cvesOutliersEtiquetados = useMemo(() => {
-    if (filasBaseSinCuadrante.length === 0) return new Set<string>();
-    const porY = [...filasBaseSinCuadrante].sort((a, b) => Number(b[ejeYId] || 0) - Number(a[ejeYId] || 0));
-    const porX = [...filasBaseSinCuadrante].sort((a, b) => Number(b[ejeXId] || 0) - Number(a[ejeXId] || 0));
-    const seleccionados = new Set<string>();
-    if (porY[0]) seleccionados.add(porY[0].cve_carrera);
-    if (porY[1]) seleccionados.add(porY[1].cve_carrera);
-    if (porY[porY.length - 1]) seleccionados.add(porY[porY.length - 1].cve_carrera);
-    if (porX[0]) seleccionados.add(porX[0].cve_carrera);
-    if (porX[porX.length - 1]) seleccionados.add(porX[porX.length - 1].cve_carrera);
-    return seleccionados;
-  }, [filasBaseSinCuadrante, ejeXId, ejeYId]);
+  // Dominios con padding holgado para evitar recortes de burbujas y etiquetas contra los bordes
+  const { dominioX, dominioY } = useMemo(() => {
+    if (filasPlanoVisibles.length === 0) {
+      return { dominioX: [0, 100] as [number, number], dominioY: [0, 100] as [number, number] };
+    }
+    const xs = filasPlanoVisibles.map(f => Number(f[ejeXId] || 0));
+    const ys = filasPlanoVisibles.map(f => Number(f[ejeYId] || 0));
+
+    let minX = Math.min(...xs, mediaXActual);
+    let maxX = Math.max(...xs, mediaXActual);
+    let minY = Math.min(...ys, mediaYActual);
+    let maxY = Math.max(...ys, mediaYActual);
+
+    const spanX = Math.max(0.2, maxX - minX);
+    const spanY = Math.max(0.2, maxY - minY);
+
+    const padX = spanX * 0.11;
+    const padY = spanY * 0.14;
+
+    minX = metaEjeX.unidad === 'estrato' ? Number(Math.max(1, minX - padX).toFixed(2)) : Math.max(0, Math.floor(minX - padX));
+    maxX = metaEjeX.unidad === 'estrato' ? Number(Math.min(4, maxX + padX).toFixed(2)) : Math.ceil(maxX + padX);
+    minY = metaEjeY.unidad === 'estrato' ? Number(Math.max(1, minY - padY).toFixed(2)) : Math.max(0, Math.floor(minY - padY));
+    maxY = metaEjeY.unidad === 'estrato' ? Number(Math.min(4, maxY + padY).toFixed(2)) : Math.ceil(maxY + padY);
+
+    return {
+      dominioX: [minX, maxX] as [number, number],
+      dominioY: [minY, maxY] as [number, number]
+    };
+  }, [filasPlanoVisibles, ejeXId, ejeYId, mediaXActual, mediaYActual, metaEjeX.unidad, metaEjeY.unidad]);
+
+  // Algoritmo anticolisión y posicionamiento inteligente para etiquetas de outliers y carrera destacada
+  const mapaEtiquetasPlano = useMemo(() => {
+    const mapa = new Map<string, { dx: number; dy: number; anchor: 'middle' | 'start' | 'end'; texto: string; destacada: boolean }>();
+    if (filasPlanoVisibles.length === 0) return mapa;
+
+    const spanX = Math.max(0.001, dominioX[1] - dominioX[0]);
+    const spanY = Math.max(0.001, dominioY[1] - dominioY[0]);
+
+    const porY = [...filasPlanoVisibles].sort((a, b) => Number(b[ejeYId] || 0) - Number(a[ejeYId] || 0));
+    const porX = [...filasPlanoVisibles].sort((a, b) => Number(b[ejeXId] || 0) - Number(a[ejeXId] || 0));
+
+    const candidatosOrdenados: any[] = [];
+    const seen = new Set<string>();
+    const agregar = (item: any) => {
+      if (item && !seen.has(item.cve_carrera)) {
+        seen.add(item.cve_carrera);
+        candidatosOrdenados.push(item);
+      }
+    };
+
+    if (carreraDestacadaCve) {
+      agregar(filasPlanoVisibles.find(f => f.cve_carrera === carreraDestacadaCve));
+    }
+    agregar(porY[0]);
+    agregar(porX[0]);
+    agregar(porY[porY.length - 1]);
+    agregar(porX[porX.length - 1]);
+    agregar(porY[1]);
+
+    const colocadas: { nx: number; ny: number }[] = [];
+
+    candidatosOrdenados.forEach(item => {
+      const vx = Number(item[ejeXId] || 0);
+      const vy = Number(item[ejeYId] || 0);
+      const nx = (vx - dominioX[0]) / spanX;
+      const ny = (vy - dominioY[0]) / spanY;
+      const esDestacada = item.cve_carrera === carreraDestacadaCve;
+
+      // Verificar colisión espacial en el plano normalizado [0..1]
+      const choca = !esDestacada && colocadas.some(prev => Math.abs(nx - prev.nx) < 0.18 && Math.abs(ny - prev.ny) < 0.15);
+      if (choca) return;
+
+      colocadas.push({ nx, ny });
+
+      let anchor: 'middle' | 'start' | 'end' = 'middle';
+      let dx = 0;
+      let dy = -10;
+
+      if (nx < 0.17) {
+        anchor = 'start';
+        dx = 9;
+        dy = 3;
+      } else if (nx > 0.83) {
+        anchor = 'end';
+        dx = -9;
+        dy = 3;
+      } else if (ny > 0.84) {
+        anchor = 'middle';
+        dx = 0;
+        dy = 16;
+      }
+
+      const texto = item.nombre_carrera.length > 22
+        ? item.nombre_carrera.slice(0, 20) + '…'
+        : item.nombre_carrera;
+
+      mapa.set(item.cve_carrera, { dx, dy, anchor, texto, destacada: esDestacada });
+    });
+
+    return mapa;
+  }, [filasPlanoVisibles, ejeXId, ejeYId, dominioX, dominioY, carreraDestacadaCve]);
 
   // Radar Automático de Correlaciones (Variable Y actual contra todas las demás 23 variables)
   const radarCorrelacionesContraY = useMemo(() => {
-    if (filasBaseSinCuadrante.length < 4) return { positivas: [], negativas: [] };
-    const ys = filasBaseSinCuadrante.map(f => Number(f[ejeYId] || 0));
+    if (filasUniversoPlano.length < 4) return { positivas: [], negativas: [] };
+    const ys = filasUniversoPlano.map(f => Number(f[ejeYId] || 0));
     const lista = CATALOGO_VARIABLES_CRUDAS
       .filter(v => v.id !== ejeYId)
       .map(v => {
-        const xs = filasBaseSinCuadrante.map(f => Number(f[v.id] || 0));
+        const xs = filasUniversoPlano.map(f => Number(f[v.id] || 0));
         const { r } = calcularRegresionLinealOLS(xs, ys);
         return { ...v, r };
       });
@@ -622,22 +742,25 @@ function LaboratorioContenido() {
     const positivas = [...lista].filter(x => x.r > 0.05).sort((a, b) => b.r - a.r).slice(0, 4);
     const negativas = [...lista].filter(x => x.r < -0.05).sort((a, b) => a.r - b.r).slice(0, 4);
     return { positivas, negativas };
-  }, [filasBaseSinCuadrante, ejeYId]);
+  }, [filasUniversoPlano, ejeYId]);
 
-  // Estadísticos de Distribución (P10, Mediana P50, P90 y Brecha STEM) para la variable de la tabla
+  // Estadísticos de Distribución con STEM vs. No-STEM ponderados por PEA Activa (100% consistente con el Hero)
   const estadisticosTabla = useMemo(() => {
-    if (filasFiltradasYOrdenadas.length === 0) {
+    if (filasTablaFiltradasYOrdenadas.length === 0) {
       return { p10: 0, p50: 0, p90: 0, min: 0, max: 0, mediaStem: 0, mediaNoStem: 0 };
     }
-    const valsAsc = filasFiltradasYOrdenadas.map(f => Number(f[varRankingId] || 0)).sort((a, b) => a - b);
-    const stemRows = filasFiltradasYOrdenadas.filter(f => f.is_stem);
-    const noStemRows = filasFiltradasYOrdenadas.filter(f => !f.is_stem);
+    const valsAsc = filasTablaFiltradasYOrdenadas.map(f => Number(f[varRankingId] || 0)).sort((a, b) => a - b);
 
-    const mediaStem = stemRows.length > 0
-      ? stemRows.reduce((a, b) => a + Number(b[varRankingId] || 0), 0) / stemRows.length
+    const stemRows = filasActivas.filter(f => f.is_stem);
+    const noStemRows = filasActivas.filter(f => !f.is_stem);
+    const peaStem = stemRows.reduce((a, b) => a + Math.max(1, b.pea_activa), 0);
+    const peaNoStem = noStemRows.reduce((a, b) => a + Math.max(1, b.pea_activa), 0);
+
+    const mediaStem = peaStem > 0
+      ? stemRows.reduce((a, b) => a + Number(b[varRankingId] || 0) * Math.max(1, b.pea_activa), 0) / peaStem
       : 0;
-    const mediaNoStem = noStemRows.length > 0
-      ? noStemRows.reduce((a, b) => a + Number(b[varRankingId] || 0), 0) / noStemRows.length
+    const mediaNoStem = peaNoStem > 0
+      ? noStemRows.reduce((a, b) => a + Number(b[varRankingId] || 0) * Math.max(1, b.pea_activa), 0) / peaNoStem
       : 0;
 
     return {
@@ -649,18 +772,17 @@ function LaboratorioContenido() {
       mediaStem,
       mediaNoStem
     };
-  }, [filasFiltradasYOrdenadas, varRankingId]);
+  }, [filasTablaFiltradasYOrdenadas, filasActivas, varRankingId]);
 
   const maxValorVariableRanking = useMemo(() => {
-    if (filasFiltradasYOrdenadas.length === 0) return 100;
-    return Math.max(...filasFiltradasYOrdenadas.map(f => Math.abs(Number(f[varRankingId] || 0))), 1);
-  }, [filasFiltradasYOrdenadas, varRankingId]);
+    if (filasTablaFiltradasYOrdenadas.length === 0) return 100;
+    return Math.max(...filasTablaFiltradasYOrdenadas.map(f => Math.abs(Number(f[varRankingId] || 0))), 1);
+  }, [filasTablaFiltradasYOrdenadas, varRankingId]);
 
-  const filasTablaVisibles = mostrarTodasTabla ? filasFiltradasYOrdenadas : filasFiltradasYOrdenadas.slice(0, 12);
+  const filasTablaVisibles = mostrarTodasTabla ? filasTablaFiltradasYOrdenadas : filasTablaFiltradasYOrdenadas.slice(0, 12);
   const queryGeneroParam = generoActivo === 2 ? 'mujeres' : generoActivo === 1 ? 'hombres' : 'total';
   const etiquetaGeneroCorto = generoActivo === 2 ? 'Solo Mujeres' : generoActivo === 1 ? 'Solo Hombres' : 'Total General';
 
-  // Texto de traducción humana de la pendiente OLS
   const textoPendienteOLS = useMemo(() => {
     const deltaY = regresionOLS.slope * metaEjeX.pasoInterpretacion;
     const signo = deltaY >= 0 ? '+' : '-';
@@ -685,7 +807,6 @@ function LaboratorioContenido() {
     return { texto: 'Sin relación lineal', clase: 'bg-slate-700 text-slate-300 border-slate-600' };
   }, [regresionOLS.r]);
 
-  // Columnas secundarias dinámicas para la tabla (evita repetir Salario Mensual o Calidad OIT si ya están elegidas)
   const colSecundaria1 = varRankingId === 'sueldo_mensual'
     ? { id: 'prima_prepa_pct', label: 'Prima vs. Prepa', unidad: '%' as const }
     : { id: 'sueldo_mensual', label: 'Salario Mensual', unidad: 'MXN' as const };
@@ -695,7 +816,7 @@ function LaboratorioContenido() {
     : { id: 'calidad_oit_pct', label: 'Calidad OIT', unidad: '%' as const };
 
   const exportarBaseCrudaExcel = () => {
-    if (filasFiltradasYOrdenadas.length === 0) return;
+    if (filasTablaFiltradasYOrdenadas.length === 0) return;
     const cabeceras = [
       'Posicion',
       'CVE_Carrera',
@@ -707,7 +828,7 @@ function LaboratorioContenido() {
       ...CATALOGO_VARIABLES_CRUDAS.map(v => v.corto.replace(/\s+/g, '_'))
     ];
 
-    const filas: ValorCeldaExcel[][] = filasFiltradasYOrdenadas.map((f, idx) => [
+    const filas: ValorCeldaExcel[][] = filasTablaFiltradasYOrdenadas.map((f, idx) => [
       idx + 1,
       f.cve_carrera,
       { v: f.nombre_carrera, s: 'bold' },
@@ -741,7 +862,7 @@ function LaboratorioContenido() {
   };
 
   const exportarBaseCrudaCSV = () => {
-    if (filasFiltradasYOrdenadas.length === 0) return;
+    if (filasTablaFiltradasYOrdenadas.length === 0) return;
     const cabeceras = [
       'Posicion',
       'CVE_Carrera',
@@ -752,7 +873,7 @@ function LaboratorioContenido() {
       'Score_DataROI_0_100',
       ...CATALOGO_VARIABLES_CRUDAS.map(v => v.id)
     ];
-    const filas: ValorCeldaExcel[][] = filasFiltradasYOrdenadas.map((f, idx) => [
+    const filas: ValorCeldaExcel[][] = filasTablaFiltradasYOrdenadas.map((f, idx) => [
       idx + 1,
       f.cve_carrera,
       f.nombre_carrera,
@@ -765,22 +886,24 @@ function LaboratorioContenido() {
     descargarCSVEstilizado(`DataROI_Laboratorio_Crudo_${regionActiva}_${queryGeneroParam}.csv`, cabeceras, filas);
   };
 
+  const rFormateado = `${regresionOLS.r > 0 ? '+' : ''}${regresionOLS.r.toFixed(2)}`;
+
   return (
-    <div className="max-w-7xl mx-auto p-4 md:px-8 md:py-4 space-y-5 pb-16">
+    <div className="max-w-7xl mx-auto p-4 md:px-8 md:py-4 space-y-4 pb-16">
       
-      {/* CABECERA COMPACTA + CENSO DEMOGRÁFICO REACTIVO DEL FILTRO ACTUAL */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 text-white rounded-3xl p-5 md:p-6 shadow-lg border border-slate-800">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+      {/* CABECERA COMPACTA + CENSO DEMOGRÁFICO REACTIVO */}
+      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 text-white rounded-3xl p-4 md:p-5 shadow-lg border border-slate-800">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <div className="flex flex-wrap items-center gap-2 mb-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[11px] font-extrabold uppercase tracking-wider">
-                <FlaskConical className="w-3.5 h-3.5" aria-hidden="true" /> Auditoría de Variables Puras · Cero Fórmulas Compuestas
+            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10.5px] font-extrabold uppercase tracking-wider">
+                <FlaskConical className="w-3 h-3" aria-hidden="true" /> Auditoría de Variables Puras · Cero Fórmulas Compuestas
               </span>
               <span className="text-[11px] font-bold text-slate-400">
                 {REGIONES_INFO[regionActiva]?.nombre} · {etiquetaGeneroCorto}
               </span>
             </div>
-            <h1 className="text-xl md:text-3xl font-black tracking-tight">
+            <h1 className="text-xl md:text-2xl font-black tracking-tight">
               Laboratorio de Datos Crudos, Censo y Correlaciones
             </h1>
           </div>
@@ -788,65 +911,64 @@ function LaboratorioContenido() {
           <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               onClick={exportarBaseCrudaExcel}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black text-xs transition-all cursor-pointer shadow-xs"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black text-xs transition-all cursor-pointer shadow-xs"
             >
-              <FileSpreadsheet className="w-4 h-4" aria-hidden="true" /> Descargar Base Excel (24 Vars)
+              <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" /> Base Excel (24 Vars)
             </button>
             <button
               onClick={exportarBaseCrudaCSV}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 active:scale-95 text-white font-bold text-xs transition-all cursor-pointer"
             >
-              <Download className="w-4 h-4 text-blue-400" aria-hidden="true" /> CSV Crudo
+              <Download className="w-3.5 h-3.5 text-blue-400" aria-hidden="true" /> CSV Crudo
             </button>
           </div>
         </div>
 
         {/* CINTA DE CENSO DEMOGRÁFICO Y BRECHAS ESTRUCTURALES EN VIVO */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-800/90 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3.5 pt-3.5 border-t border-slate-800/90 text-xs">
           
-          {/* Tarjeta 1: Muestra Física INEGI */}
-          <div className="bg-slate-800/85 border border-slate-700/80 rounded-2xl p-3.5 flex flex-col justify-between">
+          <div className="bg-slate-800/85 border border-slate-700/80 ring-1 ring-white/5 rounded-2xl p-3 flex flex-col justify-between">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              Muestra Física Auditada (Filtro Activo)
+              Muestra Física Auditada
             </span>
-            <div className="flex items-baseline justify-between gap-2 mt-1">
-              <strong className="text-xl font-black text-white">
+            <div className="flex items-baseline justify-between gap-2 mt-0.5">
+              <strong className="text-lg font-black text-white">
                 {censoDemografico.encuestadosTotalFiltro.toLocaleString('es-MX')} enc.
               </strong>
-              <span className="text-[11px] font-bold text-emerald-400">
-                {filasBaseSinCuadrante.length} carreras
+              <span className="text-[11px] font-bold text-emerald-400 whitespace-nowrap">
+                {filasUniversoPlano.length} carreras
               </span>
             </div>
-            <span className="text-[10.5px] text-slate-400 mt-1">
-              Profesionistas encuestados en microdatos ENOE
+            <span className="text-[10px] text-slate-400 mt-0.5">
+              Microdatos físicos ENOE INEGI
             </span>
           </div>
 
-          {/* Tarjeta 2: Fuerza Laboral (PEA Activa) */}
-          <div className="bg-slate-800/85 border border-slate-700/80 rounded-2xl p-3.5 flex flex-col justify-between">
+          <div className="bg-slate-800/85 border border-slate-700/80 ring-1 ring-white/5 rounded-2xl p-3 flex flex-col justify-between">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              Fuerza Laboral Representada (PEA)
+              Fuerza Laboral (PEA Activa)
             </span>
-            <div className="flex items-baseline justify-between gap-2 mt-1">
-              <strong className="text-xl font-black text-sky-400">
+            <div className="flex items-baseline justify-between gap-2 mt-0.5">
+              <strong className="text-lg font-black text-sky-400">
                 {censoDemografico.peaTotalFiltro.toLocaleString('es-MX')}
               </strong>
-              <span className="text-[11px] font-bold text-slate-300">
+              <span className="text-[11px] font-bold text-slate-300 whitespace-nowrap">
                 profesionistas
               </span>
             </div>
-            <span className="text-[10.5px] text-slate-400 mt-1">
-              Población Económicamente Activa en {REGIONES_INFO[regionActiva]?.corto}
+            <span className="text-[10px] text-slate-400 mt-0.5">
+              Población activa en {REGIONES_INFO[regionActiva]?.corto}
             </span>
           </div>
 
-          {/* Tarjeta 3: Distribución Demográfica por Género en la Región */}
-          <div className="bg-slate-800/85 border border-slate-700/80 rounded-2xl p-3.5 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              <span>Distribución de Género ({REGIONES_INFO[regionActiva]?.corto})</span>
-              <span className="text-violet-300 font-black">{censoDemografico.pctMujeresReg}% M · {censoDemografico.pctHombresReg}% H</span>
+          <div className="bg-slate-800/85 border border-slate-700/80 ring-1 ring-white/5 rounded-2xl p-3 flex flex-col justify-between">
+            <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              <span className="truncate">Género ({REGIONES_INFO[regionActiva]?.corto})</span>
+              <span className="text-violet-300 font-black whitespace-nowrap shrink-0">
+                {censoDemografico.pctMujeresReg}% M · {censoDemografico.pctHombresReg}% H
+              </span>
             </div>
-            <div className="w-full h-2.5 bg-slate-900 rounded-full overflow-hidden flex my-1.5 border border-slate-700">
+            <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex my-1.5 border border-slate-700">
               <div
                 style={{ width: `${censoDemografico.pctMujeresReg}%` }}
                 className="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all duration-500"
@@ -858,26 +980,25 @@ function LaboratorioContenido() {
                 title={`Hombres: ${censoDemografico.pctHombresReg}%`}
               />
             </div>
-            <div className="flex items-center justify-between text-[10.5px] text-slate-300">
-              <span>M: {formatoMoneda(censoDemografico.sueldoMedioMujeres)} vs H: {formatoMoneda(censoDemografico.sueldoMedioHombres)}</span>
-              <strong className="text-amber-300 font-black">Brecha: {censoDemografico.brechaGeneroPct}%</strong>
+            <div className="flex items-center justify-between gap-1 text-[10px] text-slate-300">
+              <span className="truncate">M: {formatoMoneda(censoDemografico.sueldoMedioMujeres)} · H: {formatoMoneda(censoDemografico.sueldoMedioHombres)}</span>
+              <strong className="text-amber-300 font-black whitespace-nowrap shrink-0">Brecha: {censoDemografico.brechaGeneroPct}%</strong>
             </div>
           </div>
 
-          {/* Tarjeta 4: Efecto STEM vs. No-STEM */}
-          <div className="bg-slate-800/85 border border-slate-700/80 rounded-2xl p-3.5 flex flex-col justify-between">
+          <div className="bg-slate-800/85 border border-slate-700/80 ring-1 ring-white/5 rounded-2xl p-3 flex flex-col justify-between">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              Efecto Salarial STEM vs. No-STEM
+              Efecto Salarial STEM vs. Otras
             </span>
-            <div className="flex items-baseline justify-between gap-2 mt-1">
-              <strong className="text-xl font-black text-emerald-400">
+            <div className="flex items-baseline justify-between gap-2 mt-0.5">
+              <strong className="text-lg font-black text-emerald-400">
                 {censoDemografico.premioStemPct >= 0 ? `+${censoDemografico.premioStemPct}%` : `${censoDemografico.premioStemPct}%`}
               </strong>
-              <span className="text-[11px] font-bold text-indigo-300">
+              <span className="text-[11px] font-bold text-indigo-300 whitespace-nowrap">
                 Prima STEM
               </span>
             </div>
-            <span className="text-[10.5px] text-slate-400 mt-1">
+            <span className="text-[10px] text-slate-400 mt-0.5 truncate">
               STEM: {formatoMoneda(censoDemografico.sueldoMedioStem)} vs Otras: {formatoMoneda(censoDemografico.sueldoMedioNoStem)}
             </span>
           </div>
@@ -885,10 +1006,10 @@ function LaboratorioContenido() {
         </div>
       </div>
 
-      {/* BARRA DE FILTROS DEMOGRÁFICOS (REGIÓN, GÉNERO Y STEM) */}
-      <div className="bg-white px-5 py-3 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+      {/* BARRA DE FILTROS DEMOGRÁFICOS (COMPACTA) */}
+      <div className="bg-white px-4 py-2.5 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-black text-slate-800 flex items-center gap-1.5 mr-1">
+          <span className="text-xs font-black text-slate-800 flex items-center gap-1 mr-0.5">
             <MapPin className="w-4 h-4 text-blue-600" aria-hidden="true" /> Macro-Región:
           </span>
           <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
@@ -900,7 +1021,7 @@ function LaboratorioContenido() {
                   type="button"
                   aria-pressed={act}
                   onClick={() => setRegionActiva(reg)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all active:scale-95 cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all active:scale-95 cursor-pointer ${
                     act ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                   }`}
                 >
@@ -911,12 +1032,12 @@ function LaboratorioContenido() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between xl:justify-end gap-3">
+        <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2.5">
           <button
             type="button"
             aria-pressed={soloStem}
             onClick={() => setSoloStem(prev => !prev)}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 inline-flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 inline-flex items-center gap-1.5 cursor-pointer ${
               soloStem ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
             }`}
           >
@@ -925,7 +1046,7 @@ function LaboratorioContenido() {
           </button>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+            <span className="text-xs font-black text-slate-800 flex items-center gap-1">
               <Users className="w-4 h-4 text-blue-600" aria-hidden="true" /> Perfil:
             </span>
             <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200">
@@ -941,7 +1062,7 @@ function LaboratorioContenido() {
                     type="button"
                     aria-pressed={act}
                     onClick={() => setGeneroActivo(op.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all active:scale-95 cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all active:scale-95 cursor-pointer ${
                       act ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                     }`}
                   >
@@ -954,20 +1075,21 @@ function LaboratorioContenido() {
         </div>
       </div>
 
-      {/* MÓDULO 1: ESTACIÓN BIVARIADA TODO-EN-UNO (100% VISIBLE SIN HACER SCROLL) */}
-      <div className="bg-gradient-to-b from-white via-white to-slate-50/70 rounded-3xl p-5 md:p-6 border border-slate-200/90 shadow-xs">
+      {/* MÓDULO 1: ESTACIÓN BIVARIADA COMPACTA (CALIBRADA PARA 100% DE ZOOM EN UNA SOLA PANTALLA) */}
+      <div className="bg-gradient-to-b from-white via-white to-slate-50/70 rounded-3xl p-4 md:p-5 border border-slate-200/90 shadow-xs">
         
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3.5 mb-4 border-b border-slate-100">
-          <div>
-            <span className="text-[11px] font-black uppercase tracking-wider text-emerald-600 block mb-0.5">
-              Explorador Bivariado en Tiempo Real + Regresión Lineal (OLS)
-            </span>
-            <h2 className="text-lg md:text-xl font-black text-slate-900">
-              Matriz de Cruce Libre (Eje X vs. Eje Y) y Cuadrantes Regionales
+        {/* Encabezado + Presets en una sola franja limpia */}
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5 pb-3 mb-3 border-b border-slate-100">
+          <div className="flex items-baseline gap-2.5 flex-wrap">
+            <h2 className="text-base md:text-lg font-black text-slate-900">
+              Matriz de Cruce Libre (Eje X vs. Eje Y)
             </h2>
+            <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-600">
+              · Regresión OLS y Cuadrantes
+            </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1">
             {PRESETS_CORRELACION.map((pr, idx) => {
               const activo = ejeXId === pr.x && ejeYId === pr.y;
               return (
@@ -978,7 +1100,7 @@ function LaboratorioContenido() {
                     setEjeXId(pr.x);
                     setEjeYId(pr.y);
                   }}
-                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-all active:scale-95 cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all active:scale-95 cursor-pointer ${
                     activo
                       ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
                       : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-blue-400 hover:bg-white'
@@ -991,92 +1113,88 @@ function LaboratorioContenido() {
           </div>
         </div>
 
-        {/* FILA INTEGRADA: SELECTOR X (4 COLS) + SELECTOR Y (4 COLS) + CABEZAL DE CORRELACIÓN EN VIVO (4 COLS) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 mb-4 items-stretch">
+        {/* FILA COMPACTA: SELECTOR X (4 COLS) + SELECTOR Y (4 COLS) + CORRELACIÓN OLS (4 COLS) */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 mb-3.5 items-stretch">
           
-          <div className="lg:col-span-4 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 flex flex-col justify-between">
-            <div>
-              <label className="text-[10.5px] font-black uppercase tracking-wider text-blue-600 block mb-1">
-                Variable Horizontal (Eje X) · Media: {formatearValorVariable(mediaXActual, metaEjeX.unidad)}
+          <div className="lg:col-span-4 bg-slate-50 px-3 py-2.5 rounded-2xl border border-slate-200/80 flex flex-col justify-center">
+            <div className="flex items-center justify-between gap-1 mb-1">
+              <label className="text-[10.5px] font-black uppercase tracking-wider text-blue-600 truncate">
+                Eje X · Media: {formatearValorVariable(mediaXActual, metaEjeX.unidad)}
               </label>
-              <select
-                value={ejeXId}
-                onChange={(e) => setEjeXId(e.target.value)}
-                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-              >
-                {CATALOGO_VARIABLES_CRUDAS.map(v => (
-                  <option key={v.id} value={v.id}>{v.nombre}</option>
-                ))}
-              </select>
+              <span title={metaEjeX.descripcion} className="text-slate-400 hover:text-blue-600 cursor-help shrink-0">
+                <Info className="w-3.5 h-3.5" aria-hidden="true" />
+              </span>
             </div>
-            <span className="text-[11px] text-slate-500 block mt-1.5 leading-snug">{metaEjeX.descripcion}</span>
+            <select
+              value={ejeXId}
+              onChange={(e) => setEjeXId(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              {CATALOGO_VARIABLES_CRUDAS.map(v => (
+                <option key={v.id} value={v.id}>{v.nombre}</option>
+              ))}
+            </select>
           </div>
 
-          <div className="lg:col-span-4 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 flex flex-col justify-between">
-            <div>
-              <label className="text-[10.5px] font-black uppercase tracking-wider text-emerald-600 block mb-1">
-                Variable Vertical (Eje Y) · Media: {formatearValorVariable(mediaYActual, metaEjeY.unidad)}
+          <div className="lg:col-span-4 bg-slate-50 px-3 py-2.5 rounded-2xl border border-slate-200/80 flex flex-col justify-center">
+            <div className="flex items-center justify-between gap-1 mb-1">
+              <label className="text-[10.5px] font-black uppercase tracking-wider text-emerald-600 truncate">
+                Eje Y · Media: {formatearValorVariable(mediaYActual, metaEjeY.unidad)}
               </label>
-              <select
-                value={ejeYId}
-                onChange={(e) => setEjeYId(e.target.value)}
-                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
-              >
-                {CATALOGO_VARIABLES_CRUDAS.map(v => (
-                  <option key={v.id} value={v.id}>{v.nombre}</option>
-                ))}
-              </select>
+              <span title={metaEjeY.descripcion} className="text-slate-400 hover:text-emerald-600 cursor-help shrink-0">
+                <Info className="w-3.5 h-3.5" aria-hidden="true" />
+              </span>
             </div>
-            <span className="text-[11px] text-slate-500 block mt-1.5 leading-snug">{metaEjeY.descripcion}</span>
+            <select
+              value={ejeYId}
+              onChange={(e) => setEjeYId(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+            >
+              {CATALOGO_VARIABLES_CRUDAS.map(v => (
+                <option key={v.id} value={v.id}>{v.nombre}</option>
+              ))}
+            </select>
           </div>
 
-          {/* Cabezal de Correlación e Inferencia OLS Integrado a la Vista (Sin necesidad de hacer scroll arriba) */}
-          <div className="lg:col-span-4 bg-slate-900 text-white p-3.5 rounded-2xl border border-slate-800 flex flex-col justify-between shadow-sm">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
-                  Correlación de Pearson (r)
-                </span>
-                <div className="flex items-baseline gap-2 mt-0.5">
-                  <strong className={`text-2xl font-black ${
-                    regresionOLS.r >= 0.25 ? 'text-emerald-400' : regresionOLS.r <= -0.25 ? 'text-amber-400' : 'text-sky-400'
-                  }`}>
-                    {regresionOLS.r > 0 ? `+${regresionOLS.r}` : regresionOLS.r}
-                  </strong>
-                  <span className="text-xs font-bold text-slate-400">
-                    (R² = {regresionOLS.r2Pct}%)
-                  </span>
-                </div>
+          {/* Cabezal de Correlación con 2 decimales consistentes */}
+          <div className="lg:col-span-4 bg-slate-900 text-white px-3.5 py-2.5 rounded-2xl border border-slate-800 flex flex-col justify-between shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Pearson (r):</span>
+                <strong className={`text-xl font-black leading-none ${
+                  regresionOLS.r >= 0.25 ? 'text-emerald-400' : regresionOLS.r <= -0.25 ? 'text-amber-400' : 'text-sky-400'
+                }`}>
+                  {rFormateado}
+                </strong>
+                <span className="text-[11px] font-bold text-slate-400">(R²={regresionOLS.r2Pct}%)</span>
               </div>
-              <span className={`px-2 py-0.5 rounded-lg text-[10.5px] font-black border ${etiquetaFuerzaCorrelacion.clase}`}>
+              <span className={`px-2 py-0.5 rounded-md text-[10px] font-black border whitespace-nowrap ${etiquetaFuerzaCorrelacion.clase}`}>
                 {etiquetaFuerzaCorrelacion.texto}
               </span>
             </div>
 
-            <p className="text-[11px] text-slate-200 font-semibold pt-2 mt-2 border-t border-slate-800 leading-snug">
-              📐 <strong>Pendiente OLS:</strong> {textoPendienteOLS}.
+            <p className="text-[10.5px] text-slate-200 font-semibold pt-1.5 mt-1.5 border-t border-slate-800 leading-tight truncate" title={textoPendienteOLS}>
+              📐 {textoPendienteOLS}.
             </p>
           </div>
 
         </div>
 
-        {/* CUERPO PRINCIPAL: GRÁFICO DE DISPERSIÓN CON RECTA OLS (8 COLS) + RADAR DE CORRELACIONES AUTOMÁTICO (4 COLS) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+        {/* CUERPO PRINCIPAL: SCATTER PLOT (8 COLS) + RADAR DE CORRELACIONES COMPACTO (4 COLS) */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
           
-          <div className="lg:col-span-8 flex flex-col justify-between bg-white rounded-2xl p-4 border border-slate-200/80 shadow-2xs">
+          <div className="lg:col-span-8 flex flex-col justify-between bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs">
             
-            {/* Filtros Interactivos de los 4 Cuadrantes */}
-            <div className="flex flex-wrap items-center justify-between gap-1.5 mb-3 pb-2.5 border-b border-slate-100 text-[11px]">
-              <span className="font-black text-slate-700 flex items-center gap-1">
-                <Filter className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" /> Filtrar por Cuadrante:
-              </span>
+            {/* Barra superior del plano: Cuadrantes + Localizador Co-Localizado de Carrera */}
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-100 text-[10.5px]">
               <div className="flex flex-wrap items-center gap-1">
+                <Filter className="w-3.5 h-3.5 text-blue-600 mr-0.5" aria-hidden="true" />
                 {([
-                  { id: 'todos' as FiltroCuadrante, label: `Todos (${filasBaseSinCuadrante.length})` },
-                  { id: 'q1_sup_izq' as FiltroCuadrante, label: `↖ X Bajo · Y Alto (${conteoCuadrantes.q1})` },
-                  { id: 'q2_sup_der' as FiltroCuadrante, label: `↗ X Alto · Y Alto (${conteoCuadrantes.q2})` },
-                  { id: 'q3_inf_izq' as FiltroCuadrante, label: `↙ X Bajo · Y Bajo (${conteoCuadrantes.q3})` },
-                  { id: 'q4_inf_der' as FiltroCuadrante, label: `↘ X Alto · Y Bajo (${conteoCuadrantes.q4})` }
+                  { id: 'todos' as FiltroCuadrante, label: `Todos (${filasUniversoPlano.length})` },
+                  { id: 'q1_sup_izq' as FiltroCuadrante, label: `↖ X- Y+ (${conteoCuadrantes.q1})` },
+                  { id: 'q2_sup_der' as FiltroCuadrante, label: `↗ X+ Y+ (${conteoCuadrantes.q2})` },
+                  { id: 'q3_inf_izq' as FiltroCuadrante, label: `↙ X- Y- (${conteoCuadrantes.q3})` },
+                  { id: 'q4_inf_der' as FiltroCuadrante, label: `↘ X+ Y- (${conteoCuadrantes.q4})` }
                 ]).map(qItem => {
                   const act = filtroCuadrante === qItem.id;
                   return (
@@ -1084,7 +1202,7 @@ function LaboratorioContenido() {
                       key={qItem.id}
                       type="button"
                       onClick={() => setFiltroCuadrante(qItem.id)}
-                      className={`px-2.5 py-1 rounded-lg font-bold border transition-all active:scale-95 cursor-pointer ${
+                      className={`px-2 py-1 rounded-lg font-bold border transition-all active:scale-95 cursor-pointer ${
                         act
                           ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
                           : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
@@ -1095,18 +1213,46 @@ function LaboratorioContenido() {
                   );
                 })}
               </div>
+
+              {/* Localizador Co-Localizado para iluminar una carrera sin perder la nube de puntos */}
+              <div className="flex items-center gap-1 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
+                <Crosshair className="w-3.5 h-3.5 text-blue-600 shrink-0" aria-hidden="true" />
+                <select
+                  aria-label="Resaltar una carrera en el gráfico"
+                  value={carreraDestacadaCve}
+                  onChange={(e) => setCarreraDestacadaCve(e.target.value)}
+                  className="bg-transparent text-[11px] font-bold text-slate-800 focus:outline-none max-w-[175px] cursor-pointer"
+                >
+                  <option value="">Resaltar carrera en plano...</option>
+                  {carrerasOrdenAlfabetico.map(c => (
+                    <option key={c.cve_carrera} value={c.cve_carrera}>{c.nombre_carrera}</option>
+                  ))}
+                </select>
+                {carreraDestacadaCve && (
+                  <button
+                    type="button"
+                    onClick={() => setCarreraDestacadaCve('')}
+                    aria-label="Quitar resaltado"
+                    className="p-0.5 rounded hover:bg-slate-200 text-slate-500 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div className="h-80 md:h-88 w-full">
-              {!loading && filasFiltradasYOrdenadas.length > 0 ? (
+            {/* Lienzo del Gráfico de Dispersión con Unidades y Anticolisión */}
+            <div className="h-[315px] md:h-[340px] w-full">
+              {!loading && filasPlanoVisibles.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart margin={{ top: 22, right: 28, bottom: 12, left: 10 }}>
+                  <ScatterChart margin={{ top: 18, right: 24, bottom: 18, left: 6 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                     <XAxis
                       type="number"
                       dataKey={ejeXId}
                       name={metaEjeX.corto}
-                      domain={['auto', 'auto']}
+                      domain={dominioX}
+                      tickFormatter={(v) => formatearTickEje(Number(v), metaEjeX.unidad)}
                       tick={{ fill: '#475569', fontSize: 11, fontWeight: 700 }}
                       tickLine={false}
                       axisLine={{ stroke: '#CBD5E1' }}
@@ -1115,19 +1261,21 @@ function LaboratorioContenido() {
                       type="number"
                       dataKey={ejeYId}
                       name={metaEjeY.corto}
-                      domain={['auto', 'auto']}
+                      domain={dominioY}
+                      width={52}
+                      tickFormatter={(v) => formatearTickEje(Number(v), metaEjeY.unidad)}
                       tick={{ fill: '#475569', fontSize: 11, fontWeight: 700 }}
                       tickLine={false}
                       axisLine={{ stroke: '#CBD5E1' }}
                     />
-                    <ZAxis type="number" dataKey="pea_activa" range={[65, 340]} name="PEA Activa" />
+                    <ZAxis type="number" dataKey="pea_activa" range={[55, 310]} name="PEA Activa" />
 
                     {Number.isFinite(mediaXActual) && (
                       <ReferenceLine
                         x={mediaXActual}
                         stroke="#64748B"
                         strokeDasharray="4 4"
-                        strokeWidth={1.5}
+                        strokeWidth={1.3}
                       />
                     )}
                     {Number.isFinite(mediaYActual) && (
@@ -1135,7 +1283,7 @@ function LaboratorioContenido() {
                         y={mediaYActual}
                         stroke="#64748B"
                         strokeDasharray="4 4"
-                        strokeWidth={1.5}
+                        strokeWidth={1.3}
                       />
                     )}
 
@@ -1163,8 +1311,8 @@ function LaboratorioContenido() {
                                   <strong className="font-black text-emerald-300">{formatearValorVariable(d[ejeYId], metaEjeY.unidad)}</strong>
                                 </div>
                                 <div className="flex justify-between gap-3 pt-1 border-t border-slate-800 text-[11px]">
-                                  <span className="text-slate-400">Muestra física INEGI:</span>
-                                  <strong className="text-slate-200">{d.n_encuestados.toLocaleString('es-MX')} enc.</strong>
+                                  <span className="text-slate-400">Muestra física / PEA:</span>
+                                  <strong className="text-slate-200">{d.n_encuestados.toLocaleString('es-MX')} enc. · {(d.pea_activa / 1000).toFixed(0)}k</strong>
                                 </div>
                               </div>
                             </div>
@@ -1186,57 +1334,52 @@ function LaboratorioContenido() {
                       />
                     )}
 
-                    {/* Nube de Licenciaturas con Etiquetas Automáticas en Nodos Extremos */}
+                    {/* Nube de Licenciaturas con Anticolisión de Etiquetas */}
                     <Scatter
                       name="Licenciaturas"
-                      data={filasFiltradasYOrdenadas}
+                      data={filasPlanoVisibles}
                       shape={(props: any) => {
-                        const { cx, cy, payload } = props;
+                        const { cx, cy, payload, size } = props;
                         if (!Number.isFinite(cx) || !Number.isFinite(cy) || !payload) return <g />;
                         const sem = obtenerSemaforoScoreDataROI(payload.score_dataroi);
-                        const esOutlier = cvesOutliersEtiquetados.has(payload.cve_carrera);
-                        const coincideBusqueda = busqueda.trim().length > 1 && (
-                          payload.nombre_carrera.toLowerCase().includes(busqueda.toLowerCase().trim()) ||
-                          payload.cve_carrera.includes(busqueda.trim())
-                        );
-                        const mostrarEtiqueta = esOutlier || coincideBusqueda;
-                        const rDot = coincideBusqueda ? 8 : esOutlier ? 6.5 : 5.5;
-                        const labelCorto = payload.nombre_carrera.length > 20
-                          ? payload.nombre_carrera.slice(0, 18) + '…'
-                          : payload.nombre_carrera;
+                        const etiq = mapaEtiquetasPlano.get(payload.cve_carrera);
+                        const esDestacada = payload.cve_carrera === carreraDestacadaCve;
+                        const radioBase = Math.max(4.5, Math.min(10.5, Math.sqrt(Number(size || 90) / Math.PI)));
+                        const rDot = esDestacada ? Math.max(8, radioBase + 2) : radioBase;
+                        const atenuarOtros = Boolean(carreraDestacadaCve) && !esDestacada;
 
                         return (
                           <g>
-                            {coincideBusqueda && (
-                              <circle cx={cx} cy={cy} r={13} fill="none" stroke="#2563EB" strokeWidth={2} opacity={0.6} />
+                            {esDestacada && (
+                              <circle cx={cx} cy={cy} r={rDot + 5} fill="none" stroke="#2563EB" strokeWidth={2.5} opacity={0.85} />
                             )}
                             <circle
                               cx={cx}
                               cy={cy}
                               r={rDot}
                               fill={sem.colorHex}
-                              fillOpacity={0.85}
-                              stroke="#FFFFFF"
-                              strokeWidth={1.6}
+                              fillOpacity={atenuarOtros ? 0.32 : 0.85}
+                              stroke={esDestacada ? '#1E3A8A' : '#FFFFFF'}
+                              strokeWidth={esDestacada ? 2.2 : 1.5}
                             />
-                            {mostrarEtiqueta && (
+                            {etiq && (
                               <text
-                                x={cx}
-                                y={cy - 9}
-                                textAnchor="middle"
-                                fill="#0F172A"
-                                fontSize={9.5}
+                                x={cx + etiq.dx}
+                                y={cy + etiq.dy}
+                                textAnchor={etiq.anchor}
+                                fill={esDestacada ? '#1D4ED8' : '#0F172A'}
+                                fontSize={esDestacada ? 10.5 : 9.5}
                                 fontWeight={800}
-                                style={{ paintOrder: 'stroke', stroke: '#FFFFFF', strokeWidth: 3, strokeLinecap: 'round', strokeLinejoin: 'round' }}
+                                style={{ paintOrder: 'stroke', stroke: '#FFFFFF', strokeWidth: 3.2, strokeLinecap: 'round', strokeLinejoin: 'round' }}
                               >
-                                {labelCorto}
+                                {etiq.texto}
                               </text>
                             )}
                           </g>
                         );
                       }}
                     >
-                      {filasFiltradasYOrdenadas.map((entry, index) => {
+                      {filasPlanoVisibles.map((entry, index) => {
                         const sem = obtenerSemaforoScoreDataROI(entry.score_dataroi);
                         return <Cell key={`cell-${index}`} fill={sem.colorHex} />;
                       })}
@@ -1250,36 +1393,48 @@ function LaboratorioContenido() {
               )}
             </div>
 
-            <div className="mt-2 pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[10.5px] text-slate-500">
-              <span>
-                <strong>Línea diagonal negra punteada:</strong> Tendencia lineal por Mínimos Cuadrados Ordinarios (OLS).
-              </span>
-              <span>
-                <strong>Ejes grises punteados:</strong> Promedios ponderados regionales ({metaEjeX.corto} y {metaEjeY.corto}).
+            {/* Leyenda Explícita de Color (Grado), Tamaño (PEA) y Tendencia OLS */}
+            <div className="mt-1.5 pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[10.5px] text-slate-500">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center gap-1 font-bold text-slate-700">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" /> Grado A
+                </span>
+                <span className="inline-flex items-center gap-1 font-bold text-slate-700">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500" /> Grado B
+                </span>
+                <span className="inline-flex items-center gap-1 font-bold text-slate-700">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-600" /> Grado C
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="w-3 h-3 rounded-full border-2 border-slate-400 inline-block" /> Tamaño = PEA Activa
+                </span>
+              </div>
+              <span className="font-semibold text-slate-600">
+                <span className="inline-block w-4 border-t-2 border-dashed border-slate-900 align-middle mr-1" />
+                Línea OLS · Ejes: {metaEjeX.corto} (X) vs {metaEjeY.corto} (Y)
               </span>
             </div>
           </div>
 
-          {/* PANEL DERECHO: DESCUBRIDOR AUTOMÁTICO DE CORRELACIONES (1 VARIABLE CONTRA LAS OTRAS 23) */}
-          <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-4 border border-slate-200/80 flex flex-col justify-between">
+          {/* PANEL DERECHO: RADAR AUTOMÁTICO DE CORRELACIONES COMPACTO (4 POSITIVAS + 4 NEGATIVAS EN 1 PANTALLA) */}
+          <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3.5 border border-slate-200/80 flex flex-col justify-between">
             <div>
-              <div className="flex items-center gap-1.5 text-[10.5px] font-black uppercase tracking-wider text-blue-600 mb-1">
-                <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
-                Radar Automático de Correlaciones
+              <div className="flex items-center justify-between gap-1 mb-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-blue-600 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" aria-hidden="true" /> Radar de Correlaciones
+                </span>
+                <span className="text-[10px] font-bold text-slate-400">Clic = cargar Eje X</span>
               </div>
-              <h3 className="text-sm font-black text-slate-900 leading-snug mb-1">
-                ¿Qué variables se asocian más con {metaEjeY.corto}?
+              <h3 className="text-xs md:text-sm font-black text-slate-900 leading-tight mb-2.5">
+                Asociaciones más fuertes con {metaEjeY.corto}
               </h3>
-              <p className="text-[11px] text-slate-500 mb-3">
-                Haz clic en cualquier variable para cargarla en el <strong>Eje X</strong> y ver su gráfico de dispersión.
-              </p>
 
-              {/* Top Correlaciones Positivas */}
-              <div className="mb-3.5">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700 flex items-center gap-1 mb-1.5">
+              {/* Top 4 Positivas */}
+              <div className="mb-2.5">
+                <span className="text-[9.5px] font-extrabold uppercase tracking-wider text-emerald-700 flex items-center gap-1 mb-1">
                   <TrendingUp className="w-3 h-3" aria-hidden="true" /> Mayor Asociación Positiva (+r)
                 </span>
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   {radarCorrelacionesContraY.positivas.length > 0 ? (
                     radarCorrelacionesContraY.positivas.map(item => {
                       const act = ejeXId === item.id;
@@ -1288,19 +1443,19 @@ function LaboratorioContenido() {
                           key={item.id}
                           type="button"
                           onClick={() => setEjeXId(item.id)}
-                          className={`w-full text-left p-2 rounded-xl border transition-all active:scale-98 cursor-pointer ${
+                          className={`w-full text-left px-2.5 py-1.5 rounded-xl border transition-all active:scale-98 cursor-pointer ${
                             act
                               ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
                               : 'bg-white text-slate-800 border-slate-200/80 hover:border-emerald-400'
                           }`}
                         >
-                          <div className="flex items-center justify-between text-xs mb-1">
+                          <div className="flex items-center justify-between text-[11.5px] mb-1">
                             <span className="font-bold truncate pr-2">{item.corto}</span>
                             <strong className={`font-black text-[11px] shrink-0 ${act ? 'text-white' : 'text-emerald-700'}`}>
                               r = +{item.r.toFixed(2)}
                             </strong>
                           </div>
-                          <div className={`w-full h-1.5 rounded-full overflow-hidden ${act ? 'bg-emerald-800' : 'bg-slate-100'}`}>
+                          <div className={`w-full h-1 rounded-full overflow-hidden ${act ? 'bg-emerald-800' : 'bg-slate-100'}`}>
                             <div
                               className={`h-full rounded-full ${act ? 'bg-white' : 'bg-emerald-500'}`}
                               style={{ width: `${Math.min(100, Math.abs(item.r) * 100)}%` }}
@@ -1315,12 +1470,12 @@ function LaboratorioContenido() {
                 </div>
               </div>
 
-              {/* Top Correlaciones Inversas / Negativas */}
+              {/* Top 4 Inversas */}
               <div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-800 flex items-center gap-1 mb-1.5">
+                <span className="text-[9.5px] font-extrabold uppercase tracking-wider text-amber-800 flex items-center gap-1 mb-1">
                   <TrendingDown className="w-3 h-3" aria-hidden="true" /> Mayor Asociación Inversa (-r)
                 </span>
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   {radarCorrelacionesContraY.negativas.length > 0 ? (
                     radarCorrelacionesContraY.negativas.map(item => {
                       const act = ejeXId === item.id;
@@ -1329,19 +1484,19 @@ function LaboratorioContenido() {
                           key={item.id}
                           type="button"
                           onClick={() => setEjeXId(item.id)}
-                          className={`w-full text-left p-2 rounded-xl border transition-all active:scale-98 cursor-pointer ${
+                          className={`w-full text-left px-2.5 py-1.5 rounded-xl border transition-all active:scale-98 cursor-pointer ${
                             act
                               ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
                               : 'bg-white text-slate-800 border-slate-200/80 hover:border-amber-400'
                           }`}
                         >
-                          <div className="flex items-center justify-between text-xs mb-1">
+                          <div className="flex items-center justify-between text-[11.5px] mb-1">
                             <span className="font-bold truncate pr-2">{item.corto}</span>
                             <strong className={`font-black text-[11px] shrink-0 ${act ? 'text-white' : 'text-amber-700'}`}>
                               r = {item.r.toFixed(2)}
                             </strong>
                           </div>
-                          <div className={`w-full h-1.5 rounded-full overflow-hidden ${act ? 'bg-amber-800' : 'bg-slate-100'}`}>
+                          <div className={`w-full h-1 rounded-full overflow-hidden ${act ? 'bg-amber-800' : 'bg-slate-100'}`}>
                             <div
                               className={`h-full rounded-full ${act ? 'bg-white' : 'bg-amber-500'}`}
                               style={{ width: `${Math.min(100, Math.abs(item.r) * 100)}%` }}
@@ -1357,15 +1512,15 @@ function LaboratorioContenido() {
               </div>
             </div>
 
-            <div className="mt-3 pt-2.5 border-t border-slate-200/80 text-[10.5px] text-slate-500">
-              Calculado en vivo sobre las <strong>{filasBaseSinCuadrante.length} carreras</strong> activas en {REGIONES_INFO[regionActiva]?.corto}.
+            <div className="mt-2 pt-2 border-t border-slate-200/80 text-[10px] text-slate-500">
+              Universo: <strong>{filasUniversoPlano.length} carreras</strong> en {REGIONES_INFO[regionActiva]?.corto} ({etiquetaGeneroCorto}).
             </div>
           </div>
 
         </div>
       </div>
 
-      {/* MÓDULO 2: EXPLORADOR DE RANKING PURO POR VARIABLE INDIVIDUAL + CINTA DE PERCENTILES */}
+      {/* MÓDULO 2: EXPLORADOR DE RANKING PURO POR VARIABLE INDIVIDUAL + CINTA DE PERCENTILES CONSISTENTE */}
       <div className="bg-white rounded-3xl p-6 border border-slate-200/90 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 mb-4 border-b border-slate-100">
           <div>
@@ -1385,9 +1540,9 @@ function LaboratorioContenido() {
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" aria-hidden="true" />
               <input
                 type="search"
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-                placeholder="Buscar carrera (resalta en gráfico)..."
+                value={busquedaTabla}
+                onChange={(e) => setBusquedaTabla(e.target.value)}
+                placeholder="Filtrar tabla por carrera o CVE..."
                 className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -1419,7 +1574,7 @@ function LaboratorioContenido() {
           </div>
         </div>
 
-        {/* CINTA DE DISTRIBUCIÓN ESTADÍSTICA (P10, MEDIANA P50, MEDIA, P90 Y STEM VS NO-STEM) */}
+        {/* CINTA DE DISTRIBUCIÓN ESTADÍSTICA (STEM VS OTRAS PONDERADO POR PEA) */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-5 text-xs">
           <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
@@ -1463,7 +1618,7 @@ function LaboratorioContenido() {
 
           <div className="col-span-2 sm:col-span-1 bg-indigo-50/50 p-3 rounded-2xl border border-indigo-200/80">
             <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-800 block">
-              Promedio STEM vs. No-STEM
+              Media Pond. STEM vs. Otras
             </span>
             <strong className="text-xs font-black text-indigo-900 mt-1 block">
               STEM: {formatearValorVariable(estadisticosTabla.mediaStem, metaVarRanking.unidad)}
@@ -1474,7 +1629,7 @@ function LaboratorioContenido() {
           </div>
         </div>
 
-        {/* Tabla Ejecutiva de Ranking Crudo (Sin Columnas Duplicadas) */}
+        {/* Tabla Ejecutiva de Ranking Crudo */}
         <div className="overflow-x-auto rounded-2xl border border-slate-200">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
@@ -1494,7 +1649,7 @@ function LaboratorioContenido() {
               {filasTablaVisibles.map((f, idx) => {
                 const valorActual = Number(f[varRankingId] || 0);
                 const mediaRef = Number(mediaVariables[varRankingId] || 0);
-                const diffMedia = Number((valorActual - mediaRef).toFixed(metaVarRanking.unidad === 'MXN' ? 0 : 1));
+                const diffMedia = valorActual - mediaRef;
                 const pctBarra = Math.max(8, Math.min(100, (Math.abs(valorActual) / maxValorVariableRanking) * 100));
 
                 const esFavorable = metaVarRanking.mejorAlto ? valorActual >= mediaRef : valorActual <= mediaRef;
@@ -1531,10 +1686,10 @@ function LaboratorioContenido() {
                         <strong className="text-sm font-black text-slate-900">
                           {formatearValorVariable(valorActual, metaVarRanking.unidad)}
                         </strong>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${
                           esFavorable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
                         }`}>
-                          {diffMedia > 0 ? `+${diffMedia}` : diffMedia} vs. Media
+                          {formatearDiferencialMedia(diffMedia, metaVarRanking.unidad)} vs. Media
                         </span>
                       </div>
                       <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200/60">
@@ -1591,7 +1746,7 @@ function LaboratorioContenido() {
           </table>
         </div>
 
-        {filasFiltradasYOrdenadas.length > 12 && (
+        {filasTablaFiltradasYOrdenadas.length > 12 && (
           <div className="mt-4 text-center">
             <button
               type="button"
@@ -1606,7 +1761,7 @@ function LaboratorioContenido() {
               ) : (
                 <>
                   <ChevronDown className="w-4 h-4" aria-hidden="true" />
-                  Ver las {filasFiltradasYOrdenadas.length} carreras completas en la tabla
+                  Ver las {filasTablaFiltradasYOrdenadas.length} carreras completas en la tabla
                 </>
               )}
             </button>
