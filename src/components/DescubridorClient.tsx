@@ -18,6 +18,7 @@ import {
   REGIONES_ORDEN,
   REGIONES_META,
   META_PIPELINE_FALLBACK,
+  PREPA_FALLBACK_EMERGENCIA,
   EVENTO_DATOS_ACTUALIZADOS,
   CodigoGenero,
   RegionClave,
@@ -440,8 +441,8 @@ export default function DescubridorClient({
     REGIONES_ORDEN.forEach((regKey) => {
       const metaGeo = REGIONES_META[regKey];
       const prepaReg = benchmarksPrepa?.[regKey];
-      const sueldoPrepaMap: Record<CodigoGenero, number> = prepaReg?.sueldo_prepa || { 0: 10608, 1: 11832, 2: 8762 };
-      const formPrepa = prepaReg?.formalidad_prepa_pct?.[generoActivo] ?? prepaReg?.formalidad_prepa_pct?.[0] ?? 50.1;
+      const sueldoPrepaMap: Record<CodigoGenero, number> = prepaReg?.sueldo_prepa || PREPA_FALLBACK_EMERGENCIA.sueldo_prepa;
+      const formPrepa = prepaReg?.formalidad_prepa_pct?.[generoActivo] ?? prepaReg?.formalidad_prepa_pct?.[0] ?? PREPA_FALLBACK_EMERGENCIA.formalidad_prepa_pct;
 
       const celdasValidas = datos
         .map(d => d.perfiles?.[regKey]?.[generoActivo])

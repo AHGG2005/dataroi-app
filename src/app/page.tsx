@@ -8,6 +8,7 @@ import {
 import {
   cargarCatalogoCarreras,
   cargarBenchmarksPrepaRows,
+  cargarSatelitesPrepaRows,
   cargarMetaPipeline,
   construirBenchmarksPrepaMap,
   calcularVentanasTemporales,
@@ -36,10 +37,11 @@ function obtenerSectorLider(sat: any): string {
 
 async function DirectorioCargador() {
   await connection();
-  const [carreras, metaPipeline, prepaRows, satelitesNac, seriesNac] = await Promise.all([
+  const [carreras, metaPipeline, prepaRows, satPrepaRows, satelitesNac, seriesNac] = await Promise.all([
     cargarCatalogoCarreras(supabase),
     cargarMetaPipeline(supabase),
     cargarBenchmarksPrepaRows(supabase),
+    cargarSatelitesPrepaRows(supabase),
     descargarTodoPaginado(() =>
       supabase
         .from('satelites_cultura')
@@ -63,7 +65,7 @@ async function DirectorioCargador() {
     seriesNac.map((r: any) => Number(r.anio)),
     metaPipeline
   );
-  const benchPrepaMap = construirBenchmarksPrepaMap(prepaRows, ventanas);
+  const benchPrepaMap = construirBenchmarksPrepaMap(prepaRows, ventanas, satPrepaRows);
   const sueldoPrepaNac = benchPrepaMap.nacional.sueldo_prepa[0];
 
   const mapaSatNac: Record<string, any> = {};

@@ -1,8 +1,8 @@
 "use client";
 
-import React, { Suspense, useEffect, useState, useRef, useMemo } from 'react';
+import React, { Suspense, useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { descargarComparativaVersusPDF } from '@/lib/pdfReportGenerator';
 import {
@@ -80,6 +80,11 @@ import {
 
 export const EVENTO_ABRIR_MODAL_VERSUS = 'dataroi-open-versus-modal';
 
+// Oculta el botón "Subir Corte" automáticamente en producción (npm run start / Vercel).
+// La ruta /actualizar sigue accesible escribiendo la URL directa y protegida por INGESTA_ADMIN_TOKEN.
+const MOSTRAR_NAV_ADMIN =
+  process.env.NODE_ENV !== 'production' || process.env.NEXT_PUBLIC_MOSTRAR_NAV_ADMIN === 'true';
+
 const COLORES_DOTS = ['#2563EB', '#9333EA', '#EA580C'];
 
 const COLORES_VERSUS = [
@@ -151,6 +156,8 @@ function AnilloScoreCompactoModal({ score }: { score: number }) {
 
 function NavbarGlobalContenido() {
   const pathname = usePathname() || '/';
+  const searchParams = useSearchParams();
+  const searchParamsKey = searchParams?.toString() || '';
 
   const [cvesVersus, setCvesVersus] = useState<string[]>([]);
   const [popoverAbierto, setPopoverAbierto] = useState(false);
@@ -180,6 +187,32 @@ function NavbarGlobalContenido() {
 
   const cacheVersusRef = useRef<Record<string, { satelites: any[]; series: any[] }>>({});
   const contenedorPopoverRef = useRef<HTMLDivElement>(null);
+
+  // Lee contexto activo priorizando parámetros de la URL (?region=...&genero=...) sobre sessionStorage
+  const sincronizarContextoRegional = useCallback(() => {
+    const est = leerEstadoDescubridorGlobal();
+    let reg: RegionClave =
+      est.regionActiva && (REGIONES_ORDEN as readonly string[]).includes(est.regionActiva)
+        ? (est.regionActiva as RegionClave)
+        : 'nacional';
+    let gen: CodigoGenero =
+      est.generoActivo === 1 || est.generoActivo === 2 ? est.generoActivo : 0;
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const regUrl = params.get('region');
+      const genUrl = params.get('genero');
+      if (regUrl && (REGIONES_ORDEN as readonly string[]).includes(regUrl)) {
+        reg = regUrl as RegionClave;
+      }
+      if (genUrl === 'mujeres' || genUrl === '2') gen = 2;
+      else if (genUrl === 'hombres' || genUrl === '1') gen = 1;
+      else if (genUrl === 'total' || genUrl === '0') gen = 0;
+    }
+
+    setRegionVersus(reg);
+    setGeneroVersus(gen);
+  }, []);
 
   // Smart Auto-Hide: oculta al bajar, reaparece al subir; siempre visible arriba o con menús abiertos
   useEffect(() => {
@@ -239,6 +272,7 @@ function NavbarGlobalContenido() {
           esCeldaSateliteValida(s, 'nacional', 0)
       );
       setTotalCarrerasCertificadas(certificadasNac.length);
+      const setCertificadas = new Set(certificadasNac.map((s: any) => padCve(s.cve_carrera)));
 
       const acum: Record<string, { w: number; est: number; nep: number }> = {};
       satRes.forEach((s: any) => {
@@ -264,16 +298,23 @@ function NavbarGlobalContenido() {
       });
       setMediasSatPorRegSexo(mapaMedias);
 
-      const { data: ultSueldos } = await supabase
-        .from('predicciones_roi')
-        .select('sueldo_promedio_mensual')
-        .eq('tipo_dato', 'Real')
-        .eq('anio', metaInfo.ultimo_anio)
-        .in('cve_ent', ['nacional', '0', '00'])
-        .eq('sexo', 0);
+      // Percentiles P05–P95 estrictamente sobre carreras certificadas (paginado determinista)
+      const ultSueldos = await descargarTodoPaginado(() =>
+        supabase
+          .from('predicciones_roi')
+          .select('cve_carrera, sueldo_promedio_mensual')
+          .eq('tipo_dato', 'Real')
+          .eq('anio', metaInfo.ultimo_anio)
+          .in('cve_ent', ['nacional', '0', '00'])
+          .eq('sexo', 0)
+          .order('cve_carrera', { ascending: true })
+      );
 
-      if (!cancelado && ultSueldos && ultSueldos.length >= 4) {
-        const vals = ultSueldos.map((r: any) => numSeguro(r.sueldo_promedio_mensual, 0)).filter(v => v > 0);
+      if (!cancelado && ultSueldos.length >= 4) {
+        const vals = ultSueldos
+          .filter((r: any) => setCertificadas.size === 0 || setCertificadas.has(padCve(r.cve_carrera)))
+          .map((r: any) => numSeguro(r.sueldo_promedio_mensual, 0))
+          .filter(v => v > 0);
         if (vals.length >= 4) {
           setPercentilesSalarioGlobal({
             p05: Math.round(calcularPercentil(vals, 0.05)),
@@ -317,17 +358,12 @@ function NavbarGlobalContenido() {
     return formatearNombreCarreraEjecutivo(pad, `Carrera ${pad}`);
   };
 
-  // Sincronización global con el estado del comparador
+  // Sincronización global con el estado del comparador y los parámetros de la URL activa
   useEffect(() => {
     const sincronizar = () => {
       const est = leerEstadoDescubridorGlobal();
       setCvesVersus(est.carrerasCompararCves || []);
-      if (est.regionActiva && (REGIONES_ORDEN as readonly string[]).includes(est.regionActiva)) {
-        setRegionVersus(est.regionActiva as RegionClave);
-      }
-      if (est.generoActivo === 0 || est.generoActivo === 1 || est.generoActivo === 2) {
-        setGeneroVersus(est.generoActivo);
-      }
+      sincronizarContextoRegional();
     };
 
     const abrirModalPorEvento = () => {
@@ -348,7 +384,7 @@ function NavbarGlobalContenido() {
       window.removeEventListener(EVENTO_ABRIR_MODAL_VERSUS, abrirModalPorEvento);
       window.removeEventListener('storage', sincronizar);
     };
-  }, [pathname]);
+  }, [pathname, searchParamsKey, sincronizarContextoRegional]);
 
   useEffect(() => {
     setPopoverAbierto(false);
@@ -469,13 +505,7 @@ function NavbarGlobalContenido() {
 
   const ejecutarComparativaCaraACara = () => {
     if (cvesVersus.length < 2) return;
-    const est = leerEstadoDescubridorGlobal();
-    if (est.regionActiva && (REGIONES_ORDEN as readonly string[]).includes(est.regionActiva)) {
-      setRegionVersus(est.regionActiva as RegionClave);
-    }
-    if (est.generoActivo === 0 || est.generoActivo === 1 || est.generoActivo === 2) {
-      setGeneroVersus(est.generoActivo);
-    }
+    sincronizarContextoRegional();
     setPopoverAbierto(false);
     setModalVersusAbierto(true);
   };
@@ -790,7 +820,6 @@ function NavbarGlobalContenido() {
       return [cat, ind, ...celdasCarreras, encontrarLider(vals, mejorAlto, invalido)];
     };
 
-    // Fila descriptiva (ej. Ecosistema Empleador): muestra quién tiene mayor inserción sin alterar el Podio Global objetivo
     const filaDescriptiva = (
       cat: string,
       ind: string,
@@ -877,12 +906,10 @@ function NavbarGlobalContenido() {
       registrarFilaNumerica('4. Calidad y Mercado Laboral', 'Tasa de Desempleo Abierto', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.tasa_desempleo, 3.5)), v => `${v.toFixed(1)}%`, false),
       registrarFilaNumerica('4. Calidad y Mercado Laboral', 'Índice de Saturación ANUIES', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.indice_saturacion_pct, 100)), v => `${v}%`, false),
       ['4. Calidad y Mercado Laboral', 'Sector Empleador Dominante', ...carrerasEnVersus.map((c: any) => obtenerSectorDominante(c.perfilActivo)), 'Composición INEGI'],
-      // 4 filas restauradas de Ecosistema Empleador
       filaDescriptiva('5. Ecosistema Empleador', 'Gran Corporativo y Transnacional (>100 emp.)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_corp, 0)), v => `${v.toFixed(1)}%`),
       filaDescriptiva('5. Ecosistema Empleador', 'Sector PYME (Empresas 6–100 empleados)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_pyme, 0)), v => `${v.toFixed(1)}%`),
       filaDescriptiva('5. Ecosistema Empleador', 'Microempresa y Práctica Independiente', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_micro, 0)), v => `${v.toFixed(1)}%`),
       filaDescriptiva('5. Ecosistema Empleador', 'Administración Pública y Gobierno', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_gobierno, 0)), v => `${v.toFixed(1)}%`),
-      // 6 filas restauradas de Escalera de Prestaciones
       registrarFilaNumerica('6. Escalera de Prestaciones', 'Contrato Escrito Estable', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_contrato, 0)), v => `${v.toFixed(1)}%`, true),
       registrarFilaNumerica('6. Escalera de Prestaciones', 'Aguinaldo de Ley', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_aguinaldo, 0)), v => `${v.toFixed(1)}%`, true),
       registrarFilaNumerica('6. Escalera de Prestaciones', 'Fondo de Retiro (AFORE)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_afore, 0)), v => `${v.toFixed(1)}%`, true),
@@ -1108,18 +1135,20 @@ function NavbarGlobalContenido() {
                 <span>Laboratorio Crudo</span>
               </Link>
 
-              <Link
-                href="/actualizar"
-                aria-current={esActualizar ? 'page' : undefined}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
-                  esActualizar
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-blue-700 hover:bg-white/70'
-                }`}
-              >
-                <UploadCloud className={`w-3.5 h-3.5 ${esActualizar ? 'text-white' : 'text-blue-600'}`} aria-hidden="true" />
-                <span>Subir Corte</span>
-              </Link>
+              {(MOSTRAR_NAV_ADMIN || esActualizar) && (
+                <Link
+                  href="/actualizar"
+                  aria-current={esActualizar ? 'page' : undefined}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
+                    esActualizar
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-blue-700 hover:bg-white/70'
+                  }`}
+                >
+                  <UploadCloud className={`w-3.5 h-3.5 ${esActualizar ? 'text-white' : 'text-blue-600'}`} aria-hidden="true" />
+                  <span>Subir Corte</span>
+                </Link>
+              )}
             </nav>
 
             {/* ACCIÓN DERECHA: BOTÓN CON POPOVER DEL COMPARADOR VERSUS */}
@@ -1729,7 +1758,7 @@ function NavbarGlobalFallback() {
             <span className="px-3 py-1.5">Catálogo</span>
             <span className="px-3 py-1.5">Descubridor y Ranking</span>
             <span className="px-3 py-1.5">Laboratorio Crudo</span>
-            <span className="px-3 py-1.5">Subir Corte</span>
+            {MOSTRAR_NAV_ADMIN && <span className="px-3 py-1.5">Subir Corte</span>}
           </div>
 
           <div className="px-3.5 py-1.5 rounded-xl text-xs font-black bg-slate-50 text-slate-600 border border-slate-200">

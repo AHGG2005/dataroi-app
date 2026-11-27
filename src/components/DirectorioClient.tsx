@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
@@ -11,6 +12,10 @@ import {
   EVENTO_VERSUS_SYNC,
   ValorCeldaExcel
 } from '@/lib/excelReportGenerator';
+import {
+  EVENTO_DATOS_ACTUALIZADOS,
+  PREPA_FALLBACK_EMERGENCIA
+} from '@/lib/dataroiEngine';
 import {
   Search, Microscope, ShieldCheck, ChevronRight,
   TrendingUp, TrendingDown, Minus, Activity, Download, Share2, Check,
@@ -145,10 +150,10 @@ function BadgeTendenciaMini({ codigo, etiqueta }: { codigo: string; etiqueta: st
 
 export default function DirectorioClient({
   directorio,
-  sueldoPrepaNacional = 10608,
-  rangoTexto = '2021–2026',
-  cierreTexto = '2025–2026',
-  etiquetaCorte = '2026 Q2',
+  sueldoPrepaNacional = PREPA_FALLBACK_EMERGENCIA.sueldo_prepa[0],
+  rangoTexto = 'Serie Histórica',
+  cierreTexto = 'Cierre Reciente',
+  etiquetaCorte = 'Corte Activo',
   etiquetaPesosBase = 'Pesos constantes'
 }: {
   directorio: CarreraDirectorioItem[];
@@ -158,6 +163,7 @@ export default function DirectorioClient({
   etiquetaCorte?: string;
   etiquetaPesosBase?: string;
 }) {
+  const router = useRouter();
   const [busqueda, setBusqueda] = useState('');
   const [filtroStem, setFiltroStem] = useState(false);
   const [filtroRiesgo, setFiltroRiesgo] = useState(false);
@@ -170,10 +176,15 @@ export default function DirectorioClient({
       const nueva = leerEstadoDescubridorGlobal().carrerasCompararCves || [];
       setCvesVersus(prev => (prev.join(',') === nueva.join(',') ? prev : nueva));
     };
+    const onDataUpdated = () => router.refresh();
     sync();
     window.addEventListener(EVENTO_VERSUS_SYNC, sync);
-    return () => window.removeEventListener(EVENTO_VERSUS_SYNC, sync);
-  }, []);
+    window.addEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
+    return () => {
+      window.removeEventListener(EVENTO_VERSUS_SYNC, sync);
+      window.removeEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
+    };
+  }, [router]);
 
   const handleToggleComparar = (e: React.MouseEvent, cve: string) => {
     e.preventDefault();
@@ -230,9 +241,9 @@ export default function DirectorioClient({
       'Grado_Viabilidad',
       'Salario_Mensual_MXN',
       'Prima_vs_Prepa_Pct',
-      `Tendencia_${rangoTexto.replace(/[^0-9]/g, '_')}`,
+      `Tendencia_${rangoTexto.replace(/[^0-9]/g, '_') || 'Real'}`,
       'Salario_Base_Inicio_MXN',
-      `Salario_Cierre_${cierreTexto.replace(/[^0-9]/g, '_')}_MXN`,
+      `Salario_Cierre_${cierreTexto.replace(/[^0-9]/g, '_') || 'Reciente'}_MXN`,
       'Cambio_Real_Acumulado_Pct',
       'Crecimiento_Anual_Pct',
       'Empleo_Calidad_OIT_Pct',
@@ -485,7 +496,7 @@ export default function DirectorioClient({
         </div>
       </div>
 
-      {/* CUADRÍCULA DE TARJETAS CON FÍSICA TÁCTIL Y SOMBRA COLOREADA POR GRADO */}
+      {/* CUADRÍCULA DE TARJETAS */}
       {carrerasFiltradas.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {carrerasFiltradas.map((carrera) => {

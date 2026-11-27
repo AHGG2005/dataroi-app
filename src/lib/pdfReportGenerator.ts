@@ -342,6 +342,10 @@ export interface ReporteCarreraPDFPayload {
   bonoAnual: number;
   tasaEmpleoCalidadPct: number;
   diffCalidadVsMediaLic: number;
+  calidadOitPrepa?: number | null;
+  diffCalidadVsPrepa?: number | null;
+  informalidadPrepa?: number | null;
+  desempleoPrepa?: number | null;
   countCalidad: number;
   saturacionPct: number;
   diagSatTexto: string;
@@ -375,7 +379,7 @@ export interface ReporteCarreraPDFPayload {
     celdaDisponible: boolean;
   }[];
   empleadores: { name: string; value: number }[];
-  prestaciones: { nombre: string; valor: number; mediaCtx: number }[];
+  prestaciones: { nombre: string; valor: number; mediaCtx: number; prepaVal?: number | null }[];
   barreras: {
     cuadranteNombre: string;
     scoreMovilidad: number;
@@ -431,8 +435,34 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
   p1.roundedRect(xK2, 76, kpiW, 68, 8, C_WHITE, C_BORDER);
   p1.text('EMPLEO DE CALIDAD (ESTÁNDAR OIT)', xK2 + 10, 84, 7.3, true, C_SLATE);
   p1.text(`${Math.round(d.tasaEmpleoCalidadPct)}%`, xK2 + 10, 98, 15, true, C_BLUE);
-  p1.text(`Diferencial vs. Media Lic.: ${d.diffCalidadVsMediaLic >= 0 ? `+${d.diffCalidadVsMediaLic}` : d.diffCalidadVsMediaLic} pts`, xK2 + 10, 119, 8, true, d.diffCalidadVsMediaLic >= 0 ? C_EMERALD : C_AMBER);
-  p1.text(`Ocupados plenos: ${d.countCalidad.toLocaleString('es-MX')} profesionistas`, xK2 + 10, 131, 7.4, false, C_SLATE);
+  if (d.calidadOitPrepa != null && d.diffCalidadVsPrepa != null) {
+    p1.text(
+      `vs. Prepa (${Math.round(d.calidadOitPrepa)}%): ${d.diffCalidadVsPrepa >= 0 ? `+${d.diffCalidadVsPrepa}` : d.diffCalidadVsPrepa} pts`,
+      xK2 + 10,
+      119,
+      7.9,
+      true,
+      d.diffCalidadVsPrepa >= 0 ? C_EMERALD : C_ROSE
+    );
+    p1.text(
+      `vs. Media Lic.: ${d.diffCalidadVsMediaLic >= 0 ? `+${d.diffCalidadVsMediaLic}` : d.diffCalidadVsMediaLic} pts · ${d.countCalidad.toLocaleString('es-MX')} ocup.`,
+      xK2 + 10,
+      131,
+      7.1,
+      false,
+      C_SLATE
+    );
+  } else {
+    p1.text(
+      `Diferencial vs. Media Lic.: ${d.diffCalidadVsMediaLic >= 0 ? `+${d.diffCalidadVsMediaLic}` : d.diffCalidadVsMediaLic} pts`,
+      xK2 + 10,
+      119,
+      8,
+      true,
+      d.diffCalidadVsMediaLic >= 0 ? C_EMERALD : C_AMBER
+    );
+    p1.text(`Ocupados plenos: ${d.countCalidad.toLocaleString('es-MX')} profesionistas`, xK2 + 10, 131, 7.4, false, C_SLATE);
+  }
 
   const xK3 = 24 + (kpiW + kpiGap) * 2;
   p1.roundedRect(xK3, 76, kpiW, 68, 8, C_WHITE, C_BORDER);
@@ -658,22 +688,22 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
   });
 
   p2.roundedRect(434, 64, 384, 226, 10, C_WHITE, C_BORDER);
-  p2.text(`CALIDAD DE OCUPACIÓN (${d.ocupadosCount.toLocaleString('es-MX')} OCUPADOS)`, 446, 74, 9.2, true, C_DARK);
-  p2.text(`Desempleo: ${d.tasaDesempleo.toFixed(1)}% (${d.desempleadosCount})`, 806, 74, 7.4, true, C_SLATE, 'right');
+  p2.text(`CALIDAD DE OCUPACIÓN (${d.ocupadosCount.toLocaleString('es-MX')} OCUPADOS)`, 446, 73, 9.0, true, C_DARK);
+  p2.text(`Desempleo: ${d.tasaDesempleo.toFixed(1)}% (${d.desempleadosCount})`, 806, 73, 7.3, true, C_SLATE, 'right');
 
   const xBarOIT = 446;
   const wBarOIT = 360;
-  p2.roundedRect(xBarOIT, 88, wBarOIT, 12, 5, C_SLATE_LIGHT, C_BORDER, 0.5);
+  p2.roundedRect(xBarOIT, 85, wBarOIT, 10, 4, C_SLATE_LIGHT, C_BORDER, 0.5);
   const wCal = (wBarOIT * d.tasaEmpleoCalidadPct) / 100;
   const wBas = (wBarOIT * d.tasaFormalBasicoPct) / 100;
   const wInf = Math.max(0, wBarOIT - wCal - wBas);
 
-  p2.roundedRect(xBarOIT + 1, 89, Math.max(4, wCal - 2), 10, 4, C_BLUE);
+  p2.roundedRect(xBarOIT + 1, 86, Math.max(4, wCal - 2), 8, 3.5, C_BLUE);
   if (wBas > 2) {
-    p2.rect(xBarOIT + wCal, 89, Math.max(2, wBas - 1), 10, C_SKY);
+    p2.rect(xBarOIT + wCal, 86, Math.max(2, wBas - 1), 8, C_SKY);
   }
   if (wInf > 2) {
-    p2.roundedRect(xBarOIT + wCal + wBas, 89, Math.max(4, wInf - 1), 10, 4, [0.58, 0.64, 0.72]);
+    p2.roundedRect(xBarOIT + wCal + wBas, 86, Math.max(4, wInf - 1), 8, 3.5, [0.58, 0.64, 0.72]);
   }
 
   const miniW = 116;
@@ -683,17 +713,35 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     { label: 'Sector Informal', pct: `${d.tasaInformalidadPct}%`, count: `${d.countInformal.toLocaleString('es-MX')} ocup.`, col: C_SLATE }
   ].forEach((m, idx) => {
     const mx = 446 + idx * 122;
-    p2.roundedRect(mx, 104, miniW, 30, 5, C_BG, C_BORDER, 0.5);
-    p2.circle(mx + 8, 111, 2.5, m.col);
-    p2.text(m.label, mx + 14, 107, 6.7, true, C_DARK);
-    p2.text(m.pct, mx + 8, 118, 9.2, true, idx === 0 ? C_BLUE : C_DARK);
-    p2.text(m.count, mx + 110, 120, 6.5, false, C_SLATE, 'right');
+    p2.roundedRect(mx, 98, miniW, 27, 5, C_BG, C_BORDER, 0.5);
+    p2.circle(mx + 8, 104.5, 2.3, m.col);
+    p2.text(m.label, mx + 14, 101, 6.5, true, C_DARK);
+    p2.text(m.pct, mx + 8, 111.5, 8.8, true, idx === 0 ? C_BLUE : C_DARK);
+    p2.text(m.count, mx + 110, 113.5, 6.2, false, C_SLATE, 'right');
   });
 
-  p2.text('MOSAICO DE EMPLEADORES (COMPOSICIÓN 100%)', 446, 141, 8.5, true, C_DARK);
+  const tieneContrastePrepaPdf = d.calidadOitPrepa != null || d.desempleoPrepa != null;
+  if (tieneContrastePrepaPdf) {
+    const partesPrepa: string[] = [];
+    if (d.calidadOitPrepa != null) {
+      partesPrepa.push(`OIT ${d.calidadOitPrepa}%->${d.tasaEmpleoCalidadPct}%`);
+    }
+    if (d.informalidadPrepa != null) {
+      partesPrepa.push(`Informal ${d.informalidadPrepa}%->${d.tasaInformalidadPct}%`);
+    }
+    if (d.desempleoPrepa != null) {
+      partesPrepa.push(`Desemp ${d.desempleoPrepa}%->${d.tasaDesempleo.toFixed(1)}%`);
+    }
+    p2.roundedRect(446, 128, 360, 15, 4, C_AMBER_LIGHT, C_AMBER, 0.5);
+    p2.text(`Salto vs. Solo Prepa: ${partesPrepa.join('  |  ')}`, 454, 132.5, 6.6, true, C_DARK);
+  }
+
+  p2.text('MOSAICO DE EMPLEADORES (COMPOSICIÓN 100%)', 446, tieneContrastePrepaPdf ? 148 : 138, 8.2, true, C_DARK);
 
   const empTop2 = d.empleadores.slice(0, 2);
   const empRest = d.empleadores.slice(2, 5);
+  const yTopEmp = tieneContrastePrepaPdf ? 159 : 151;
+  const hTopEmp = tieneContrastePrepaPdf ? 56 : 61;
 
   empTop2.forEach((emp, i) => {
     const bx = i === 0 ? 446 : 632;
@@ -702,13 +750,16 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     const subCol: RGB = i === 0 ? [0.82, 0.90, 1.0] : [0.75, 0.82, 0.90];
     const personas = Math.round(d.ocupadosCount * (emp.value / 100));
 
-    p2.roundedRect(bx, 153, bw, 60, 7, bgCol);
-    p2.text(`#${i + 1} SECTOR`, bx + 10, 160, 6.8, true, subCol);
-    p2.text(`${personas.toLocaleString('es-MX')} prof.`, bx + bw - 10, 160, 6.8, true, subCol, 'right');
-    p2.text(`${emp.value.toFixed(1)}%`, bx + 10, 174, 14, true, C_WHITE);
+    p2.roundedRect(bx, yTopEmp, bw, hTopEmp, 7, bgCol);
+    p2.text(`#${i + 1} SECTOR`, bx + 10, yTopEmp + 6, 6.6, true, subCol);
+    p2.text(`${personas.toLocaleString('es-MX')} prof.`, bx + bw - 10, yTopEmp + 6, 6.6, true, subCol, 'right');
+    p2.text(`${emp.value.toFixed(1)}%`, bx + 10, yTopEmp + 19, 13.5, true, C_WHITE);
     const nomCorto = emp.name.length > 34 ? emp.name.slice(0, 32) + '...' : emp.name;
-    p2.text(nomCorto, bx + 10, 195, 7.2, true, C_WHITE);
+    p2.text(nomCorto, bx + 10, yTopEmp + 38, 7.0, true, C_WHITE);
   });
+
+  const yRestEmp = yTopEmp + hTopEmp + 5;
+  const hRestEmp = 281 - yRestEmp;
 
   empRest.forEach((emp, i) => {
     const ncol = empRest.length;
@@ -719,29 +770,43 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     const borderCol = i === 0 ? C_BLUE_SOFT : C_BORDER;
     const personas = Math.round(d.ocupadosCount * (emp.value / 100));
 
-    p2.roundedRect(bx, 219, bw, 62, 7, bgCol, borderCol, 0.7);
-    p2.text(`#${i + 3} SECTOR`, bx + 8, 226, 6.5, true, i === 0 ? C_BLUE : C_SLATE);
-    p2.text(`${personas.toLocaleString('es-MX')} prof.`, bx + bw - 8, 226, 6.4, false, C_SLATE, 'right');
-    p2.text(`${emp.value.toFixed(1)}%`, bx + 8, 239, 12, true, C_DARK);
+    p2.roundedRect(bx, yRestEmp, bw, hRestEmp, 7, bgCol, borderCol, 0.7);
+    p2.text(`#${i + 3} SECTOR`, bx + 8, yRestEmp + 6, 6.4, true, i === 0 ? C_BLUE : C_SLATE);
+    p2.text(`${personas.toLocaleString('es-MX')} prof.`, bx + bw - 8, yRestEmp + 6, 6.3, false, C_SLATE, 'right');
+    p2.text(`${emp.value.toFixed(1)}%`, bx + 8, yRestEmp + 18, 11.5, true, C_DARK);
     const lines = wrapTextByChars(emp.name, ncol === 3 ? 21 : 32).slice(0, 2);
     lines.forEach((ln, li) => {
-      p2.text(ln, bx + 8, 256 + li * 8.5, 6.8, true, C_DARK);
+      p2.text(ln, bx + 8, yRestEmp + 34 + li * 8.5, 6.7, true, C_DARK);
     });
   });
 
+  const tienePrepaPrest = d.prestaciones.some(item => item.prepaVal != null);
   p2.roundedRect(24, 298, 400, 274, 10, C_WHITE, C_BORDER);
-  p2.text(`ESCALERA DE PRESTACIONES VS. MEDIA EN ${d.regionCorto.toUpperCase()}`, 36, 308, 9.2, true, C_DARK);
-  p2.text('Barra azul = Cobertura en esta carrera  |  Marca negra vertical = Media Licenciatura', 36, 320, 7.2, false, C_SLATE);
+  p2.text(`ESCALERA DE PRESTACIONES EN ${d.regionCorto.toUpperCase()}`, 36, 308, 9.2, true, C_DARK);
+  p2.text(
+    tienePrepaPrest
+      ? 'Barra azul = Carrera  |  Marca negra = Media Lic.  |  Marca ámbar = Solo Preparatoria'
+      : 'Barra azul = Cobertura en esta carrera  |  Marca negra vertical = Media Licenciatura',
+    36,
+    320,
+    6.9,
+    false,
+    C_SLATE
+  );
 
   let yPr = 338;
   d.prestaciones.forEach(item => {
     const diff = Number((item.valor - item.mediaCtx).toFixed(1));
-    p2.text(item.nombre, 36, yPr, 8, true, C_DARK);
+    p2.text(item.nombre, 36, yPr, 7.8, true, C_DARK);
+    const textoDerecha =
+      item.prepaVal != null
+        ? `${item.valor.toFixed(1)}% (Lic: ${item.mediaCtx}% | Prepa: ${item.prepaVal.toFixed(1)}%)`
+        : `${item.valor.toFixed(1)}% (${diff >= 0 ? `+${diff}%` : `${diff}%`} vs. Media ${item.mediaCtx}%)`;
     p2.text(
-      `${item.valor.toFixed(1)}% (${diff >= 0 ? `+${diff}%` : `${diff}%`} vs. Media ${item.mediaCtx}%)`,
+      textoDerecha,
       412,
       yPr,
-      7.4,
+      7.1,
       true,
       diff >= 0 ? C_EMERALD : C_SLATE,
       'right'
@@ -752,6 +817,11 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     p2.roundedRect(bx, yPr + 11, bw, 7.5, 3.5, C_SLATE_LIGHT, C_BORDER, 0.4);
     const wVal = (bw * Math.max(2, Math.min(100, item.valor))) / 100;
     p2.roundedRect(bx, yPr + 11, wVal, 7.5, 3.5, C_BLUE);
+
+    if (item.prepaVal != null) {
+      const xPrepa = bx + (bw * Math.min(99, item.prepaVal)) / 100;
+      p2.roundedRect(xPrepa - 1.1, yPr + 8.5, 2.2, 12.5, 1, C_AMBER);
+    }
 
     const xMedia = bx + (bw * Math.min(99, item.mediaCtx)) / 100;
     p2.roundedRect(xMedia - 1.2, yPr + 8.5, 2.4, 12.5, 1, C_DARK);

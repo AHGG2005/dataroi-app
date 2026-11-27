@@ -186,6 +186,15 @@ export const COSTOS_ROI_DEFAULT: CostosEscenarioROI = {
   privada_elite: { colegiatura_mensual: 16000, titulacion: 28000 }
 };
 
+// Único fallback de red para Preparatoria (solo se usa si Supabase no responde o las tablas están vacías)
+export const PREPA_FALLBACK_EMERGENCIA: {
+  sueldo_prepa: Record<CodigoGenero, number>;
+  formalidad_prepa_pct: number;
+} = {
+  sueldo_prepa: { 0: 11426, 1: 12266, 2: 9985 },
+  formalidad_prepa_pct: 46.6
+};
+
 export const META_PIPELINE_FALLBACK: MetaPipelineInfo = {
   anio_inicio: 2021,
   ultimo_anio: 2026,
@@ -418,8 +427,13 @@ export function construirBenchmarksPrepaMap(
   const resultado = {} as BenchmarksPrepaMap;
 
   REGIONES_ORDEN.forEach(reg => {
-    const sueldo_prepa: Record<CodigoGenero, number> = { 0: 10608, 1: 11832, 2: 8762 };
-    const formalidad_prepa_pct: Record<CodigoGenero, number> = { 0: 50.1, 1: 50.1, 2: 50.1 };
+    const sueldo_prepa: Record<CodigoGenero, number> = { ...PREPA_FALLBACK_EMERGENCIA.sueldo_prepa };
+    const formalidad_prepa_pct: Record<CodigoGenero, number> = {
+      0: PREPA_FALLBACK_EMERGENCIA.formalidad_prepa_pct,
+      1: PREPA_FALLBACK_EMERGENCIA.formalidad_prepa_pct,
+      2: PREPA_FALLBACK_EMERGENCIA.formalidad_prepa_pct
+    };
+    const tieneFormalidad: Record<CodigoGenero, boolean> = { 0: false, 1: false, 2: false };
     const calidad_oit_prepa_pct: Record<CodigoGenero, number | null> = { 0: null, 1: null, 2: null };
     const desempleo_prepa_pct: Record<CodigoGenero, number | null> = { 0: null, 1: null, 2: null };
     const historico_por_sexo: Record<CodigoGenero, Record<number, number>> = { 0: {}, 1: {}, 2: {} };
@@ -445,6 +459,7 @@ export function construirBenchmarksPrepaMap(
         const ultimaConForm = [...filas].reverse().find(f => f.formalidad_pct != null && Number(f.formalidad_pct) > 0);
         if (ultimaConForm) {
           formalidad_prepa_pct[sx] = Number(Number(ultimaConForm.formalidad_pct).toFixed(1));
+          tieneFormalidad[sx] = true;
         }
 
         const filasDesemp = filas.filter(
@@ -464,11 +479,12 @@ export function construirBenchmarksPrepaMap(
       if (satP) {
         formalidad_prepa_pct[sx] = satP.formalidad_total_pct;
         calidad_oit_prepa_pct[sx] = satP.calidad_oit_pct;
+        tieneFormalidad[sx] = true;
       }
     });
 
-    if (formalidad_prepa_pct[1] === 50.1 && formalidad_prepa_pct[0] !== 50.1) formalidad_prepa_pct[1] = formalidad_prepa_pct[0];
-    if (formalidad_prepa_pct[2] === 50.1 && formalidad_prepa_pct[0] !== 50.1) formalidad_prepa_pct[2] = formalidad_prepa_pct[0];
+    if (!tieneFormalidad[1] && tieneFormalidad[0]) formalidad_prepa_pct[1] = formalidad_prepa_pct[0];
+    if (!tieneFormalidad[2] && tieneFormalidad[0]) formalidad_prepa_pct[2] = formalidad_prepa_pct[0];
 
     resultado[reg] = {
       sueldo_prepa,

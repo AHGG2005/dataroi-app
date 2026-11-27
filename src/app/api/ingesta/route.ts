@@ -19,6 +19,13 @@ export const maxDuration = 60;
 
 const REGIONES_VALIDAS = new Set(['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur']);
 
+type TablaIngesta =
+  | 'predicciones_roi'
+  | 'satelites_cultura'
+  | 'benchmarks_prepa'
+  | 'satelites_prepa'
+  | 'dim_carreras';
+
 function crearSupabaseAdmin(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -148,10 +155,11 @@ async function upsertEnLotes(
   return procesadas;
 }
 
-function sanitizarPredicciones(rows: any[]): Record<string, any>[] {
+function sanitizarPredicciones(rows: any[], offsetFila = 0): Record<string, any>[] {
   const mapaDedup = new Map<string, Record<string, any>>();
 
   rows.forEach((raw, idx) => {
+    const numFila = offsetFila + idx + 1;
     const anio = Math.round(numSeguro(raw.anio, NaN));
     const cve_ent = normalizarRegion(raw.cve_ent);
     const sexo = Math.round(numSeguro(raw.sexo, NaN));
@@ -159,13 +167,13 @@ function sanitizarPredicciones(rows: any[]): Record<string, any>[] {
     const tipo_dato = String(raw.tipo_dato || 'Real').trim() || 'Real';
 
     if (!Number.isFinite(anio) || anio < 2015 || anio > 2050) {
-      throw new Error(`predicciones_roi fila ${idx + 1}: 'anio' inválido (${raw.anio}).`);
+      throw new Error(`predicciones_roi fila ${numFila}: 'anio' inválido (${raw.anio}).`);
     }
     if (!REGIONES_VALIDAS.has(cve_ent)) {
-      throw new Error(`predicciones_roi fila ${idx + 1}: 'cve_ent' inválido (${raw.cve_ent}).`);
+      throw new Error(`predicciones_roi fila ${numFila}: 'cve_ent' inválido (${raw.cve_ent}).`);
     }
     if (![0, 1, 2].includes(sexo)) {
-      throw new Error(`predicciones_roi fila ${idx + 1}: 'sexo' debe ser 0, 1 o 2 (recibido: ${raw.sexo}).`);
+      throw new Error(`predicciones_roi fila ${numFila}: 'sexo' debe ser 0, 1 o 2 (recibido: ${raw.sexo}).`);
     }
     if (!cve_carrera || cve_carrera === '000000' || cve_carrera === '999999') return;
 
@@ -194,19 +202,20 @@ function sanitizarPredicciones(rows: any[]): Record<string, any>[] {
   return Array.from(mapaDedup.values());
 }
 
-function sanitizarSatelites(rows: any[]): Record<string, any>[] {
+function sanitizarSatelites(rows: any[], offsetFila = 0): Record<string, any>[] {
   const mapaDedup = new Map<string, Record<string, any>>();
 
   rows.forEach((raw, idx) => {
+    const numFila = offsetFila + idx + 1;
     const cve_carrera = padCve(raw.cve_carrera);
     const region = normalizarRegion(raw.region);
     const sexo = Math.round(numSeguro(raw.sexo, NaN));
 
     if (!REGIONES_VALIDAS.has(region)) {
-      throw new Error(`satelites_cultura fila ${idx + 1}: 'region' inválida (${raw.region}).`);
+      throw new Error(`satelites_cultura fila ${numFila}: 'region' inválida (${raw.region}).`);
     }
     if (![0, 1, 2].includes(sexo)) {
-      throw new Error(`satelites_cultura fila ${idx + 1}: 'sexo' inválido (${raw.sexo}).`);
+      throw new Error(`satelites_cultura fila ${numFila}: 'sexo' inválido (${raw.sexo}).`);
     }
     if (!cve_carrera || cve_carrera === '000000' || cve_carrera === '999999') return;
 
@@ -244,18 +253,19 @@ function sanitizarSatelites(rows: any[]): Record<string, any>[] {
   return Array.from(mapaDedup.values());
 }
 
-function sanitizarSatelitesPrepa(rows: any[]): Record<string, any>[] {
+function sanitizarSatelitesPrepa(rows: any[], offsetFila = 0): Record<string, any>[] {
   const mapaDedup = new Map<string, Record<string, any>>();
 
   rows.forEach((raw, idx) => {
+    const numFila = offsetFila + idx + 1;
     const region = normalizarRegion(raw.region);
     const sexo = Math.round(numSeguro(raw.sexo, NaN));
 
     if (!REGIONES_VALIDAS.has(region)) {
-      throw new Error(`satelites_prepa fila ${idx + 1}: 'region' inválida (${raw.region}).`);
+      throw new Error(`satelites_prepa fila ${numFila}: 'region' inválida (${raw.region}).`);
     }
     if (![0, 1, 2].includes(sexo)) {
-      throw new Error(`satelites_prepa fila ${idx + 1}: 'sexo' inválido (${raw.sexo}).`);
+      throw new Error(`satelites_prepa fila ${numFila}: 'sexo' inválido (${raw.sexo}).`);
     }
 
     const key = `${region}|${sexo}`;
@@ -291,26 +301,27 @@ function sanitizarSatelitesPrepa(rows: any[]): Record<string, any>[] {
   return Array.from(mapaDedup.values());
 }
 
-function sanitizarBenchmarksPrepa(rows: any[]): Record<string, any>[] {
+function sanitizarBenchmarksPrepa(rows: any[], offsetFila = 0): Record<string, any>[] {
   const mapaDedup = new Map<string, Record<string, any>>();
 
   rows.forEach((raw, idx) => {
+    const numFila = offsetFila + idx + 1;
     const anio = Math.round(numSeguro(raw.anio, NaN));
     const region = normalizarRegion(raw.region);
     const sexo = Math.round(numSeguro(raw.sexo, NaN));
     const sueldo = Number(numSeguro(raw.sueldo_promedio_mensual, NaN).toFixed(2));
 
     if (!Number.isFinite(anio) || anio < 2015 || anio > 2050) {
-      throw new Error(`benchmarks_prepa fila ${idx + 1}: 'anio' inválido (${raw.anio}).`);
+      throw new Error(`benchmarks_prepa fila ${numFila}: 'anio' inválido (${raw.anio}).`);
     }
     if (!REGIONES_VALIDAS.has(region)) {
-      throw new Error(`benchmarks_prepa fila ${idx + 1}: 'region' inválida (${raw.region}).`);
+      throw new Error(`benchmarks_prepa fila ${numFila}: 'region' inválida (${raw.region}).`);
     }
     if (![0, 1, 2].includes(sexo)) {
-      throw new Error(`benchmarks_prepa fila ${idx + 1}: 'sexo' inválido (${raw.sexo}).`);
+      throw new Error(`benchmarks_prepa fila ${numFila}: 'sexo' inválido (${raw.sexo}).`);
     }
     if (!Number.isFinite(sueldo) || sueldo <= 0) {
-      throw new Error(`benchmarks_prepa fila ${idx + 1}: 'sueldo_promedio_mensual' inválido (${raw.sueldo_promedio_mensual}).`);
+      throw new Error(`benchmarks_prepa fila ${numFila}: 'sueldo_promedio_mensual' inválido (${raw.sueldo_promedio_mensual}).`);
     }
 
     const formVal = raw.formalidad_pct != null && raw.formalidad_pct !== '' ? Number(numSeguro(raw.formalidad_pct, 0).toFixed(2)) : null;
@@ -330,6 +341,181 @@ function sanitizarBenchmarksPrepa(rows: any[]): Record<string, any>[] {
   });
 
   return Array.from(mapaDedup.values());
+}
+
+function sanitizarDimCarreras(rows: any[], offsetFila = 0): Record<string, any>[] {
+  const mapaDedup = new Map<string, Record<string, any>>();
+  const tieneEjecutivo = rows.some(r => r.nombre_ejecutivo !== undefined);
+  const tieneSemestres = rows.some(r => r.semestres_default !== undefined);
+  const tieneCapex = rows.some(r => r.capex_mxn !== undefined);
+
+  rows.forEach((raw, idx) => {
+    const numFila = offsetFila + idx + 1;
+    const cve_carrera = padCve(raw.cve_carrera);
+    const nombre_carrera = String(raw.nombre_carrera ?? '').trim();
+
+    if (!cve_carrera || cve_carrera === '000000' || cve_carrera === '999999') return;
+    if (!nombre_carrera) {
+      throw new Error(`dim_carreras fila ${numFila}: 'nombre_carrera' vacío para CVE ${cve_carrera}.`);
+    }
+
+    const obj: Record<string, any> = {
+      cve_carrera,
+      nombre_carrera,
+      cve_4_digitos: String(raw.cve_4_digitos || cve_carrera.slice(0, 4)).trim().padStart(4, '0').slice(0, 4)
+    };
+
+    if (tieneEjecutivo) {
+      const ej = String(raw.nombre_ejecutivo ?? '').trim();
+      obj.nombre_ejecutivo = ej || null;
+    }
+    if (tieneSemestres) {
+      const sem = Number(raw.semestres_default);
+      obj.semestres_default = Number.isFinite(sem) && sem >= 4 && sem <= 16 ? Math.round(sem) : null;
+    }
+    if (tieneCapex) {
+      const cap = Number(raw.capex_mxn);
+      obj.capex_mxn = Number.isFinite(cap) && cap > 0 ? Math.round(cap) : null;
+    }
+
+    mapaDedup.set(cve_carrera, obj);
+  });
+
+  return Array.from(mapaDedup.values());
+}
+
+function revalidarTodasLasRutas() {
+  revalidatePath('/', 'layout');
+  revalidatePath('/');
+  revalidatePath('/descubrir');
+  revalidatePath('/laboratorio');
+  revalidatePath('/carrera/[id]', 'page');
+}
+
+async function construirReporteImpacto(
+  admin: SupabaseClient,
+  antes: SnapshotMercado,
+  despues: SnapshotMercado
+) {
+  const setAntes = new Set(antes.carreras_cves || []);
+  const cvesNuevas = (despues.carreras_cves || []).filter(cve => !setAntes.has(cve));
+
+  const { data: dimRows } = await admin
+    .from('dim_carreras')
+    .select('cve_carrera, nombre_carrera, nombre_ejecutivo');
+  const mapaNombres: Record<string, string> = {};
+  (dimRows || []).forEach((d: any) => {
+    mapaNombres[padCve(d.cve_carrera)] = d.nombre_ejecutivo || d.nombre_carrera;
+  });
+
+  const variacionesCarreras: {
+    cve_carrera: string;
+    nombre: string;
+    antes: number;
+    despues: number;
+    diff_mxn: number;
+    diff_pct: number;
+  }[] = [];
+
+  const mapaAntes = antes.sueldo_por_carrera || {};
+  Object.entries(despues.sueldo_por_carrera || {}).forEach(([cve, sDesp]) => {
+    const sAnt = mapaAntes[cve];
+    if (!sAnt || sAnt <= 0) return;
+    const diffMxn = sDesp - sAnt;
+    const diffPct = Number(((diffMxn / sAnt) * 100).toFixed(1));
+    if (Math.abs(diffMxn) >= 1) {
+      variacionesCarreras.push({
+        cve_carrera: cve,
+        nombre: mapaNombres[cve] || `Carrera ${cve}`,
+        antes: sAnt,
+        despues: sDesp,
+        diff_mxn: diffMxn,
+        diff_pct: diffPct
+      });
+    }
+  });
+
+  const topAlzas = [...variacionesCarreras].filter(v => v.diff_mxn > 0).sort((a, b) => b.diff_mxn - a.diff_mxn).slice(0, 5);
+  const topBajas = [...variacionesCarreras].filter(v => v.diff_mxn < 0).sort((a, b) => a.diff_mxn - b.diff_mxn).slice(0, 5);
+
+  return {
+    antes: {
+      etiqueta_corte: antes.etiqueta_corte,
+      rango_anios: antes.rango_anios,
+      total_carreras_certificadas: antes.total_carreras_certificadas,
+      media_salarial_nacional: antes.media_salarial_nacional,
+      sueldo_prepa_nacional: antes.sueldo_prepa_nacional,
+      calidad_oit_prepa_nacional: antes.calidad_oit_prepa_nacional,
+      desempleo_prepa_nacional: antes.desempleo_prepa_nacional,
+      total_filas_predicciones: antes.total_filas_predicciones,
+      total_filas_satelites_prepa: antes.total_filas_satelites_prepa
+    },
+    despues: {
+      etiqueta_corte: despues.etiqueta_corte,
+      rango_anios: despues.rango_anios,
+      total_carreras_certificadas: despues.total_carreras_certificadas,
+      media_salarial_nacional: despues.media_salarial_nacional,
+      sueldo_prepa_nacional: despues.sueldo_prepa_nacional,
+      calidad_oit_prepa_nacional: despues.calidad_oit_prepa_nacional,
+      desempleo_prepa_nacional: despues.desempleo_prepa_nacional,
+      total_filas_predicciones: despues.total_filas_predicciones,
+      total_filas_satelites_prepa: despues.total_filas_satelites_prepa
+    },
+    carreras_nuevas: cvesNuevas.map(cve => ({
+      cve_carrera: cve,
+      nombre: mapaNombres[cve] || `Carrera ${cve}`
+    })),
+    topAlzas,
+    topBajas
+  };
+}
+
+async function actualizarMetaPipeline(
+  admin: SupabaseClient,
+  metaPayload: any,
+  aniosNuevos: number[]
+): Promise<boolean> {
+  if (!metaPayload && aniosNuevos.length === 0) return false;
+  const metaActual = await cargarMetaPipeline(admin);
+
+  const anioInicioFinal = numSeguro(
+    metaPayload?.anio_inicio,
+    aniosNuevos.length > 0 ? Math.min(metaActual.anio_inicio, ...aniosNuevos) : metaActual.anio_inicio
+  );
+  const ultimoAnioFinal = numSeguro(
+    metaPayload?.ultimo_anio,
+    aniosNuevos.length > 0 ? Math.max(metaActual.ultimo_anio, ...aniosNuevos) : metaActual.ultimo_anio
+  );
+  const ultimoTrimFinal = Math.min(
+    4,
+    Math.max(1, Math.round(numSeguro(metaPayload?.ultimo_trimestre, metaActual.ultimo_trimestre)))
+  );
+  const etiquetaCorteFinal = String(metaPayload?.etiqueta_corte || `${ultimoAnioFinal} Q${ultimoTrimFinal}`).trim();
+  const etiquetaPesosFinal = String(metaPayload?.etiqueta_pesos_base || `Pesos constantes ${etiquetaCorteFinal}`).trim();
+  const inpcBaseFinal =
+    metaPayload?.inpc_base != null && metaPayload.inpc_base !== ''
+      ? Number(metaPayload.inpc_base)
+      : metaActual.inpc_base;
+  const costosRoiFinal = metaPayload?.costos_roi || metaActual.costos_roi;
+
+  const { error: errMeta } = await admin.from('meta_pipeline').upsert(
+    {
+      id: 1,
+      anio_inicio: anioInicioFinal,
+      ultimo_anio: ultimoAnioFinal,
+      ultimo_trimestre: ultimoTrimFinal,
+      etiqueta_corte: etiquetaCorteFinal,
+      etiqueta_pesos_base: etiquetaPesosFinal,
+      inpc_base: inpcBaseFinal,
+      costos_roi: costosRoiFinal,
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: 'id' }
+  );
+  if (errMeta) {
+    throw new Error(`Error actualizando meta_pipeline: ${errMeta.message}`);
+  }
+  return true;
 }
 
 // GET /api/ingesta -> Devuelve el estado actual vivo de la base de datos
@@ -371,7 +557,7 @@ export async function GET() {
   }
 }
 
-// POST /api/ingesta -> Valida token, procesa UPSERTs en lotes, revalida caché de Next.js y devuelve diff Antes vs Después
+// POST /api/ingesta -> Protocolo escalable en 3 fases (iniciar -> lote -> finalizar) + compatibilidad directa
 export async function POST(req: NextRequest) {
   try {
     const tokenEsperado = process.env.INGESTA_ADMIN_TOKEN;
@@ -391,12 +577,134 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
+    const accion = typeof body?.accion === 'string' ? body.accion : 'completo';
     const modoDryRun = Boolean(body?.dryRun);
+    const admin = crearSupabaseAdmin();
 
+    // ----------------------------------------------------------------------
+    // FASE 1: INICIAR (Captura Snapshot "Antes" para el diff final)
+    // ----------------------------------------------------------------------
+    if (accion === 'iniciar') {
+      const snapshotAntes = await capturarSnapshotActual(admin);
+      return NextResponse.json({
+        ok: true,
+        accion: 'iniciar',
+        snapshotAntes
+      });
+    }
+
+    // ----------------------------------------------------------------------
+    // FASE 2: LOTE (Valida y sube un paquete pequeño <= 350 KB por request)
+    // ----------------------------------------------------------------------
+    if (accion === 'lote') {
+      const tabla = body?.tabla as TablaIngesta;
+      const filasRaw = Array.isArray(body?.filas) ? body.filas : [];
+      const offsetFila = Math.max(0, Math.round(numSeguro(body?.offsetFila, 0)));
+
+      if (filasRaw.length === 0) {
+        return NextResponse.json({ ok: true, dryRun: modoDryRun, tabla, procesadas: 0, aniosDetectados: [] });
+      }
+
+      let limpias: Record<string, any>[] = [];
+      let onConflict = '';
+      let aniosDetectados: number[] = [];
+
+      if (tabla === 'predicciones_roi') {
+        limpias = sanitizarPredicciones(filasRaw, offsetFila);
+        onConflict = 'anio,cve_ent,sexo,cve_carrera,tipo_dato';
+        aniosDetectados = Array.from(new Set(limpias.map(r => Number(r.anio)).filter(Number.isFinite)));
+      } else if (tabla === 'satelites_cultura') {
+        limpias = sanitizarSatelites(filasRaw, offsetFila);
+        onConflict = 'cve_carrera,region,sexo';
+      } else if (tabla === 'benchmarks_prepa') {
+        limpias = sanitizarBenchmarksPrepa(filasRaw, offsetFila);
+        onConflict = 'anio,region,sexo';
+      } else if (tabla === 'satelites_prepa') {
+        limpias = sanitizarSatelitesPrepa(filasRaw, offsetFila);
+        onConflict = 'region,sexo';
+      } else if (tabla === 'dim_carreras') {
+        limpias = sanitizarDimCarreras(filasRaw, offsetFila);
+        onConflict = 'cve_carrera';
+      } else {
+        return NextResponse.json({ error: `Tabla de ingesta no soportada: ${String(tabla)}` }, { status: 400 });
+      }
+
+      if (modoDryRun) {
+        return NextResponse.json({
+          ok: true,
+          dryRun: true,
+          tabla,
+          procesadas: limpias.length,
+          aniosDetectados
+        });
+      }
+
+      const procesadas = await upsertEnLotes(admin, tabla, limpias, onConflict);
+      return NextResponse.json({
+        ok: true,
+        dryRun: false,
+        tabla,
+        procesadas,
+        aniosDetectados
+      });
+    }
+
+    // ----------------------------------------------------------------------
+    // FASE 3: FINALIZAR (Actualiza meta_pipeline, revalida rutas y arma diff)
+    // ----------------------------------------------------------------------
+    if (accion === 'finalizar') {
+      const metaPayload = body?.meta_pipeline && typeof body.meta_pipeline === 'object' ? body.meta_pipeline : null;
+      const aniosNuevos = Array.isArray(body?.aniosDetectadosPred)
+        ? body.aniosDetectadosPred.map((a: any) => Number(a)).filter(Number.isFinite)
+        : [];
+      const conteos = body?.conteos && typeof body.conteos === 'object' ? body.conteos : {};
+
+      if (modoDryRun) {
+        return NextResponse.json({
+          ok: true,
+          dryRun: true,
+          mensaje: 'Validación por lotes exitosa (Modo Simulación: no se modificó la base de datos).',
+          resumenValidacion: {
+            predicciones_validas: numSeguro(conteos.predicciones_roi, 0),
+            satelites_validos: numSeguro(conteos.satelites_cultura, 0),
+            benchmarks_prepa_validos: numSeguro(conteos.benchmarks_prepa, 0),
+            satelites_prepa_validos: numSeguro(conteos.satelites_prepa, 0),
+            dim_carreras_validas: numSeguro(conteos.dim_carreras, 0),
+            actualiza_meta: Boolean(metaPayload)
+          }
+        });
+      }
+
+      const actualizoMeta = await actualizarMetaPipeline(admin, metaPayload, aniosNuevos);
+      const despues = await capturarSnapshotActual(admin);
+      const antes: SnapshotMercado =
+        body?.snapshotAntes && typeof body.snapshotAntes === 'object'
+          ? (body.snapshotAntes as SnapshotMercado)
+          : despues;
+
+      const impacto = await construirReporteImpacto(admin, antes, despues);
+      revalidarTodasLasRutas();
+
+      return NextResponse.json({
+        ok: true,
+        dryRun: false,
+        mensaje: `Corte ${despues.etiqueta_corte} publicado en tiempo real por lotes y caché global revalidado.`,
+        conteos: {
+          ...conteos,
+          meta_pipeline: actualizoMeta ? 1 : 0
+        },
+        impacto
+      });
+    }
+
+    // ----------------------------------------------------------------------
+    // MODO DIRECTO COMPATIBLE (1 sola petición para scripts pequeños)
+    // ----------------------------------------------------------------------
     const predRaw = Array.isArray(body?.predicciones_roi) ? body.predicciones_roi : [];
     const satRaw = Array.isArray(body?.satelites_cultura) ? body.satelites_cultura : [];
     const prepaRaw = Array.isArray(body?.benchmarks_prepa) ? body.benchmarks_prepa : [];
     const satPrepaRaw = Array.isArray(body?.satelites_prepa) ? body.satelites_prepa : [];
+    const dimRaw = Array.isArray(body?.dim_carreras) ? body.dim_carreras : [];
     const metaPayload = body?.meta_pipeline && typeof body.meta_pipeline === 'object' ? body.meta_pipeline : null;
 
     if (
@@ -404,6 +712,7 @@ export async function POST(req: NextRequest) {
       satRaw.length === 0 &&
       prepaRaw.length === 0 &&
       satPrepaRaw.length === 0 &&
+      dimRaw.length === 0 &&
       !metaPayload
     ) {
       return NextResponse.json(
@@ -412,14 +721,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1. Validación estricta y sanitización ANTES de tocar Supabase
+    const dimLimpias = dimRaw.length > 0 ? sanitizarDimCarreras(dimRaw) : [];
     const predLimpias = predRaw.length > 0 ? sanitizarPredicciones(predRaw) : [];
     const satLimpias = satRaw.length > 0 ? sanitizarSatelites(satRaw) : [];
     const prepaLimpias = prepaRaw.length > 0 ? sanitizarBenchmarksPrepa(prepaRaw) : [];
     const satPrepaLimpias = satPrepaRaw.length > 0 ? sanitizarSatelitesPrepa(satPrepaRaw) : [];
 
-    const admin = crearSupabaseAdmin();
-    const metaActual = await cargarMetaPipeline(admin);
     const antes = await capturarSnapshotActual(admin);
 
     if (modoDryRun) {
@@ -432,21 +739,14 @@ export async function POST(req: NextRequest) {
           satelites_validos: satLimpias.length,
           benchmarks_prepa_validos: prepaLimpias.length,
           satelites_prepa_validos: satPrepaLimpias.length,
+          dim_carreras_validas: dimLimpias.length,
           actualiza_meta: Boolean(metaPayload)
-        },
-        antes: {
-          etiqueta_corte: antes.etiqueta_corte,
-          rango_anios: antes.rango_anios,
-          total_carreras_certificadas: antes.total_carreras_certificadas,
-          media_salarial_nacional: antes.media_salarial_nacional,
-          sueldo_prepa_nacional: antes.sueldo_prepa_nacional,
-          calidad_oit_prepa_nacional: antes.calidad_oit_prepa_nacional
         }
       });
     }
 
-    // 2. Ejecutar UPSERTs en lotes hacia Supabase
     const conteos = {
+      dim_carreras: 0,
       predicciones_roi: 0,
       satelites_cultura: 0,
       benchmarks_prepa: 0,
@@ -454,6 +754,9 @@ export async function POST(req: NextRequest) {
       meta_pipeline: 0
     };
 
+    if (dimLimpias.length > 0) {
+      conteos.dim_carreras = await upsertEnLotes(admin, 'dim_carreras', dimLimpias, 'cve_carrera');
+    }
     if (satLimpias.length > 0) {
       conteos.satelites_cultura = await upsertEnLotes(admin, 'satelites_cultura', satLimpias, 'cve_carrera,region,sexo');
     }
@@ -472,129 +775,20 @@ export async function POST(req: NextRequest) {
       conteos.benchmarks_prepa = await upsertEnLotes(admin, 'benchmarks_prepa', prepaLimpias, 'anio,region,sexo');
     }
 
-    if (metaPayload || predLimpias.length > 0) {
-      const aniosNuevos = predLimpias.map(r => Number(r.anio)).filter(a => Number.isFinite(a));
-      const anioInicioFinal = numSeguro(
-        metaPayload?.anio_inicio,
-        aniosNuevos.length > 0 ? Math.min(metaActual.anio_inicio, ...aniosNuevos) : metaActual.anio_inicio
-      );
-      const ultimoAnioFinal = numSeguro(
-        metaPayload?.ultimo_anio,
-        aniosNuevos.length > 0 ? Math.max(metaActual.ultimo_anio, ...aniosNuevos) : metaActual.ultimo_anio
-      );
-      const ultimoTrimFinal = Math.min(4, Math.max(1, Math.round(numSeguro(metaPayload?.ultimo_trimestre, metaActual.ultimo_trimestre))));
-      const etiquetaCorteFinal = String(metaPayload?.etiqueta_corte || `${ultimoAnioFinal} Q${ultimoTrimFinal}`).trim();
-      const etiquetaPesosFinal = String(metaPayload?.etiqueta_pesos_base || `Pesos constantes ${etiquetaCorteFinal}`).trim();
-      const inpcBaseFinal =
-        metaPayload?.inpc_base != null && metaPayload.inpc_base !== ''
-          ? Number(metaPayload.inpc_base)
-          : metaActual.inpc_base;
-      const costosRoiFinal = metaPayload?.costos_roi || metaActual.costos_roi;
+    const aniosNuevos = predLimpias.map(r => Number(r.anio)).filter(Number.isFinite);
+    const actualizoMeta = await actualizarMetaPipeline(admin, metaPayload, aniosNuevos);
+    conteos.meta_pipeline = actualizoMeta ? 1 : 0;
 
-      const { error: errMeta } = await admin.from('meta_pipeline').upsert(
-        {
-          id: 1,
-          anio_inicio: anioInicioFinal,
-          ultimo_anio: ultimoAnioFinal,
-          ultimo_trimestre: ultimoTrimFinal,
-          etiqueta_corte: etiquetaCorteFinal,
-          etiqueta_pesos_base: etiquetaPesosFinal,
-          inpc_base: inpcBaseFinal,
-          costos_roi: costosRoiFinal,
-          updated_at: new Date().toISOString()
-        },
-        { onConflict: 'id' }
-      );
-      if (errMeta) {
-        throw new Error(`Error actualizando meta_pipeline: ${errMeta.message}`);
-      }
-      conteos.meta_pipeline = 1;
-    }
-
-    // 3. Capturar Snapshot "Después" y calcular reporte de impacto
     const despues = await capturarSnapshotActual(admin);
-
-    const setAntes = new Set(antes.carreras_cves);
-    const cvesNuevas = despues.carreras_cves.filter(cve => !setAntes.has(cve));
-
-    const { data: dimRows } = await admin
-      .from('dim_carreras')
-      .select('cve_carrera, nombre_carrera, nombre_ejecutivo');
-    const mapaNombres: Record<string, string> = {};
-    (dimRows || []).forEach((d: any) => {
-      mapaNombres[padCve(d.cve_carrera)] = d.nombre_ejecutivo || d.nombre_carrera;
-    });
-
-    const variacionesCarreras: {
-      cve_carrera: string;
-      nombre: string;
-      antes: number;
-      despues: number;
-      diff_mxn: number;
-      diff_pct: number;
-    }[] = [];
-
-    Object.entries(despues.sueldo_por_carrera).forEach(([cve, sDesp]) => {
-      const sAnt = antes.sueldo_por_carrera[cve];
-      if (!sAnt || sAnt <= 0) return;
-      const diffMxn = sDesp - sAnt;
-      const diffPct = Number(((diffMxn / sAnt) * 100).toFixed(1));
-      if (Math.abs(diffMxn) >= 1) {
-        variacionesCarreras.push({
-          cve_carrera: cve,
-          nombre: mapaNombres[cve] || `Carrera ${cve}`,
-          antes: sAnt,
-          despues: sDesp,
-          diff_mxn: diffMxn,
-          diff_pct: diffPct
-        });
-      }
-    });
-
-    const topAlzas = [...variacionesCarreras].filter(v => v.diff_mxn > 0).sort((a, b) => b.diff_mxn - a.diff_mxn).slice(0, 5);
-    const topBajas = [...variacionesCarreras].filter(v => v.diff_mxn < 0).sort((a, b) => a.diff_mxn - b.diff_mxn).slice(0, 5);
-
-    // 4. Invalidar caché global de Next.js 16 en todas las rutas del proyecto
-    revalidatePath('/', 'layout');
-    revalidatePath('/');
-    revalidatePath('/descubrir');
-    revalidatePath('/laboratorio');
+    const impacto = await construirReporteImpacto(admin, antes, despues);
+    revalidarTodasLasRutas();
 
     return NextResponse.json({
       ok: true,
       dryRun: false,
       mensaje: `Corte ${despues.etiqueta_corte} publicado en tiempo real y caché global revalidado.`,
       conteos,
-      impacto: {
-        antes: {
-          etiqueta_corte: antes.etiqueta_corte,
-          rango_anios: antes.rango_anios,
-          total_carreras_certificadas: antes.total_carreras_certificadas,
-          media_salarial_nacional: antes.media_salarial_nacional,
-          sueldo_prepa_nacional: antes.sueldo_prepa_nacional,
-          calidad_oit_prepa_nacional: antes.calidad_oit_prepa_nacional,
-          desempleo_prepa_nacional: antes.desempleo_prepa_nacional,
-          total_filas_predicciones: antes.total_filas_predicciones,
-          total_filas_satelites_prepa: antes.total_filas_satelites_prepa
-        },
-        despues: {
-          etiqueta_corte: despues.etiqueta_corte,
-          rango_anios: despues.rango_anios,
-          total_carreras_certificadas: despues.total_carreras_certificadas,
-          media_salarial_nacional: despues.media_salarial_nacional,
-          sueldo_prepa_nacional: despues.sueldo_prepa_nacional,
-          calidad_oit_prepa_nacional: despues.calidad_oit_prepa_nacional,
-          desempleo_prepa_nacional: despues.desempleo_prepa_nacional,
-          total_filas_predicciones: despues.total_filas_predicciones,
-          total_filas_satelites_prepa: despues.total_filas_satelites_prepa
-        },
-        carreras_nuevas: cvesNuevas.map(cve => ({
-          cve_carrera: cve,
-          nombre: mapaNombres[cve] || `Carrera ${cve}`
-        })),
-        topAlzas,
-        topBajas
-      }
+      impacto
     });
   } catch (err: any) {
     return NextResponse.json(

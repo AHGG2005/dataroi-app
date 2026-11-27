@@ -23,9 +23,11 @@ import {
   RegionClave,
   DimCarreraRow,
   BenchmarkPrepaRow,
+  SatelitePrepaRow,
   MetaPipelineInfo,
   cargarCatalogoCarreras,
   cargarBenchmarksPrepaRows,
+  cargarSatelitesPrepaRows,
   cargarMetaPipeline,
   construirBenchmarksPrepaMap,
   calcularVentanasTemporales,
@@ -194,6 +196,7 @@ function LaboratorioContenido() {
   const [satelitesRaw, setSatelitesRaw] = useState<any[]>([]);
   const [seriesRaw, setSeriesRaw] = useState<any[]>([]);
   const [prepaRows, setPrepaRows] = useState<BenchmarkPrepaRow[]>([]);
+  const [satPrepaRows, setSatPrepaRows] = useState<SatelitePrepaRow[]>([]);
   const [metaPipeline, setMetaPipeline] = useState<MetaPipelineInfo>(META_PIPELINE_FALLBACK);
   const [loading, setLoading] = useState<boolean>(true);
   const [reloadTick, setReloadTick] = useState<number>(0);
@@ -223,10 +226,11 @@ function LaboratorioContenido() {
     let cancelado = false;
     async function cargarDatosCrudos() {
       setLoading(true);
-      const [resCar, resMeta, resPrepa, resSat, resSer] = await Promise.all([
+      const [resCar, resMeta, resPrepa, resSatPrepa, resSat, resSer] = await Promise.all([
         cargarCatalogoCarreras(supabase),
         cargarMetaPipeline(supabase),
         cargarBenchmarksPrepaRows(supabase),
+        cargarSatelitesPrepaRows(supabase),
         descargarTodoPaginado(() =>
           supabase
             .from('satelites_cultura')
@@ -251,6 +255,7 @@ function LaboratorioContenido() {
       setCarrerasRaw(resCar);
       setMetaPipeline(resMeta);
       setPrepaRows(resPrepa);
+      setSatPrepaRows(resSatPrepa);
       setSatelitesRaw(resSat);
       setSeriesRaw(resSer);
       setLoading(false);
@@ -293,7 +298,7 @@ function LaboratorioContenido() {
       };
     }
 
-    const benchPrepaMap = construirBenchmarksPrepaMap(prepaRows, vDefault);
+    const benchPrepaMap = construirBenchmarksPrepaMap(prepaRows, vDefault, satPrepaRows);
     const sueldoPrepaRef =
       benchPrepaMap[regionActiva]?.sueldo_prepa[generoActivo] ??
       benchPrepaMap.nacional.sueldo_prepa[0];
@@ -554,7 +559,7 @@ function LaboratorioContenido() {
         premioStemPct
       }
     };
-  }, [carrerasRaw, satelitesRaw, seriesRaw, prepaRows, metaPipeline, regionActiva, generoActivo, soloStem]);
+  }, [carrerasRaw, satelitesRaw, seriesRaw, prepaRows, satPrepaRows, metaPipeline, regionActiva, generoActivo, soloStem]);
 
   const metaVarRanking = CATALOGO_VARIABLES_CRUDAS.find(v => v.id === varRankingId) || CATALOGO_VARIABLES_CRUDAS[0];
   const metaEjeX = CATALOGO_VARIABLES_CRUDAS.find(v => v.id === ejeXId) || CATALOGO_VARIABLES_CRUDAS[8];

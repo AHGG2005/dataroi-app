@@ -24,6 +24,7 @@ import {
   REGIONES_META,
   EVENTO_DATOS_ACTUALIZADOS,
   META_PIPELINE_FALLBACK,
+  PREPA_FALLBACK_EMERGENCIA,
   CodigoGenero,
   RegionClave,
   DimCarreraRow,
@@ -995,7 +996,7 @@ function CarreraPerfilContenido() {
 
       const satsReg = todosSatelitesGlobal.filter(s => normalizarRegion(s.region) === reg && Number(s.sexo ?? 0) === codigoSexo);
       const benchSatR = calcularBenchmarkDinamicoSatelites(todosSatelitesGlobal, reg, codigoSexo);
-      const prepaSueldoR = benchmarksPrepa[reg]?.sueldo_prepa[codigoSexo] || 10608;
+      const prepaSueldoR = benchmarksPrepa[reg]?.sueldo_prepa[codigoSexo] || PREPA_FALLBACK_EMERGENCIA.sueldo_prepa[codigoSexo];
 
       let meritoMedio = 58;
       let futuroMedio = 60;
@@ -1480,7 +1481,7 @@ function CarreraPerfilContenido() {
 
     const formR = Number((pContR * 0.45 + pAguiR * 0.30 + pAforR * 0.25).toFixed(1));
     const calOitR = Number((((Math.min(pContR, pAforR) * 0.70 + pContR * 0.30) * (1 - pPlurR / 200))).toFixed(1));
-    const formPrepaReg = prepaR.formalidad_prepa_pct[codigoSexo] ?? prepaR.formalidad_prepa_pct[0] ?? 50.1;
+    const formPrepaReg = prepaR.formalidad_prepa_pct[codigoSexo] ?? prepaR.formalidad_prepa_pct[0] ?? PREPA_FALLBACK_EMERGENCIA.formalidad_prepa_pct;
     const diffFormPts = Number((formR - formPrepaReg).toFixed(1));
 
     const benchCtxReg = calcularBenchmarkDinamicoSatelites(todosSatelitesGlobal, regKey, codigoSexo);
@@ -1841,6 +1842,10 @@ function CarreraPerfilContenido() {
       bonoAnual: statsMercado?.gananciaAnualExtra ?? bonoAnualROI,
       tasaEmpleoCalidadPct,
       diffCalidadVsMediaLic,
+      calidadOitPrepa,
+      diffCalidadVsPrepa,
+      informalidadPrepa: informalidadPrepaExacta,
+      desempleoPrepa,
       countCalidad,
       saturacionPct: saturacionSegura,
       diagSatTexto: diagSat.texto,
@@ -1868,7 +1873,8 @@ function CarreraPerfilContenido() {
       prestaciones: listaPrestaciones.map(pr => ({
         nombre: pr.nombre,
         valor: pr.valor,
-        mediaCtx: pr.mediaCtx
+        mediaCtx: pr.mediaCtx,
+        prepaVal: pr.prepaVal
       })),
       barreras: {
         cuadranteNombre: social.cuadrante.nombre,

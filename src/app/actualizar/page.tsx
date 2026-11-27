@@ -25,7 +25,8 @@ import {
   Trash2,
   Loader2,
   SlidersHorizontal,
-  GraduationCap
+  GraduationCap,
+  BookOpen
 } from 'lucide-react';
 
 function parsearCSV(textoRaw: string): { headers: string[]; rows: Record<string, string>[] } {
@@ -98,6 +99,12 @@ interface ArchivoCargado {
   error?: string;
 }
 
+interface ProgresoIngesta {
+  pasoActual: number;
+  totalPasos: number;
+  texto: string;
+}
+
 const formatoMoneda = (valor: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(valor || 0);
 
@@ -105,6 +112,18 @@ const COLS_REQ_PRED = ['anio', 'cve_ent', 'sexo', 'cve_carrera', 'sueldo_promedi
 const COLS_REQ_PREPA = ['anio', 'region', 'sexo', 'sueldo_promedio_mensual'];
 const COLS_REQ_SAT = ['cve_carrera', 'region', 'sexo', 'n_encuestados_reales', 'pct_contrato', 'riesgo_ia_score'];
 const COLS_REQ_SAT_PREPA = ['region', 'sexo', 'n_encuestados_reales', 'pct_contrato', 'pct_aguinaldo', 'pct_afore'];
+const COLS_REQ_DIM = ['cve_carrera', 'nombre_carrera'];
+
+// Tamaños seguros por petición (~260 KB por POST, muy debajo del límite de 4.5 MB de Vercel)
+const LOTE_POR_TABLA = {
+  dim_carreras: 400,
+  satelites_cultura: 400,
+  satelites_prepa: 100,
+  predicciones_roi: 750,
+  benchmarks_prepa: 500
+} as const;
+
+type TablaLote = keyof typeof LOTE_POR_TABLA;
 
 export default function ActualizarDatosPage() {
   const router = useRouter();
@@ -119,6 +138,7 @@ export default function ActualizarDatosPage() {
   const [archivoPrepa, setArchivoPrepa] = useState<ArchivoCargado | null>(null);
   const [archivoSat, setArchivoSat] = useState<ArchivoCargado | null>(null);
   const [archivoSatPrepa, setArchivoSatPrepa] = useState<ArchivoCargado | null>(null);
+  const [archivoDim, setArchivoDim] = useState<ArchivoCargado | null>(null);
   const [nombreJsonMeta, setNombreJsonMeta] = useState<string | null>(null);
 
   const [editarMetaActivo, setEditarMetaActivo] = useState(false);
@@ -129,6 +149,7 @@ export default function ActualizarDatosPage() {
   const [costosRoi, setCostosRoi] = useState<CostosEscenarioROI>(COSTOS_ROI_DEFAULT);
 
   const [enviando, setEnviando] = useState(false);
+  const [progreso, setProgreso] = useState<ProgresoIngesta | null>(null);
   const [errorEnvio, setErrorEnvio] = useState<string | null>(null);
   const [resultadoIngesta, setResultadoIngesta] = useState<any>(null);
 
@@ -168,7 +189,7 @@ export default function ActualizarDatosPage() {
     file: File,
     colsRequeridas: string[],
     setter: React.Dispatch<React.SetStateAction<ArchivoCargado | null>>,
-    tipo: 'pred' | 'prepa' | 'sat' | 'sat_prepa'
+    tipo: 'pred' | 'prepa' | 'sat' | 'sat_prepa' | 'dim'
   ) => {
     const texto = await file.text();
     const { headers, rows } = parsearCSV(texto);
@@ -210,6 +231,8 @@ export default function ActualizarDatosPage() {
     } else if (tipo === 'sat_prepa') {
       const regs = new Set(rows.map(r => String(r.region || '').toLowerCase())).size;
       resumen = `${rows.length} celdas de Preparatoria · ${regs} zonas`;
+    } else if (tipo === 'dim') {
+      resumen = `${rows.length.toLocaleString('es-MX')} claves CMPE del catálogo`;
     } else {
       const carreras = new Set(rows.map(r => String(r.cve_carrera || '').padStart(6, '0'))).size;
       resumen = `${rows.length.toLocaleString('es-MX')} celdas certificadas · ${carreras} carreras`;
@@ -239,13 +262,30 @@ export default function ActualizarDatosPage() {
     (archivoPrepa && archivoPrepa.filas.length > 0) ||
     (archivoSat && archivoSat.filas.length > 0) ||
     (archivoSatPrepa && archivoSatPrepa.filas.length > 0) ||
+    (archivoDim && archivoDim.filas.length > 0) ||
     editarMetaActivo ||
     nombreJsonMeta
   );
 
   const hayErroresArchivos = Boolean(
-    archivoPred?.error || archivoPrepa?.error || archivoSat?.error || archivoSatPrepa?.error
+    archivoPred?.error || archivoPrepa?.error || archivoSat?.error || archivoSatPrepa?.error || archivoDim?.error
   );
+
+  const postIngesta = async (body: Record<string, any>) => {
+    const res = await fetch('/api/ingesta', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-ingesta-token': adminToken.trim()
+      },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error || `Error HTTP ${res.status} al procesar la ingesta.`);
+    }
+    return data;
+  };
 
   const ejecutarIngesta = async () => {
     if (!adminToken.trim()) {
@@ -265,41 +305,107 @@ export default function ActualizarDatosPage() {
         // Sin impacto
       }
 
-      const etiquetaCorte = `${metaUltimoAnio} Q${metaUltimoTrim}`;
-      const payload: Record<string, any> = { dryRun: modoDryRun };
-
-      if (archivoPred && archivoPred.filas.length > 0) payload.predicciones_roi = archivoPred.filas;
-      if (archivoPrepa && archivoPrepa.filas.length > 0) payload.benchmarks_prepa = archivoPrepa.filas;
-      if (archivoSat && archivoSat.filas.length > 0) payload.satelites_cultura = archivoSat.filas;
-      if (archivoSatPrepa && archivoSatPrepa.filas.length > 0) payload.satelites_prepa = archivoSatPrepa.filas;
-
-      if (editarMetaActivo || nombreJsonMeta || (archivoPred && archivoPred.filas.length > 0)) {
-        payload.meta_pipeline = {
-          anio_inicio: metaAnioInicio,
-          ultimo_anio: metaUltimoAnio,
-          ultimo_trimestre: metaUltimoTrim,
-          etiqueta_corte: etiquetaCorte,
-          etiqueta_pesos_base: `Pesos constantes ${etiquetaCorte}`,
-          inpc_base: metaInpcBase.trim() !== '' ? Number(metaInpcBase) : null,
-          costos_roi: costosRoi
-        };
+      // Planear la cola de lotes pequeños en orden seguro (catálogo -> satélites -> mercado -> prepa)
+      const trabajos: { tabla: TablaLote; etiqueta: string; filas: Record<string, string>[] }[] = [];
+      if (archivoDim && archivoDim.filas.length > 0) {
+        trabajos.push({ tabla: 'dim_carreras', etiqueta: 'dim_carreras', filas: archivoDim.filas });
+      }
+      if (archivoSat && archivoSat.filas.length > 0) {
+        trabajos.push({ tabla: 'satelites_cultura', etiqueta: 'satelites_cultura', filas: archivoSat.filas });
+      }
+      if (archivoSatPrepa && archivoSatPrepa.filas.length > 0) {
+        trabajos.push({ tabla: 'satelites_prepa', etiqueta: 'satelites_prepa', filas: archivoSatPrepa.filas });
+      }
+      if (archivoPred && archivoPred.filas.length > 0) {
+        trabajos.push({ tabla: 'predicciones_roi', etiqueta: 'predicciones_roi', filas: archivoPred.filas });
+      }
+      if (archivoPrepa && archivoPrepa.filas.length > 0) {
+        trabajos.push({ tabla: 'benchmarks_prepa', etiqueta: 'benchmarks_prepa', filas: archivoPrepa.filas });
       }
 
-      const res = await fetch('/api/ingesta', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-ingesta-token': adminToken.trim()
-        },
-        body: JSON.stringify(payload)
+      const totalLotes = trabajos.reduce(
+        (acc, t) => acc + Math.ceil(t.filas.length / LOTE_POR_TABLA[t.tabla]),
+        0
+      );
+      const totalPasos = totalLotes + 2; // iniciar + lotes + finalizar
+      let paso = 1;
+
+      // FASE 1: INICIAR (valida clave y toma foto "Antes")
+      setProgreso({ pasoActual: paso, totalPasos, texto: 'Autenticando y capturando estado actual de Supabase...' });
+      const resInicio = await postIngesta({ accion: 'iniciar', dryRun: modoDryRun });
+      const snapshotAntes = resInicio.snapshotAntes;
+
+      // FASE 2: ENVIAR LOTES PEQUEÑOS SECUENCIALMENTE (<= 350 KB cada uno)
+      const conteos: Record<TablaLote, number> = {
+        dim_carreras: 0,
+        satelites_cultura: 0,
+        satelites_prepa: 0,
+        predicciones_roi: 0,
+        benchmarks_prepa: 0
+      };
+      const aniosPredSet = new Set<number>();
+
+      for (const job of trabajos) {
+        const tam = LOTE_POR_TABLA[job.tabla];
+        const numLotesJob = Math.ceil(job.filas.length / tam);
+
+        for (let i = 0; i < job.filas.length; i += tam) {
+          paso += 1;
+          const idxLote = Math.floor(i / tam) + 1;
+          setProgreso({
+            pasoActual: paso,
+            totalPasos,
+            texto: `${modoDryRun ? 'Validando' : 'Subiendo'} ${job.etiqueta}: lote ${idxLote} de ${numLotesJob}...`
+          });
+
+          const slice = job.filas.slice(i, i + tam);
+          const resLote = await postIngesta({
+            accion: 'lote',
+            dryRun: modoDryRun,
+            tabla: job.tabla,
+            filas: slice,
+            offsetFila: i
+          });
+
+          conteos[job.tabla] += Number(resLote.procesadas || 0);
+          if (job.tabla === 'predicciones_roi' && Array.isArray(resLote.aniosDetectados)) {
+            resLote.aniosDetectados.forEach((a: number) => aniosPredSet.add(a));
+          }
+        }
+      }
+
+      // FASE 3: FINALIZAR (meta_pipeline + revalidación de caché + diff Antes vs Después)
+      paso += 1;
+      setProgreso({
+        pasoActual: paso,
+        totalPasos,
+        texto: modoDryRun ? 'Compilando resumen de simulación...' : 'Actualizando corte, revalidando rutas y calculando impacto...'
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error || `Error HTTP ${res.status} al procesar la ingesta.`);
-      }
+      const etiquetaCorte = `${metaUltimoAnio} Q${metaUltimoTrim}`;
+      const metaPayload =
+        editarMetaActivo || nombreJsonMeta || (archivoPred && archivoPred.filas.length > 0)
+          ? {
+              anio_inicio: metaAnioInicio,
+              ultimo_anio: metaUltimoAnio,
+              ultimo_trimestre: metaUltimoTrim,
+              etiqueta_corte: etiquetaCorte,
+              etiqueta_pesos_base: `Pesos constantes ${etiquetaCorte}`,
+              inpc_base: metaInpcBase.trim() !== '' ? Number(metaInpcBase) : null,
+              costos_roi: costosRoi
+            }
+          : null;
 
-      setResultadoIngesta(data);
+      const dataFinal = await postIngesta({
+        accion: 'finalizar',
+        dryRun: modoDryRun,
+        snapshotAntes,
+        conteos,
+        aniosDetectadosPred: Array.from(aniosPredSet),
+        meta_pipeline: metaPayload
+      });
+
+      setResultadoIngesta(dataFinal);
 
       if (!modoDryRun) {
         window.dispatchEvent(new CustomEvent(EVENTO_DATOS_ACTUALIZADOS));
@@ -310,10 +416,14 @@ export default function ActualizarDatosPage() {
       setErrorEnvio(err?.message || 'Ocurrió un error inesperado durante la carga.');
     } finally {
       setEnviando(false);
+      setProgreso(null);
     }
   };
 
   const snap = estadoActual?.snapshot;
+  const pctProgreso = progreso
+    ? Math.min(100, Math.round((progreso.pasoActual / Math.max(1, progreso.totalPasos)) * 100))
+    : 0;
 
   return (
     <main className="max-w-6xl mx-auto p-4 md:px-8 md:py-6 space-y-6 pb-20 font-sans">
@@ -323,13 +433,13 @@ export default function ActualizarDatosPage() {
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-800">
           <div>
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/20 border border-blue-400/35 text-blue-300 text-[11px] font-extrabold uppercase tracking-wider mb-2.5">
-              <UploadCloud className="w-3.5 h-3.5" aria-hidden="true" /> Ingesta en Tiempo Real · Cero Hardcodeo
+              <UploadCloud className="w-3.5 h-3.5" aria-hidden="true" /> Ingesta en Tiempo Real por Lotes · A Prueba de Vercel
             </span>
             <h1 className="text-2xl md:text-3xl font-black tracking-tight">
               Centro de Actualización de Cortes ENOE / ANUIES
             </h1>
             <p className="text-xs md:text-sm text-slate-300 mt-1 max-w-2xl">
-              Sube los archivos procesados por tu pipeline de Python (Licenciatura + Preparatoria). El servidor valida esquemas, ejecuta <code className="text-emerald-300">UPSERT</code> en Supabase, limpia la caché y actualiza toda la plataforma en segundos.
+              Sube los archivos procesados por tu pipeline de Python (Licenciatura + Preparatoria). El sistema divide automáticamente cada tabla en paquetes pequeños, ejecuta <code className="text-emerald-300">UPSERT</code> en Supabase, revalida todas las rutas y calcula el impacto en vivo.
             </p>
           </div>
 
@@ -423,7 +533,7 @@ export default function ActualizarDatosPage() {
                 1. Selecciona los archivos del nuevo corte (processed_data/)
               </h2>
               <p className="text-xs text-slate-500">
-                Puedes subir los 5 archivos a la vez o solo los que se actualizaron en este corte.
+                Puedes subir todos a la vez o solo los que cambiaron; el envío se divide automáticamente en lotes pequeños.
               </p>
             </div>
           </div>
@@ -568,7 +678,7 @@ export default function ActualizarDatosPage() {
               )}
             </div>
 
-            {/* 4. satelites_prepa (NUEVO) */}
+            {/* 4. satelites_prepa */}
             <div className={`p-4 rounded-2xl border-2 border-dashed transition-all ${
               archivoSatPrepa?.error
                 ? 'border-rose-300 bg-rose-50/40'
@@ -660,7 +770,7 @@ export default function ActualizarDatosPage() {
 
           </div>
 
-          {/* EDITOR MANUAL DE CORTE Y PARÁMETROS ROI */}
+          {/* EDITOR MANUAL DE CORTE, COSTOS ROI Y CATÁLOGO CMPE OPCIONAL */}
           <div className="pt-3 border-t border-slate-100">
             <button
               type="button"
@@ -668,7 +778,7 @@ export default function ActualizarDatosPage() {
               className="inline-flex items-center gap-1.5 text-xs font-black text-blue-600 hover:text-blue-800 cursor-pointer"
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
-              {editarMetaActivo ? 'Ocultar configuración de corte y costos ROI' : 'Configurar manualmente etiqueta del corte (ej. 2026 Q3) y costos ROI'}
+              {editarMetaActivo ? 'Ocultar configuración avanzada (corte, costos ROI y catálogo CMPE)' : 'Configuración avanzada: etiqueta del corte, costos ROI o nuevas claves CMPE'}
             </button>
 
             {editarMetaActivo && (
@@ -756,12 +866,49 @@ export default function ActualizarDatosPage() {
                     </div>
                   ))}
                 </div>
+
+                {/* Cargador opcional de catálogo CMPE (dim_carreras) por si el INEGI incorpora nuevas carreras */}
+                <div className="pt-3 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-slate-600 shrink-0" />
+                    <div>
+                      <span className="font-black text-slate-800 block">Catálogo CMPE opcional (dim_carreras)</span>
+                      <span className="text-[10.5px] text-slate-500">
+                        {archivoDim
+                          ? (archivoDim.error || `✓ ${archivoDim.nombre} (${archivoDim.resumen})`)
+                          : 'Úsalo solo si el INEGI agrega nuevas claves de licenciatura (cols: cve_carrera, nombre_carrera).'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="cursor-pointer">
+                      <input
+                        type="file"
+                        accept=".csv"
+                        className="hidden"
+                        onChange={e => {
+                          const f = e.target.files?.[0];
+                          if (f) manejarCSV(f, COLS_REQ_DIM, setArchivoDim, 'dim');
+                          e.target.value = '';
+                        }}
+                      />
+                      <span className="inline-block px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:border-blue-500 hover:text-blue-600">
+                        {archivoDim ? 'Cambiar CSV' : 'Subir dim_carreras.csv'}
+                      </span>
+                    </label>
+                    {archivoDim && (
+                      <button type="button" onClick={() => setArchivoDim(null)} className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer" title="Quitar archivo">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* COLUMNA DERECHA: SEGURIDAD Y DISPARO */}
+        {/* COLUMNA DERECHA: SEGURIDAD, PROGRESO POR LOTES Y DISPARO */}
         <div className="lg:col-span-4 bg-white rounded-3xl p-6 border border-slate-200/90 shadow-xs flex flex-col justify-between space-y-5">
           <div className="space-y-4">
             <h2 className="text-base font-black text-slate-900 flex items-center gap-2 pb-3 border-b border-slate-100">
@@ -792,9 +939,24 @@ export default function ActualizarDatosPage() {
               />
               <span className="text-xs text-slate-700 leading-snug">
                 <strong className="block font-black text-slate-900">Modo Simulación (Dry-Run)</strong>
-                Valida columnas, llaves y tipos en el servidor sin modificar Supabase.
+                Valida columnas, llaves y tipos lote por lote en el servidor sin modificar Supabase.
               </span>
             </label>
+
+            {progreso && (
+              <div className="p-3.5 rounded-xl bg-blue-50/80 border border-blue-200 space-y-2">
+                <div className="flex items-center justify-between text-[11px] font-black text-blue-900">
+                  <span className="truncate pr-2">{progreso.texto}</span>
+                  <span className="shrink-0">{pctProgreso}%</span>
+                </div>
+                <div className="w-full h-2 bg-blue-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-blue-600 to-indigo-500 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.max(6, pctProgreso)}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             {errorEnvio && (
               <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-start gap-2">
@@ -820,12 +982,12 @@ export default function ActualizarDatosPage() {
               {enviando ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Procesando UPSERT y revalidando...
+                  Procesando lote ({pctProgreso}%)...
                 </>
               ) : modoDryRun ? (
                 <>
                   <ShieldCheck className="w-4 h-4" />
-                  Validar Archivos (Sin Escribir)
+                  Validar Archivos por Lotes (Sin Escribir)
                 </>
               ) : (
                 <>
@@ -836,7 +998,7 @@ export default function ActualizarDatosPage() {
             </button>
 
             <p className="text-[10.5px] text-slate-400 text-center">
-              Los índices <code className="font-mono">UNIQUE</code> garantizan que ningún registro se duplique al re-subir un periodo.
+              Cada paquete pesa {'<'}350 KB (compatible con Vercel) y los índices <code className="font-mono">UNIQUE</code> impiden duplicados.
             </p>
           </div>
         </div>
