@@ -3,6 +3,26 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
+  REGIONES_ORDEN,
+  ESTADOS_POR_REGION,
+  EVENTO_DATOS_ACTUALIZADOS,
+  META_PIPELINE_FALLBACK,
+  BenchmarksPrepaMap,
+  MetaPipelineInfo,
+  CodigoGenero,
+  RegionClave,
+  cargarBenchmarksPrepaRows,
+  cargarSatelitesPrepaRows,
+  cargarMetaPipeline,
+  construirBenchmarksPrepaMap,
+  calcularVentanasTemporales,
+  calcularSueldoConsolidadoCelda,
+  clasificarTendenciaRealDinamica,
+  descargarTodoPaginado,
+  normalizarRegion,
+  numSeguro
+} from '@/lib/dataroiEngine';
+import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import {
@@ -10,67 +30,8 @@ import {
   Microscope, AlertCircle, Info
 } from 'lucide-react';
 
+export { ESTADOS_POR_REGION };
 export type ModoGeneroEstricto = 'total' | 'mujeres' | 'hombres';
-
-const MAPA_KISH_VACIO: Record<string, number> = {};
-
-export const BENCHMARK_PREPA: Record<string, {
-  sueldo_general: number;
-  sueldo_hombres: number;
-  sueldo_mujeres: number;
-  formalidad_prepa_pct: number;
-  formalidad_lic_pct: number;
-  sueldo_lic_promedio: number;
-  historico_anual: Record<string, number>;
-}> = {
-  nacional: {
-    sueldo_general: 10608, sueldo_hombres: 11832, sueldo_mujeres: 8762,
-    formalidad_prepa_pct: 50.1, formalidad_lic_pct: 70.3, sueldo_lic_promedio: 15534,
-    historico_anual: { "2021": 8850, "2022": 9111, "2023": 9528, "2024": 9960, "2025": 10393, "2026": 10787 }
-  },
-  norte: {
-    sueldo_general: 12816, sueldo_hombres: 14113, sueldo_mujeres: 10775,
-    formalidad_prepa_pct: 66.3, formalidad_lic_pct: 78.2, sueldo_lic_promedio: 17917,
-    historico_anual: { "2021": 10700, "2022": 11018, "2023": 11741, "2024": 12199, "2025": 12705, "2026": 12920 }
-  },
-  noroeste: {
-    sueldo_general: 11858, sueldo_hombres: 13365, sueldo_mujeres: 9748,
-    formalidad_prepa_pct: 54.0, formalidad_lic_pct: 71.4, sueldo_lic_promedio: 15495,
-    historico_anual: { "2021": 9800, "2022": 10106, "2023": 11079, "2024": 11026, "2025": 11750, "2026": 11965 }
-  },
-  bajio: {
-    sueldo_general: 10478, sueldo_hombres: 11731, sueldo_mujeres: 8707,
-    formalidad_prepa_pct: 53.2, formalidad_lic_pct: 72.3, sueldo_lic_promedio: 14742,
-    historico_anual: { "2021": 9000, "2022": 9275, "2023": 9454, "2024": 10077, "2025": 10228, "2026": 10684 }
-  },
-  centro: {
-    sueldo_general: 9889, sueldo_hombres: 11119, sueldo_mujeres: 8069,
-    formalidad_prepa_pct: 45.3, formalidad_lic_pct: 68.3, sueldo_lic_promedio: 16000,
-    historico_anual: { "2021": 8050, "2022": 8234, "2023": 8431, "2024": 8663, "2025": 9295, "2026": 10289 }
-  },
-  sur: {
-    sueldo_general: 9150, sueldo_hombres: 10195, sueldo_mujeres: 7469,
-    formalidad_prepa_pct: 37.9, formalidad_lic_pct: 61.9, sueldo_lic_promedio: 13023,
-    historico_anual: { "2021": 7550, "2022": 7802, "2023": 8270, "2024": 8924, "2025": 9036, "2026": 9255 }
-  }
-};
-
-export const ESTADOS_POR_REGION: Record<string, string[]> = {
-  norte: ['02', '05', '08', '19', '26', '28'],
-  noroeste: ['03', '10', '18', '25'],
-  bajio: ['01', '06', '11', '14', '16', '22', '24', '32'],
-  centro: ['09', '13', '15', '17', '21', '29'],
-  sur: ['04', '07', '12', '20', '23', '27', '30', '31']
-};
-
-const PARIDAD_REGIONAL_LIC: Record<string, number> = {
-  nacional: 1.0,
-  norte: 17917 / 15534,
-  noroeste: 15495 / 15534,
-  bajio: 14742 / 15534,
-  centro: 16000 / 15534,
-  sur: 13023 / 15534
-};
 
 const formatoMoneda = (valor: any) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(Number(valor) || 0);
@@ -81,7 +42,7 @@ const formatoTickExacto5k = (valor: any) => {
   return `$${Math.round(n / 1000)}k`;
 };
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+const CustomTooltip = ({ active, payload, label, etiquetaPesos }: any) => {
   if (active && payload && payload.length) {
     const itemLic = payload.find((p: any) => !String(p.name).includes('Preparatoria'));
     const itemPrepa = payload.find((p: any) => String(p.name).includes('Preparatoria'));
@@ -92,9 +53,9 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
     return (
       <div className="bg-slate-900/95 backdrop-blur-md p-3.5 border border-slate-700 shadow-2xl rounded-2xl z-50 min-w-[235px] text-white">
-        <p className="font-black text-slate-300 mb-2 border-b border-slate-700/80 pb-1.5 text-xs uppercase tracking-wider flex items-center justify-between">
+        <p className="font-black text-slate-300 mb-2 border-b border-slate-700/80 pb-1.5 text-xs uppercase tracking-wider flex items-center justify-between gap-2">
           <span>Corte ENOE {label}</span>
-          <span className="text-[10px] font-bold text-blue-400">Pesos Reales 2026</span>
+          <span className="text-[10px] font-bold text-blue-400">{etiquetaPesos}</span>
         </p>
         {payload.map((entry: any, index: number) => {
           if (entry.value == null) return null;
@@ -138,6 +99,7 @@ export interface SueldoRegionalItem {
   region: string;
   sueldoCarrera: number;
   sueldoPrepa: number;
+  formalidadPrepaPct: number;
   premioPct: number;
   pea: number;
   tasaDesempleo: number;
@@ -170,161 +132,97 @@ export interface ResumenMercadoRegion {
   usandoFallbackNacional: boolean;
   comparativaRegiones: SueldoRegionalItem[];
   serieAnualReal: PuntoAnualRealItem[];
-}
-
-function calcularSueldoRegionalBuhlmann(
-  sueldoObsCrudo: number,
-  sueldoNac: number,
-  reg: string,
-  nEfectivoKish: number
-): number {
-  if (reg === 'nacional' || sueldoNac <= 0) {
-    return Math.round(sueldoObsCrudo);
-  }
-  const anclaParidad = sueldoNac * (PARIDAD_REGIONAL_LIC[reg] || 1.0);
-  if (sueldoObsCrudo <= 0) {
-    return Math.round(anclaParidad);
-  }
-  const obsAcotado = Math.max(anclaParidad * 0.78, Math.min(anclaParidad * 1.18, sueldoObsCrudo));
-  const K = 140.0;
-  const z = nEfectivoKish > 0 ? nEfectivoKish / (nEfectivoKish + K) : 0.50;
-  return Math.round(z * obsAcotado + (1.0 - z) * anclaParidad);
-}
-
-function clasificarTendenciaReal21_26(puntosAnuales: { anio: number; sueldo: number | null }[]) {
-  const validos = puntosAnuales
-    .filter(p => p.sueldo != null && p.sueldo > 0)
-    .sort((a, b) => a.anio - b.anio) as { anio: number; sueldo: number }[];
-
-  if (validos.length < 4) {
-    return { etiqueta: 'Estable', codigo: 'estable' as const };
-  }
-
-  const sueldos = validos.map(p => p.sueldo);
-
-  let maxSalto = 0;
-  for (let i = 1; i < sueldos.length; i++) {
-    const salto = Math.abs(sueldos[i] - sueldos[i - 1]) / sueldos[i - 1];
-    if (salto > maxSalto) maxSalto = salto;
-  }
-
-  const media = sueldos.reduce((a, b) => a + b, 0) / sueldos.length;
-  const varianza = sueldos.reduce((a, b) => a + Math.pow(b - media, 2), 0) / sueldos.length;
-  const cv = Math.sqrt(varianza) / (media || 1);
-
-  if (maxSalto > 0.22 || cv > 0.16) {
-    return { etiqueta: 'Volátil', codigo: 'volatil' as const };
-  }
-
-  const ptsBase = validos.filter(p => p.anio === 2022 || p.anio === 2023).map(p => p.sueldo);
-  const ptsRec  = validos.filter(p => p.anio === 2025 || p.anio === 2026).map(p => p.sueldo);
-
-  const sueldoBase = ptsBase.length > 0 ? ptsBase.reduce((a, b) => a + b, 0) / ptsBase.length : sueldos[0];
-  const sueldoRec  = ptsRec.length > 0 ? ptsRec.reduce((a, b) => a + b, 0) / ptsRec.length : sueldos[sueldos.length - 1];
-
-  const crecRealAcum = sueldoBase > 0 ? (sueldoRec - sueldoBase) / sueldoBase : 0;
-
-  const postPandemia = validos.filter(p => p.anio >= 2022);
-  const loteEval = postPandemia.length >= 3 ? postPandemia : validos;
-  const aniosEval = loteEval.map(p => p.anio);
-  const sueldosEval = loteEval.map(p => p.sueldo);
-  const mediaEval = sueldosEval.reduce((a, b) => a + b, 0) / sueldosEval.length;
-
-  const meanX = aniosEval.reduce((a, b) => a + b, 0) / aniosEval.length;
-  const num = aniosEval.reduce((acc, x, idx) => acc + (x - meanX) * (sueldosEval[idx] - mediaEval), 0);
-  const den = aniosEval.reduce((acc, x) => acc + Math.pow(x - meanX, 2), 0) || 1;
-  const pendientePct = (num / den) / (mediaEval || 1);
-
-  if (crecRealAcum >= 0.040 && pendientePct >= 0.008) {
-    return { etiqueta: 'En crecimiento', codigo: 'crecimiento' as const };
-  }
-  if (crecRealAcum <= -0.040 && pendientePct <= -0.008) {
-    return { etiqueta: 'En ajuste', codigo: 'ajuste' as const };
-  }
-  return { etiqueta: 'Estable', codigo: 'estable' as const };
-}
-
-function agruparPuntosAnualesZona(filasZona: any[]): { anio: number; sueldo: number | null }[] {
-  const mapa: Record<number, { prod: number; pob: number }> = {};
-  filasZona.forEach(r => {
-    const a = Number(r.anio);
-    const s = Number(r.sueldo_promedio_mensual || 0);
-    const p = Math.max(1, Number(r.poblacion_activa_total || 1));
-    if (a >= 2021 && a <= 2026 && s > 0) {
-      if (!mapa[a]) mapa[a] = { prod: 0, pob: 0 };
-      mapa[a].prod += s * p;
-      mapa[a].pob += p;
-    }
-  });
-  return Object.entries(mapa).map(([anioStr, obj]) => ({
-    anio: Number(anioStr),
-    sueldo: obj.pob > 0 ? Math.round(obj.prod / obj.pob) : null
-  }));
+  rangoAniosTexto?: string;
+  cierreTexto?: string;
+  etiquetaCorte?: string;
+  etiquetaPesosBase?: string;
 }
 
 export default function GraficaPredictiva({
   cve_carrera,
   regionActiva = 'nacional',
   modoGenero = 'total',
-  mapaKishPorRegion,
-  onModoGeneroChange,
+  benchmarksPrepaExterno,
+  metaPipelineExterno,
   onStatsChange
 }: {
   cve_carrera: string;
   regionActiva?: string;
   modoGenero?: ModoGeneroEstricto;
   mapaKishPorRegion?: Record<string, number>;
-  onModoGeneroChange?: (nuevoModo: ModoGeneroEstricto) => void;
+  benchmarksPrepaExterno?: BenchmarksPrepaMap | null;
+  metaPipelineExterno?: MetaPipelineInfo | null;
   onStatsChange?: (stats: ResumenMercadoRegion) => void;
 }) {
   const [rawData, setRawData] = useState<any[]>([]);
+  const [prepaMapLocal, setPrepaMapLocal] = useState<BenchmarksPrepaMap | null>(null);
+  const [metaLocal, setMetaLocal] = useState<MetaPipelineInfo>(META_PIPELINE_FALLBACK);
   const [loading, setLoading] = useState(true);
+  const [reloadTick, setReloadTick] = useState(0);
 
   const ultimaFirmaEmitidaRef = useRef<string>('');
 
-  const kishSeguro = mapaKishPorRegion || MAPA_KISH_VACIO;
-  const firmaKish = `${kishSeguro.nacional || 0}_${kishSeguro.norte || 0}_${kishSeguro.noroeste || 0}_${kishSeguro.bajio || 0}_${kishSeguro.centro || 0}_${kishSeguro.sur || 0}`;
+  useEffect(() => {
+    const onDataUpdated = () => setReloadTick(t => t + 1);
+    window.addEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
+    return () => window.removeEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
+  }, []);
 
   useEffect(() => {
+    let cancelado = false;
     async function fetchPredicciones() {
       setLoading(true);
       const cveSinCero = String(Number(cve_carrera));
-      const { data, error } = await supabase
-        .from('predicciones_roi')
-        .select(`
-          anio, cve_ent, sexo, is_stem, poblacion_activa_total, desempleados_reales, 
-          indice_saturacion_pct, sueldo_promedio_mensual, tipo_dato
-        `)
-        .in('cve_carrera', [cve_carrera, cveSinCero])
-        .eq('tipo_dato', 'Real')
-        .order('anio', { ascending: true })
-        .limit(1000);
 
-      if (data) {
-        const datosLimpios = data.map(row => {
-          const entRaw = String(row.cve_ent || 'nacional').toLowerCase().trim();
-          let regNorm = entRaw;
-          if (entRaw === '0' || entRaw === '00' || entRaw === 'nacional') {
-            regNorm = 'nacional';
-          } else if (!['norte', 'noroeste', 'bajio', 'centro', 'sur'].includes(entRaw)) {
-            const entPad = entRaw.padStart(2, '0');
-            const encontrada = Object.entries(ESTADOS_POR_REGION).find(([, lista]) => lista.includes(entPad));
-            if (encontrada) regNorm = encontrada[0];
-          }
-          return {
-            ...row,
-            cve_ent: regNorm,
-            sexo: Number(row.sexo ?? 0)
-          };
-        });
-        setRawData(datosLimpios);
+      const [predRows, prepaRows, satPrepaRows, metaInfo] = await Promise.all([
+        descargarTodoPaginado(() =>
+          supabase
+            .from('predicciones_roi')
+            .select(`
+              anio, cve_ent, sexo, is_stem, poblacion_activa_total, desempleados_reales,
+              indice_saturacion_pct, sueldo_promedio_mensual, tipo_dato
+            `)
+            .in('cve_carrera', [cve_carrera, cveSinCero])
+            .eq('tipo_dato', 'Real')
+            .order('anio', { ascending: true })
+            .order('cve_ent', { ascending: true })
+            .order('sexo', { ascending: true })
+        ),
+        benchmarksPrepaExterno ? Promise.resolve(null) : cargarBenchmarksPrepaRows(supabase),
+        benchmarksPrepaExterno ? Promise.resolve(null) : cargarSatelitesPrepaRows(supabase),
+        metaPipelineExterno ? Promise.resolve(metaPipelineExterno) : cargarMetaPipeline(supabase)
+      ]);
+
+      if (cancelado) return;
+
+      const datosLimpios = (predRows || []).map((row: any) => ({
+        ...row,
+        cve_ent: normalizarRegion(row.cve_ent),
+        sexo: Number(row.sexo ?? 0),
+        anio: Number(row.anio)
+      }));
+
+      setRawData(datosLimpios);
+      setMetaLocal(metaInfo);
+
+      if (prepaRows) {
+        const ventanasPre = calcularVentanasTemporales(
+          datosLimpios.map(r => r.anio),
+          metaInfo
+        );
+        setPrepaMapLocal(construirBenchmarksPrepaMap(prepaRows, ventanasPre, satPrepaRows || undefined));
       }
 
-      if (error) console.error("Error de Supabase:", error.message);
       setLoading(false);
     }
     fetchPredicciones();
-  }, [cve_carrera]);
+    return () => {
+      cancelado = true;
+    };
+  }, [cve_carrera, reloadTick, benchmarksPrepaExterno, metaPipelineExterno]);
+
+  const metaActiva = metaPipelineExterno || metaLocal;
+  const benchPrepaMapActivo = benchmarksPrepaExterno || prepaMapLocal;
 
   const {
     chartData,
@@ -334,90 +232,77 @@ export default function GraficaPredictiva({
     isStem,
     resumen,
     usandoFallbackNacional,
-    muestraModeradaAviso
+    muestraModeradaAviso,
+    ventanas
   } = useMemo(() => {
-    const benchRegion = BENCHMARK_PREPA[regionActiva] || BENCHMARK_PREPA.nacional;
-    const targetSexo = modoGenero === 'hombres' ? 1 : modoGenero === 'mujeres' ? 2 : 0;
+    const targetSexo: CodigoGenero = modoGenero === 'hombres' ? 1 : modoGenero === 'mujeres' ? 2 : 0;
+    const regNorm: RegionClave = normalizarRegion(regionActiva);
+    const v = calcularVentanasTemporales(rawData.map(r => r.anio), metaActiva);
 
-    const extraerSerieZona = (zona: string, sx: number) => {
-      const directas = rawData.filter(r => r.cve_ent === zona && r.sexo === sx && r.anio >= 2021 && r.anio <= 2026);
+    const obtenerPrepaZona = (zona: RegionClave, sx: CodigoGenero) => {
+      const regData = benchPrepaMapActivo?.[zona] || benchPrepaMapActivo?.nacional;
+      if (regData) {
+        return {
+          sueldo: regData.sueldo_prepa[sx] || regData.sueldo_prepa[0] || 0,
+          formalidad: regData.formalidad_prepa_pct[sx] || regData.formalidad_prepa_pct[0] || 0,
+          historico: regData.historico_por_sexo[sx] || regData.historico_por_sexo[0] || {}
+        };
+      }
+      return { sueldo: 0, formalidad: 0, historico: {} as Record<number, number> };
+    };
+
+    const extraerSerieZona = (zona: RegionClave, sx: CodigoGenero) => {
+      const directas = rawData.filter(r => r.cve_ent === zona && r.sexo === sx);
       if (directas.length > 0) return directas;
       if (sx === 0) {
-        return rawData.filter(r => r.cve_ent === zona && (r.sexo === 1 || r.sexo === 2) && r.anio >= 2021 && r.anio <= 2026);
+        return rawData.filter(r => r.cve_ent === zona && (r.sexo === 1 || r.sexo === 2));
       }
       return [];
     };
 
-    const calcularPonderado = (filas: any[]) => {
-      const validas = filas.filter(r => Number(r.sueldo_promedio_mensual || 0) > 0);
-      if (validas.length === 0) return 0;
-      const pob = validas.reduce((acc, c) => acc + Math.max(1, Number(c.poblacion_activa_total || 1)), 0);
-      if (pob <= 0) return 0;
-      return validas.reduce((acc, c) => acc + Number(c.sueldo_promedio_mensual) * Math.max(1, Number(c.poblacion_activa_total || 1)), 0) / pob;
-    };
-
     const filasNac = extraerSerieZona('nacional', targetSexo);
-    const filasNac25_26 = filasNac.filter(r => r.anio === 2025 || r.anio === 2026);
-    const sueldoNacionalBase = Math.round(
-      calcularPonderado(filasNac25_26.length > 0 ? filasNac25_26 : filasNac)
-    );
+    const sueldoNacionalBase = calcularSueldoConsolidadoCelda(filasNac, v);
 
-    const filasNac22_26 = filasNac.filter(r => r.anio >= 2022 && r.anio <= 2026);
-    const loteNacEmp = filasNac22_26.length > 0 ? filasNac22_26 : filasNac;
-    const sumaPeaNac = loteNacEmp.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0);
-    const sumaDesNac = loteNacEmp.reduce((a, b) => a + Number(b.desempleados_reales || 0), 0);
+    const filasNacEmp = filasNac.filter(r => v.aniosEmpleo.includes(r.anio));
+    const loteNacEmp = filasNacEmp.length > 0 ? filasNacEmp : filasNac;
+    const sumaPeaNac = loteNacEmp.reduce((a, b) => a + numSeguro(b.poblacion_activa_total, 0), 0);
+    const sumaDesNac = loteNacEmp.reduce((a, b) => a + numSeguro(b.desempleados_reales, 0), 0);
     const desempleoNacionalBase = sumaPeaNac > 0 ? Math.max(0.8, (sumaDesNac / sumaPeaNac) * 100) : 3.2;
 
-    const filasNacConSat = filasNac.filter(r => Number(r.indice_saturacion_pct) > 5);
+    const filasNacConSat = filasNac.filter(r => numSeguro(r.indice_saturacion_pct, 0) > 5);
     const saturacionNacionalBase = filasNacConSat.length > 0
-      ? filasNacConSat.reduce((acc, c) => acc + Number(c.indice_saturacion_pct), 0) / filasNacConSat.length
+      ? filasNacConSat.reduce((acc, c) => acc + numSeguro(c.indice_saturacion_pct, 92), 0) / filasNacConSat.length
       : 92;
 
-    const tendenciaNacionalBase = clasificarTendenciaReal21_26(agruparPuntosAnualesZona(filasNac));
+    const tendenciaNacionalBase = clasificarTendenciaRealDinamica(filasNac, v);
 
-    const ordenZonas = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'];
-
-    // Cada macro-región calcula y conserva sus propios indicadores (independientes de regionActiva)
-    const comparativaRegiones: SueldoRegionalItem[] = ordenZonas.map(zona => {
+    const comparativaRegiones: SueldoRegionalItem[] = REGIONES_ORDEN.map(zona => {
       const serieZ = extraerSerieZona(zona, targetSexo);
-      const serieZ22_26 = serieZ.filter(r => r.anio >= 2022 && r.anio <= 2026);
-      const serieZ25_26 = serieZ.filter(r => r.anio === 2025 || r.anio === 2026);
+      const serieZEmp = serieZ.filter(r => v.aniosEmpleo.includes(r.anio));
+      const lotePeaZ = serieZEmp.length > 0 ? serieZEmp : serieZ;
 
-      const lotePeaZ = serieZ22_26.length > 0 ? serieZ22_26 : serieZ;
       const peaZ = lotePeaZ.length > 0
-        ? Math.round(lotePeaZ.reduce((acc, c) => acc + Number(c.poblacion_activa_total || 0), 0) / lotePeaZ.length)
+        ? Math.round(lotePeaZ.reduce((acc, c) => acc + numSeguro(c.poblacion_activa_total, 0), 0) / lotePeaZ.length)
         : 0;
 
-      const sumaPeaZ = lotePeaZ.reduce((acc, c) => acc + Number(c.poblacion_activa_total || 0), 0);
-      const sumaDesZ = lotePeaZ.reduce((acc, c) => acc + Number(c.desempleados_reales || 0), 0);
+      const sumaPeaZ = lotePeaZ.reduce((acc, c) => acc + numSeguro(c.poblacion_activa_total, 0), 0);
+      const sumaDesZ = lotePeaZ.reduce((acc, c) => acc + numSeguro(c.desempleados_reales, 0), 0);
       const tasaDesempleoZ = sumaPeaZ > 0 ? Math.max(0.8, (sumaDesZ / sumaPeaZ) * 100) : desempleoNacionalBase;
 
-      const fila2026Z = serieZ.find(r => Number(r.anio) === 2026) || serieZ[serieZ.length - 1];
-      const satRawZ = Number(fila2026Z?.indice_saturacion_pct || 0);
+      const filaRecZ = serieZ.find(r => r.anio === v.anioMax) || serieZ[serieZ.length - 1];
+      const satRawZ = numSeguro(filaRecZ?.indice_saturacion_pct, 0);
       const saturacionZ = satRawZ > 5 ? satRawZ : saturacionNacionalBase;
 
-      const ptsAnualesZ = agruparPuntosAnualesZona(serieZ);
-      const tendenciaZ = ptsAnualesZ.length >= 4
-        ? clasificarTendenciaReal21_26(ptsAnualesZ)
+      const tendenciaZ = serieZ.length >= 4
+        ? clasificarTendenciaRealDinamica(serieZ, v)
         : tendenciaNacionalBase;
 
-      const sueldoObsCrudo = calcularPonderado(serieZ25_26.length > 0 ? serieZ25_26 : serieZ22_26);
-      const nKishZ = kishSeguro[zona] || 0;
+      const sueldoObsZ = calcularSueldoConsolidadoCelda(serieZ, v, 0);
+      const sinMuestraRegional = zona !== 'nacional' && (sueldoObsZ <= 0 || serieZ.length === 0);
+      const sueldoZ = sueldoObsZ > 0 ? sueldoObsZ : sueldoNacionalBase;
 
-      const sueldoZ = zona === 'nacional'
-        ? sueldoNacionalBase
-        : (sueldoObsCrudo > 0
-            ? (nKishZ > 0 ? calcularSueldoRegionalBuhlmann(sueldoObsCrudo, sueldoNacionalBase, zona, nKishZ) : Math.round(sueldoObsCrudo))
-            : sueldoNacionalBase);
-
-      const sinMuestraRegional = zona !== 'nacional' && (sueldoObsCrudo <= 0 || serieZ.length === 0);
-
-      const bZ = BENCHMARK_PREPA[zona] || BENCHMARK_PREPA.nacional;
-      const prepaZ =
-        modoGenero === 'hombres' ? bZ.sueldo_hombres :
-        modoGenero === 'mujeres' ? bZ.sueldo_mujeres :
-        bZ.sueldo_general;
-
+      const prepaZObj = obtenerPrepaZona(zona, targetSexo);
+      const prepaZ = prepaZObj.sueldo;
       const premioZ = prepaZ > 0 && sueldoZ > 0
         ? Number((((sueldoZ - prepaZ) / prepaZ) * 100).toFixed(1))
         : 0;
@@ -426,6 +311,7 @@ export default function GraficaPredictiva({
         region: zona,
         sueldoCarrera: sueldoZ,
         sueldoPrepa: prepaZ,
+        formalidadPrepaPct: prepaZObj.formalidad,
         premioPct: premioZ,
         pea: peaZ,
         tasaDesempleo: Number(tasaDesempleoZ.toFixed(1)),
@@ -435,24 +321,21 @@ export default function GraficaPredictiva({
       };
     });
 
-    const nacH = extraerSerieZona('nacional', 1).filter(r => r.anio >= 2022);
-    const nacM = extraerSerieZona('nacional', 2).filter(r => r.anio >= 2022);
-    const pobNacH = nacH.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0);
-    const pobNacM = nacM.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0);
+    const nacH = extraerSerieZona('nacional', 1).filter(r => v.aniosEmpleo.includes(r.anio));
+    const nacM = extraerSerieZona('nacional', 2).filter(r => v.aniosEmpleo.includes(r.anio));
+    const pobNacH = nacH.reduce((a, b) => a + numSeguro(b.poblacion_activa_total, 0), 0);
+    const pobNacM = nacM.reduce((a, b) => a + numSeguro(b.poblacion_activa_total, 0), 0);
     const proporcionMujeresNacional = (pobNacH + pobNacM) > 0 ? pobNacM / (pobNacH + pobNacM) : 0.5;
 
-    let filasCandidatas = extraerSerieZona(regionActiva, targetSexo);
+    let filasCandidatas = extraerSerieZona(regNorm, targetSexo);
     let fallbackNacional = false;
 
-    if (regionActiva !== 'nacional' && filasCandidatas.filter(r => Number(r.sueldo_promedio_mensual) > 0).length < 3) {
+    if (regNorm !== 'nacional' && filasCandidatas.filter(r => numSeguro(r.sueldo_promedio_mensual, 0) > 0).length < 3) {
       filasCandidatas = filasNac;
       fallbackNacional = true;
     }
 
-    const ratioPrepaH = benchRegion.sueldo_general > 0 ? benchRegion.sueldo_hombres / benchRegion.sueldo_general : 1;
-    const ratioPrepaM = benchRegion.sueldo_general > 0 ? benchRegion.sueldo_mujeres / benchRegion.sueldo_general : 1;
-    const factorPrepa = modoGenero === 'hombres' ? ratioPrepaH : modoGenero === 'mujeres' ? ratioPrepaM : 1;
-
+    const prepaActivaObj = obtenerPrepaZona(regNorm, targetSexo);
     const etiquetaLinea = 'Salario Licenciatura';
 
     const porAnio: Record<number, {
@@ -466,23 +349,23 @@ export default function GraficaPredictiva({
       isStem: boolean;
     }> = {};
 
-    for (let a = 2021; a <= 2026; a++) {
+    v.aniosOrdenados.forEach(a => {
       porAnio[a] = {
         anio: a,
         sueldoProd: 0, pobConSueldo: 0, pobTotal: 0, desTotal: 0, satProd: 0, pobConSat: 0,
         isStem: false
       };
-    }
+    });
 
     filasCandidatas.forEach(row => {
       const a = Number(row.anio);
       if (!porAnio[a]) return;
 
       if (row.is_stem) porAnio[a].isStem = true;
-      const pobReal = Number(row.poblacion_activa_total || 0);
-      const des = Number(row.desempleados_reales || 0);
-      const sat = Number(row.indice_saturacion_pct || 0);
-      const sueldo = Number(row.sueldo_promedio_mensual || 0);
+      const pobReal = numSeguro(row.poblacion_activa_total, 0);
+      const des = numSeguro(row.desempleados_reales, 0);
+      const sat = numSeguro(row.indice_saturacion_pct, 0);
+      const sueldo = numSeguro(row.sueldo_promedio_mensual, 0);
 
       porAnio[a].pobTotal += pobReal;
       porAnio[a].desTotal += des;
@@ -507,17 +390,15 @@ export default function GraficaPredictiva({
       .map(item => {
         if (item.isStem) carreraEsStem = true;
         const sueldoAnio = item.pobConSueldo > 0 ? Math.round(item.sueldoProd / item.pobConSueldo) : null;
-
-        const prepaHistorica = benchRegion.historico_anual[String(item.anio)];
-        const prepaAjustada = prepaHistorica != null ? Math.round(prepaHistorica * factorPrepa) : null;
+        const prepaAnio = prepaActivaObj.historico[item.anio] ?? (prepaActivaObj.sueldo > 0 ? prepaActivaObj.sueldo : null);
 
         if (sueldoAnio && sueldoAnio > maxValGrafica) maxValGrafica = sueldoAnio;
-        if (prepaAjustada && prepaAjustada > maxValGrafica) maxValGrafica = prepaAjustada;
+        if (prepaAnio && prepaAnio > maxValGrafica) maxValGrafica = prepaAnio;
 
         return {
           anio: item.anio,
           [etiquetaLinea]: sueldoAnio,
-          'Base Preparatoria': prepaAjustada,
+          'Base Preparatoria': prepaAnio,
           _pob: item.pobTotal,
           _des: item.desTotal,
           _sat: item.pobConSat > 0 ? item.satProd / item.pobConSat : saturacionNacionalBase
@@ -531,8 +412,9 @@ export default function GraficaPredictiva({
       pea: Math.round(Number(d._pob || 0))
     }));
 
-    const tendencia = clasificarTendenciaReal21_26(
-      dataArray.map(d => ({ anio: d.anio, sueldo: d[etiquetaLinea] }))
+    const tendencia = clasificarTendenciaRealDinamica(
+      dataArray.map(d => ({ anio: d.anio, sueldo: d[etiquetaLinea] })),
+      v
     );
 
     const techo5k = Math.max(25000, Math.ceil((maxValGrafica + 1500) / 5000) * 5000);
@@ -541,25 +423,25 @@ export default function GraficaPredictiva({
       ticks5k.push(t);
     }
 
-    const itemRegionActiva = comparativaRegiones.find(c => c.region === regionActiva);
-    const puntosVentana5a = dataArray.filter(d => d.anio >= 2022 && d.anio <= 2026 && d._pob > 0);
-    const loteConsolidado = puntosVentana5a.length > 0 ? puntosVentana5a : dataArray.filter(d => d._pob > 0);
+    const itemRegionActiva = comparativaRegiones.find(c => c.region === regNorm);
+    const puntosVentana = dataArray.filter(d => v.aniosEmpleo.includes(d.anio) && d._pob > 0);
+    const loteConsolidado = puntosVentana.length > 0 ? puntosVentana : dataArray.filter(d => d._pob > 0);
 
     const sueldoActivo = itemRegionActiva?.sueldoCarrera || sueldoNacionalBase;
-    const sueldoPrepaActivo = itemRegionActiva?.sueldoPrepa || benchRegion.sueldo_general;
+    const sueldoPrepaActivo = itemRegionActiva?.sueldoPrepa || prepaActivaObj.sueldo;
     const premioVsPrepaPct = itemRegionActiva?.premioPct || 0;
     const gananciaAnualExtra = (sueldoActivo - sueldoPrepaActivo) * 12;
 
     const pobActiva = loteConsolidado.length > 0
       ? Math.round(loteConsolidado.reduce((acc, d) => acc + d._pob, 0) / loteConsolidado.length)
       : 0;
-    const sumaPea5a = loteConsolidado.reduce((acc, d) => acc + d._pob, 0);
-    const sumaDes5a = loteConsolidado.reduce((acc, d) => acc + d._des, 0);
-    const tasaDesempleo = sumaPea5a > 0 ? Math.max(0.8, (sumaDes5a / sumaPea5a) * 100) : 3.2;
+    const sumaPea = loteConsolidado.reduce((acc, d) => acc + d._pob, 0);
+    const sumaDes = loteConsolidado.reduce((acc, d) => acc + d._des, 0);
+    const tasaDesempleo = sumaPea > 0 ? Math.max(0.8, (sumaDes / sumaPea) * 100) : 3.2;
     const desActivos = Math.round(pobActiva * (tasaDesempleo / 100));
 
-    const punto2026 = dataArray.find(d => d.anio === 2026) || dataArray[dataArray.length - 1];
-    const saturacionActiva = punto2026?._sat > 5 ? punto2026._sat : saturacionNacionalBase;
+    const puntoReciente = dataArray.find(d => d.anio === v.anioMax) || dataArray[dataArray.length - 1];
+    const saturacionActiva = puntoReciente?._sat > 5 ? puntoReciente._sat : saturacionNacionalBase;
 
     const statsObj: ResumenMercadoRegion = {
       sueldoActivo,
@@ -577,7 +459,11 @@ export default function GraficaPredictiva({
       isStem: carreraEsStem,
       usandoFallbackNacional: fallbackNacional,
       comparativaRegiones,
-      serieAnualReal
+      serieAnualReal,
+      rangoAniosTexto: v.rangoTexto,
+      cierreTexto: v.cierreTexto,
+      etiquetaCorte: metaActiva.etiqueta_corte,
+      etiquetaPesosBase: metaActiva.etiqueta_pesos_base
     };
 
     return {
@@ -588,9 +474,10 @@ export default function GraficaPredictiva({
       isStem: carreraEsStem,
       resumen: statsObj,
       usandoFallbackNacional: fallbackNacional,
-      muestraModeradaAviso: pobActiva > 0 && pobActiva < 25000
+      muestraModeradaAviso: pobActiva > 0 && pobActiva < 25000,
+      ventanas: v
     };
-  }, [rawData, regionActiva, modoGenero, firmaKish]);
+  }, [rawData, regionActiva, modoGenero, benchPrepaMapActivo, metaActiva]);
 
   useEffect(() => {
     if (!loading && onStatsChange && resumen.sueldoActivo > 0) {
@@ -601,8 +488,9 @@ export default function GraficaPredictiva({
         pob: resumen.poblacionActiva,
         des: resumen.desempleadosActivos,
         sat: Math.round(resumen.saturacion),
-        reg: resumen.comparativaRegiones.map(r => `${r.sueldoCarrera}_${r.tasaDesempleo}_${r.saturacion}_${r.tendenciaCodigo}`),
-        ser: resumen.serieAnualReal.map(x => x.sueldoLic)
+        corte: resumen.etiquetaCorte,
+        reg: resumen.comparativaRegiones.map(r => `${r.sueldoCarrera}_${r.sueldoPrepa}_${r.formalidadPrepaPct}_${r.tasaDesempleo}_${r.saturacion}_${r.tendenciaCodigo}`),
+        ser: resumen.serieAnualReal.map(x => `${x.anio}_${x.sueldoLic}_${x.sueldoPrepa}`)
       });
       if (ultimaFirmaEmitidaRef.current !== firmaActual) {
         ultimaFirmaEmitidaRef.current = firmaActual;
@@ -618,7 +506,7 @@ export default function GraficaPredictiva({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base md:text-lg font-black text-slate-900 tracking-tight">
-                Evolución Salarial Real vs. Preparatoria (2021–2026)
+                Evolución Salarial Real vs. Preparatoria ({ventanas.rangoTexto})
               </h2>
               {isStem && (
                 <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1">
@@ -627,7 +515,7 @@ export default function GraficaPredictiva({
               )}
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              El área sombreada azul representa la prima salarial acumulada sobre el ingreso base de bachillerato en pesos constantes de 2026.
+              El área sombreada azul representa la prima salarial acumulada sobre el ingreso base de bachillerato ({metaActiva.etiqueta_pesos_base}).
             </p>
           </div>
 
@@ -705,7 +593,10 @@ export default function GraficaPredictiva({
                 tickLine={false}
                 axisLine={false}
               />
-              <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#94A3B8', strokeWidth: 1.5, strokeDasharray: '4 4' }} />
+              <Tooltip
+                content={<CustomTooltip etiquetaPesos={metaActiva.etiqueta_pesos_base} />}
+                cursor={{ stroke: '#94A3B8', strokeWidth: 1.5, strokeDasharray: '4 4' }}
+              />
               <Legend wrapperStyle={{ paddingTop: '12px', fontSize: '12px', fontWeight: 700 }} />
 
               <Area
@@ -730,7 +621,7 @@ export default function GraficaPredictiva({
                 strokeDasharray="6 4"
                 dot={{ r: 3.5, strokeWidth: 1.8, stroke: '#D97706', fill: '#FEF3C7' }}
                 activeDot={{ r: 5.5, stroke: '#FFFFFF', strokeWidth: 2, fill: '#F59E0B' }}
-                name="Base Preparatoria (Real 2021–2026)"
+                name={`Base Preparatoria (Real ${ventanas.rangoTexto})`}
                 connectNulls={false}
               />
             </ComposedChart>
@@ -749,10 +640,10 @@ export default function GraficaPredictiva({
         <span className="flex items-center gap-1.5">
           <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           {muestraModeradaAviso
-            ? 'Nota: Carrera de nicho (< 25,000 ocupados); trayectoria estabilizada mediante credibilidad actuarial.'
+            ? 'Nota: Carrera de nicho (< 25,000 ocupados); trayectoria estabilizada actuarialmente desde el ETL.'
             : 'Series deflactadas a pesos constantes mediante el Índice Nacional de Precios al Consumidor (INPC).'}
         </span>
-        <span>Consolidado actual: Cierre 2025–2026</span>
+        <span>Consolidado actual: Cierre {ventanas.cierreTexto} ({metaActiva.etiqueta_corte})</span>
       </div>
     </div>
   );

@@ -14,7 +14,31 @@ import {
   EVENTO_VERSUS_SYNC,
   ValorCeldaExcel
 } from '@/lib/excelReportGenerator';
-import { BENCHMARK_PREPA, ESTADOS_POR_REGION } from '@/components/GraficaPredictiva';
+import {
+  REGIONES_ORDEN,
+  REGIONES_META,
+  EVENTO_DATOS_ACTUALIZADOS,
+  META_PIPELINE_FALLBACK,
+  CodigoGenero,
+  RegionClave,
+  DimCarreraRow,
+  BenchmarkPrepaRow,
+  MetaPipelineInfo,
+  cargarCatalogoCarreras,
+  cargarBenchmarksPrepaRows,
+  cargarMetaPipeline,
+  construirBenchmarksPrepaMap,
+  calcularVentanasTemporales,
+  calcularSueldoConsolidadoCelda,
+  clasificarTendenciaRealDinamica,
+  calcularIndicadoresSatelite,
+  calcularPercentil,
+  descargarTodoPaginado,
+  esCeldaSateliteValida,
+  normalizarRegion,
+  padCve,
+  numSeguro
+} from '@/lib/dataroiEngine';
 import {
   ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid,
   Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceLine, Cell
@@ -26,28 +50,7 @@ import {
   Info, Crosshair, X
 } from 'lucide-react';
 
-type CodigoGenero = 0 | 1 | 2;
 type FiltroCuadrante = 'todos' | 'q1_sup_izq' | 'q2_sup_der' | 'q3_inf_izq' | 'q4_inf_der';
-
-const REGIONES_ORDEN = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
-
-const REGIONES_INFO: Record<string, { nombre: string; corto: string; estados: string }> = {
-  nacional: { nombre: 'Nacional (Todo México)', corto: 'Nacional', estados: 'Promedio de las 32 entidades' },
-  norte: { nombre: 'Norte Industrial', corto: 'Norte', estados: 'BC, Coah, Chih, NL, Son, Tamps' },
-  noroeste: { nombre: 'Noroeste / Pacífico', corto: 'Noroeste', estados: 'BCS, Dgo, Nay, Sin' },
-  bajio: { nombre: 'Occidente - Bajío', corto: 'Bajío-Occ.', estados: 'Ags, Col, Gto, Jal, Mich, Qro, SLP, Zac' },
-  centro: { nombre: 'Centro / Valle de México', corto: 'Centro', estados: 'CDMX, Edomex, Hgo, Mor, Pue, Tlax' },
-  sur: { nombre: 'Sur - Sureste / Golfo', corto: 'Sur-Sureste', estados: 'Camp, Chis, Gro, Oax, Q.Roo, Tab, Ver, Yuc' }
-};
-
-const PARIDAD_REGIONAL_LIC: Record<string, number> = {
-  nacional: 1.0,
-  norte: 17917 / 15534,
-  noroeste: 15495 / 15534,
-  bajio: 14742 / 15534,
-  centro: 16000 / 15534,
-  sur: 13023 / 15534
-};
 
 const COLORES_SLOTS_VERSUS = [
   { hex: '#2563EB', btnClass: 'bg-blue-600 text-white border-blue-600 shadow-xs' },
@@ -66,7 +69,7 @@ interface VariableCrudaMeta {
 }
 
 const CATALOGO_VARIABLES_CRUDAS: VariableCrudaMeta[] = [
-  { id: 'sueldo_mensual', nombre: 'Salario Mensual Consolidado (MXN)', corto: 'Salario Mensual', unidad: 'MXN', mejorAlto: true, pasoInterpretacion: 1000, descripcion: 'Ingreso mensual promedio observado en microdatos ENOE (pesos constantes 2026).' },
+  { id: 'sueldo_mensual', nombre: 'Salario Mensual Consolidado (MXN)', corto: 'Salario Mensual', unidad: 'MXN', mejorAlto: true, pasoInterpretacion: 1000, descripcion: 'Ingreso mensual promedio observado en microdatos ENOE (pesos constantes del corte activo).' },
   { id: 'prima_prepa_pct', nombre: 'Prima Salarial vs. Preparatoria (%)', corto: 'Prima vs. Prepa', unidad: '%', mejorAlto: true, pasoInterpretacion: 10, descripcion: 'Diferencial porcentual del salario universitario sobre el sueldo base de bachillerato en la región.' },
   { id: 'calidad_oit_pct', nombre: 'Empleo de Calidad Estándar OIT (%)', corto: 'Calidad OIT', unidad: '%', mejorAlto: true, pasoInterpretacion: 10, descripcion: 'Porcentaje de ocupados con contrato escrito y fondo de retiro AFORE sin pluriempleo.' },
   { id: 'formalidad_pct', nombre: 'Formalidad Laboral Total (%)', corto: 'Formalidad Total', unidad: '%', mejorAlto: true, pasoInterpretacion: 10, descripcion: 'Índice compuesto de cobertura formal (contrato escrito, aguinaldo de ley y AFORE).' },
@@ -139,25 +142,6 @@ function formatearDiferencialMedia(diff: number, unidad: VariableCrudaMeta['unid
   return `${signo}${absVal.toFixed(1)}%`;
 }
 
-function calcularSueldoRegionalBuhlmann(
-  sueldoObsCrudo: number,
-  sueldoNac: number,
-  reg: string,
-  nEfectivoKish: number
-): number {
-  if (reg === 'nacional' || sueldoNac <= 0) {
-    return Math.round(sueldoObsCrudo);
-  }
-  const anclaParidad = sueldoNac * (PARIDAD_REGIONAL_LIC[reg] || 1.0);
-  if (sueldoObsCrudo <= 0) {
-    return Math.round(anclaParidad);
-  }
-  const obsAcotado = Math.max(anclaParidad * 0.78, Math.min(anclaParidad * 1.18, sueldoObsCrudo));
-  const K = 140.0;
-  const z = nEfectivoKish > 0 ? nEfectivoKish / (nEfectivoKish + K) : 0.50;
-  return Math.round(z * obsAcotado + (1.0 - z) * anclaParidad);
-}
-
 function calcularRegresionLinealOLS(xs: number[], ys: number[]) {
   const n = Math.min(xs.length, ys.length);
   if (n < 3) {
@@ -191,19 +175,8 @@ function calcularRegresionLinealOLS(xs: number[], ys: number[]) {
   };
 }
 
-function calcularPercentil(valoresOrdenadosAsc: number[], p: number): number {
-  if (valoresOrdenadosAsc.length === 0) return 0;
-  const idx = (valoresOrdenadosAsc.length - 1) * p;
-  const base = Math.floor(idx);
-  const rest = idx - base;
-  if (valoresOrdenadosAsc[base + 1] !== undefined) {
-    return valoresOrdenadosAsc[base] + rest * (valoresOrdenadosAsc[base + 1] - valoresOrdenadosAsc[base]);
-  }
-  return valoresOrdenadosAsc[base];
-}
-
 function LaboratorioContenido() {
-  const [regionActiva, setRegionActiva] = useState<string>('nacional');
+  const [regionActiva, setRegionActiva] = useState<RegionClave>('nacional');
   const [generoActivo, setGeneroActivo] = useState<CodigoGenero>(0);
   const [busquedaTabla, setBusquedaTabla] = useState<string>('');
   const [carreraDestacadaCve, setCarreraDestacadaCve] = useState<string>('');
@@ -217,10 +190,13 @@ function LaboratorioContenido() {
   const [ejeXId, setEjeXId] = useState<string>('indice_privilegio');
   const [ejeYId, setEjeYId] = useState<string>('sueldo_mensual');
 
-  const [carrerasRaw, setCarrerasRaw] = useState<any[]>([]);
+  const [carrerasRaw, setCarrerasRaw] = useState<DimCarreraRow[]>([]);
   const [satelitesRaw, setSatelitesRaw] = useState<any[]>([]);
   const [seriesRaw, setSeriesRaw] = useState<any[]>([]);
+  const [prepaRows, setPrepaRows] = useState<BenchmarkPrepaRow[]>([]);
+  const [metaPipeline, setMetaPipeline] = useState<MetaPipelineInfo>(META_PIPELINE_FALLBACK);
   const [loading, setLoading] = useState<boolean>(true);
+  const [reloadTick, setReloadTick] = useState<number>(0);
   const [cvesVersus, setCvesVersus] = useState<string[]>([]);
 
   useEffect(() => {
@@ -228,9 +204,14 @@ function LaboratorioContenido() {
       const nueva = leerEstadoDescubridorGlobal().carrerasCompararCves || [];
       setCvesVersus(prev => (prev.join(',') === nueva.join(',') ? prev : nueva));
     };
+    const onDataUpdated = () => setReloadTick(t => t + 1);
     sync();
     window.addEventListener(EVENTO_VERSUS_SYNC, sync);
-    return () => window.removeEventListener(EVENTO_VERSUS_SYNC, sync);
+    window.addEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
+    return () => {
+      window.removeEventListener(EVENTO_VERSUS_SYNC, sync);
+      window.removeEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
+    };
   }, []);
 
   const handleToggleComparar = (cve: string) => {
@@ -239,50 +220,57 @@ function LaboratorioContenido() {
   };
 
   useEffect(() => {
+    let cancelado = false;
     async function cargarDatosCrudos() {
       setLoading(true);
-      const descargarPaginado = async (tabla: string, columnas: string, filtroTipoReal = false) => {
-        const PAGE = 1000;
-        let acum: any[] = [];
-        let desde = 0;
-        while (true) {
-          let q = supabase.from(tabla).select(columnas).range(desde, desde + PAGE - 1);
-          if (filtroTipoReal) {
-            q = q.eq('tipo_dato', 'Real');
-          }
-          const { data, error } = await q;
-          if (error || !data || data.length === 0) break;
-          acum = acum.concat(data);
-          if (data.length < PAGE) break;
-          desde += PAGE;
-        }
-        return acum;
-      };
-
-      const [resCar, resSat, resSer] = await Promise.all([
-        supabase.from('dim_carreras').select('cve_carrera, nombre_carrera'),
-        descargarPaginado('satelites_cultura', '*'),
-        descargarPaginado(
-          'predicciones_roi',
-          'cve_carrera, cve_ent, anio, sexo, poblacion_activa_total, desempleados_reales, sueldo_promedio_mensual, indice_saturacion_pct, is_stem, tipo_dato',
-          true
+      const [resCar, resMeta, resPrepa, resSat, resSer] = await Promise.all([
+        cargarCatalogoCarreras(supabase),
+        cargarMetaPipeline(supabase),
+        cargarBenchmarksPrepaRows(supabase),
+        descargarTodoPaginado(() =>
+          supabase
+            .from('satelites_cultura')
+            .select('*')
+            .order('cve_carrera', { ascending: true })
+            .order('region', { ascending: true })
+            .order('sexo', { ascending: true })
+        ),
+        descargarTodoPaginado(() =>
+          supabase
+            .from('predicciones_roi')
+            .select('cve_carrera, cve_ent, anio, sexo, poblacion_activa_total, desempleados_reales, sueldo_promedio_mensual, indice_saturacion_pct, is_stem, tipo_dato')
+            .eq('tipo_dato', 'Real')
+            .order('cve_carrera', { ascending: true })
+            .order('cve_ent', { ascending: true })
+            .order('sexo', { ascending: true })
+            .order('anio', { ascending: true })
         )
       ]);
 
-      setCarrerasRaw((resCar.data || []).filter(c => String(c.cve_carrera).padStart(6, '0') !== '999999'));
+      if (cancelado) return;
+      setCarrerasRaw(resCar);
+      setMetaPipeline(resMeta);
+      setPrepaRows(resPrepa);
       setSatelitesRaw(resSat);
       setSeriesRaw(resSer);
       setLoading(false);
     }
 
     cargarDatosCrudos();
-  }, []);
+    return () => {
+      cancelado = true;
+    };
+  }, [reloadTick]);
 
   useEffect(() => {
     setFiltroCuadrante('todos');
   }, [ejeXId, ejeYId, regionActiva, generoActivo]);
 
-  const { filasActivas, mediaVariables, censoDemografico } = useMemo(() => {
+  const { filasActivas, mediaVariables, censoDemografico, ventanas } = useMemo(() => {
+    const vDefault = calcularVentanasTemporales(
+      seriesRaw.map(r => Number(r.anio)),
+      metaPipeline
+    );
     const censoVacio = {
       encuestadosTotalFiltro: 0,
       peaTotalFiltro: 0,
@@ -297,41 +285,36 @@ function LaboratorioContenido() {
     };
 
     if (carrerasRaw.length === 0 || satelitesRaw.length === 0) {
-      return { filasActivas: [], mediaVariables: {} as Record<string, number>, censoDemografico: censoVacio };
+      return {
+        filasActivas: [],
+        mediaVariables: {} as Record<string, number>,
+        censoDemografico: censoVacio,
+        ventanas: vDefault
+      };
     }
 
-    const padCve = (c: any) => String(c).padStart(6, '0');
-    const benchReg = BENCHMARK_PREPA[regionActiva] || BENCHMARK_PREPA.nacional;
+    const benchPrepaMap = construirBenchmarksPrepaMap(prepaRows, vDefault);
     const sueldoPrepaRef =
-      generoActivo === 1 ? benchReg.sueldo_hombres :
-      generoActivo === 2 ? benchReg.sueldo_mujeres :
-      benchReg.sueldo_general;
+      benchPrepaMap[regionActiva]?.sueldo_prepa[generoActivo] ??
+      benchPrepaMap.nacional.sueldo_prepa[0];
 
     const mapaSat: Record<string, any> = {};
     satelitesRaw.forEach(s => {
-      const k = `${padCve(s.cve_carrera)}_${String(s.region || 'nacional').toLowerCase().trim()}_${Number(s.sexo ?? 0)}`;
+      const k = `${padCve(s.cve_carrera)}_${normalizarRegion(s.region)}_${Number(s.sexo ?? 0)}`;
       mapaSat[k] = s;
     });
 
     const mapaSeries: Record<string, any[]> = {};
     seriesRaw.forEach(r => {
       const cve = padCve(r.cve_carrera);
-      const entRaw = String(r.cve_ent || 'nacional').toLowerCase().trim();
+      const regDest = normalizarRegion(r.cve_ent);
       const sx = Number(r.sexo ?? 0);
-      let regDest = entRaw;
-      if (entRaw === '0' || entRaw === '00' || entRaw === 'nacional') {
-        regDest = 'nacional';
-      } else if (!REGIONES_ORDEN.includes(entRaw as any)) {
-        const entPad = entRaw.padStart(2, '0');
-        const enc = Object.entries(ESTADOS_POR_REGION).find(([, l]) => l.includes(entPad));
-        if (enc) regDest = enc[0];
-      }
       const k = `${cve}_${regDest}_${sx}`;
       if (!mapaSeries[k]) mapaSeries[k] = [];
       mapaSeries[k].push(r);
     });
 
-    const obtenerSerie = (cve: string, reg: string, sx: number) => {
+    const obtenerSerie = (cve: string, reg: RegionClave, sx: CodigoGenero) => {
       const dir = mapaSeries[`${cve}_${reg}_${sx}`];
       if (dir && dir.length > 0) return dir;
       if (sx === 0) {
@@ -340,15 +323,27 @@ function LaboratorioContenido() {
       return [];
     };
 
-    const calcPond = (filas: any[]) => {
-      const val = filas.filter(r => Number(r.sueldo_promedio_mensual || 0) > 0);
-      if (val.length === 0) return 0;
-      const pob = val.reduce((a, b) => a + Math.max(1, Number(b.poblacion_activa_total || 1)), 0);
-      return pob > 0
-        ? val.reduce((a, b) => a + Number(b.sueldo_promedio_mensual) * Math.max(1, Number(b.poblacion_activa_total || 1)), 0) / pob
-        : 0;
-    };
+    // Medias dinámicas reales de estrato y nepotismo para esta región y género (cero 2.80 hardcodeado)
+    const satsValidosCelda = carrerasRaw
+      .map(c => {
+        const cve = padCve(c.cve_carrera);
+        const satNac0 = mapaSat[`${cve}_nacional_0`];
+        const satC = mapaSat[`${cve}_${regionActiva}_${generoActivo}`];
+        if (!esCeldaSateliteValida(satNac0, 'nacional', 0)) return null;
+        if (!esCeldaSateliteValida(satC, regionActiva, generoActivo)) return null;
+        return satC;
+      })
+      .filter(Boolean);
 
+    const pesoSatCelda = satsValidosCelda.reduce((a, s) => a + Math.max(1, numSeguro(s.volumen_muestra_nacional, 1)), 0);
+    const mediaEstratoCelda = pesoSatCelda > 0
+      ? Number((satsValidosCelda.reduce((a, s) => a + numSeguro(s.indice_privilegio, 2.8) * Math.max(1, numSeguro(s.volumen_muestra_nacional, 1)), 0) / pesoSatCelda).toFixed(2))
+      : 2.80;
+    const mediaNepotismoCelda = pesoSatCelda > 0
+      ? Number((satsValidosCelda.reduce((a, s) => a + numSeguro(s.pct_nepotismo, 37.2) * Math.max(1, numSeguro(s.volumen_muestra_nacional, 1)), 0) / pesoSatCelda).toFixed(1))
+      : 37.2;
+
+    // Composición demográfica y salarial Hombres vs Mujeres en la región activa
     let peaAcumHombres = 0;
     let prodSueldoHombres = 0;
     let peaAcumMujeres = 0;
@@ -356,23 +351,33 @@ function LaboratorioContenido() {
 
     carrerasRaw.forEach(c => {
       const cve = padCve(c.cve_carrera);
-      const esStemCve = cve.startsWith('05') || cve.startsWith('06') || cve.startsWith('07');
+      const satNac0 = mapaSat[`${cve}_nacional_0`];
+      if (!esCeldaSateliteValida(satNac0, 'nacional', 0)) return;
+
+      const sRef0 = obtenerSerie(cve, regionActiva, 0);
+      const filaRefStem = sRef0[sRef0.length - 1];
+      const esStemCve = filaRefStem?.is_stem != null
+        ? Boolean(filaRefStem.is_stem)
+        : (cve.startsWith('05') || cve.startsWith('06') || cve.startsWith('07'));
       if (soloStem && !esStemCve) return;
 
-      const sH = obtenerSerie(cve, regionActiva, 1).filter(r => r.anio >= 2022 && r.anio <= 2026);
-      const sM = obtenerSerie(cve, regionActiva, 2).filter(r => r.anio >= 2022 && r.anio <= 2026);
+      const sH = obtenerSerie(cve, regionActiva, 1);
+      const sM = obtenerSerie(cve, regionActiva, 2);
 
-      if (sH.length > 0) {
-        const pH = sH.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0) / sH.length;
-        const salH = calcPond(sH);
+      const sHEmp = sH.filter(r => vDefault.aniosEmpleo.includes(Number(r.anio)));
+      const sMEmp = sM.filter(r => vDefault.aniosEmpleo.includes(Number(r.anio)));
+
+      if (sHEmp.length > 0) {
+        const pH = sHEmp.reduce((a, b) => a + numSeguro(b.poblacion_activa_total, 0), 0) / sHEmp.length;
+        const salH = calcularSueldoConsolidadoCelda(sH, vDefault);
         if (pH > 0 && salH > 0) {
           peaAcumHombres += pH;
           prodSueldoHombres += salH * pH;
         }
       }
-      if (sM.length > 0) {
-        const pM = sM.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0) / sM.length;
-        const salM = calcPond(sM);
+      if (sMEmp.length > 0) {
+        const pM = sMEmp.reduce((a, b) => a + numSeguro(b.poblacion_activa_total, 0), 0) / sMEmp.length;
+        const salM = calcularSueldoConsolidadoCelda(sM, vDefault);
         if (pM > 0 && salM > 0) {
           peaAcumMujeres += pM;
           prodSueldoMujeres += salM * pM;
@@ -394,108 +399,104 @@ function LaboratorioContenido() {
     carrerasRaw.forEach(c => {
       const cve = padCve(c.cve_carrera);
       const satNac0 = mapaSat[`${cve}_nacional_0`];
-      if (!satNac0 || Number(satNac0.n_encuestados_reales || 0) < 180) return;
+      if (!esCeldaSateliteValida(satNac0, 'nacional', 0)) return;
 
       const satCelda = mapaSat[`${cve}_${regionActiva}_${generoActivo}`];
-      if (!satCelda) return;
+      if (!esCeldaSateliteValida(satCelda, regionActiva, generoActivo)) return;
 
-      const nEnc = Number(satCelda.n_encuestados_reales || 0);
-      const minRequerido = regionActiva === 'nacional' ? (generoActivo === 0 ? 180 : 25) : (generoActivo === 0 ? 30 : 25);
-      if (nEnc < minRequerido) return;
+      const nEnc = numSeguro(satCelda.n_encuestados_reales, 0);
 
       const serieNacSx = obtenerSerie(cve, 'nacional', generoActivo);
-      const fNac25_26 = serieNacSx.filter(r => r.anio === 2025 || r.anio === 2026);
-      const sueldoNacRef = Math.round(calcPond(fNac25_26.length > 0 ? fNac25_26 : serieNacSx));
+      const sueldoNacRef = calcularSueldoConsolidadoCelda(serieNacSx, vDefault);
 
       const serieCelda = obtenerSerie(cve, regionActiva, generoActivo);
-      const f25_26 = serieCelda.filter(r => r.anio === 2025 || r.anio === 2026);
-      const f22_26 = serieCelda.filter(r => r.anio >= 2022 && r.anio <= 2026);
-      const loteEmp = f22_26.length > 0 ? f22_26 : serieCelda;
+      const fEmp = serieCelda.filter(r => vDefault.aniosEmpleo.includes(Number(r.anio)));
+      const loteEmp = fEmp.length > 0 ? fEmp : serieCelda;
 
-      const sueldoCrudo = calcPond(f25_26.length > 0 ? f25_26 : loteEmp);
-      const nKish = Number(satCelda.n_efectivo_kish || 0);
-      const sueldoMensual = regionActiva === 'nacional'
-        ? Math.round(sueldoCrudo || sueldoNacRef)
-        : (sueldoCrudo > 0
-            ? (nKish > 0 ? calcularSueldoRegionalBuhlmann(sueldoCrudo, sueldoNacRef, regionActiva, nKish) : Math.round(sueldoCrudo))
-            : sueldoNacRef);
-
+      // Cero Doble Bühlmann: promedio ponderado directo de predicciones_roi
+      const sueldoMensual = calcularSueldoConsolidadoCelda(serieCelda, vDefault, sueldoNacRef);
       if (sueldoMensual <= 0) return;
 
       const peaActiva = loteEmp.length > 0
-        ? Math.round(loteEmp.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0) / loteEmp.length)
-        : Number(satCelda.volumen_muestra_nacional || 1000);
+        ? Math.round(loteEmp.reduce((a, b) => a + numSeguro(b.poblacion_activa_total, 0), 0) / loteEmp.length)
+        : numSeguro(satCelda.volumen_muestra_nacional, 1000);
 
-      const sumaPea = loteEmp.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0);
-      const sumaDes = loteEmp.reduce((a, b) => a + Number(b.desempleados_reales || 0), 0);
+      const sumaPea = loteEmp.reduce((a, b) => a + numSeguro(b.poblacion_activa_total, 0), 0);
+      const sumaDes = loteEmp.reduce((a, b) => a + numSeguro(b.desempleados_reales, 0), 0);
       const tasaDesempleo = sumaPea > 0 ? Number(Math.max(0.8, (sumaDes / sumaPea) * 100).toFixed(1)) : 3.2;
 
-      const filaRec = serieCelda.find(r => r.anio === 2026) || serieCelda[serieCelda.length - 1] || serieNacSx[serieNacSx.length - 1];
-      const saturacionPct = Math.round(Number(filaRec?.indice_saturacion_pct || 92));
-      const isStem = Boolean(filaRec?.is_stem) || cve.startsWith('05') || cve.startsWith('06') || cve.startsWith('07');
+      const filaRec =
+        serieCelda.find(r => Number(r.anio) === vDefault.anioMax) ||
+        serieCelda[serieCelda.length - 1] ||
+        serieNacSx[serieNacSx.length - 1];
+      const saturacionPct = Math.round(numSeguro(filaRec?.indice_saturacion_pct, 92));
+      const isStem = filaRec?.is_stem != null
+        ? Boolean(filaRec.is_stem)
+        : (cve.startsWith('05') || cve.startsWith('06') || cve.startsWith('07'));
 
-      const pCont = Number(satCelda.pct_contrato || 65);
-      const pAgui = Number(satCelda.pct_aguinaldo || 63);
-      const pAfor = Number(satCelda.pct_afore || 55);
-      const pPlur = Number(satCelda.pct_pluriempleo || 5.6);
-      const pDesa = Number(satCelda.pct_desarraigo || 2.7);
-      const pPyme = Number(satCelda.pct_pyme || 30);
-      const pCorp = Number(satCelda.pct_corp || 12);
-      const pMicro = Number(satCelda.pct_micro || 25);
-      const pGob = Number(satCelda.pct_gobierno || 18);
-      const pSind = Number(satCelda.pct_sindicato || 15);
-      const pSgmm = Number(satCelda.pct_sgmm || 8);
-      const pMat = Number(satCelda.pct_materno ?? satNac0.pct_materno ?? 23);
-      const pHo = Number(satCelda.pct_home_office || 3.5);
-      const pNep = Number(satCelda.pct_nepotismo || 37.2);
-      const priv = Number(satCelda.indice_privilegio || 2.80);
-      const riesgoIA = Number(satCelda.riesgo_ia_score ?? 40);
+      const pCont = numSeguro(satCelda.pct_contrato, 65);
+      const pAgui = numSeguro(satCelda.pct_aguinaldo, 63);
+      const pAfor = numSeguro(satCelda.pct_afore, 55);
+      const pPlur = numSeguro(satCelda.pct_pluriempleo, 5.6);
+      const pDesa = numSeguro(satCelda.pct_desarraigo, 2.7);
+      const pPyme = numSeguro(satCelda.pct_pyme, 30);
+      const pCorp = numSeguro(satCelda.pct_corp, 12);
+      const pMicro = numSeguro(satCelda.pct_micro, 25);
+      const pGob = numSeguro(satCelda.pct_gobierno, 18);
+      const pSind = numSeguro(satCelda.pct_sindicato, 15);
+      const pSgmm = numSeguro(satCelda.pct_sgmm, 8);
+      const pMat = numSeguro(satCelda.pct_materno ?? satNac0.pct_materno, 23);
+      const pHo = numSeguro(satCelda.pct_home_office, 3.5);
+      const pNep = numSeguro(satCelda.pct_nepotismo, mediaNepotismoCelda);
+      const priv = numSeguro(satCelda.indice_privilegio, mediaEstratoCelda);
+      const riesgoIA = numSeguro(satCelda.riesgo_ia_score, 40);
 
-      const hrsH = Number(satCelda.hrs_doble_jornada_hombres || 9.6);
-      const hrsM = Number(satCelda.hrs_doble_jornada_mujeres || 21.1);
+      const hrsH = numSeguro(satCelda.hrs_doble_jornada_hombres, 9.6);
+      const hrsM = numSeguro(satCelda.hrs_doble_jornada_mujeres, 21.1);
       const hrsHogar = generoActivo === 1 ? hrsH : generoActivo === 2 ? hrsM : Number(((hrsH + hrsM) / 2).toFixed(1));
 
-      const calidadOitPct = Number((((Math.min(pCont, pAfor) * 0.70 + pCont * 0.30) * (1 - pPlur / 200))).toFixed(1));
-      const formalidadPct = Number((pCont * 0.45 + pAgui * 0.30 + pAfor * 0.25).toFixed(1));
-      const primaPrepaPct = Number((((sueldoMensual - sueldoPrepaRef) / sueldoPrepaRef) * 100).toFixed(1));
+      const ind = calcularIndicadoresSatelite({
+        sat: satCelda,
+        sueldoMensual,
+        sueldoPrepa: sueldoPrepaRef,
+        mediaEstratoContexto: mediaEstratoCelda,
+        mediaNepotismoContexto: mediaNepotismoCelda
+      });
 
-      const diffEst = priv - 2.80;
-      const penElit = diffEst > 0.05 ? (diffEst - 0.05) * 110 : diffEst * 35;
-      const incOrig = Math.max(15, Math.min(92, 70 - penElit));
-      const apContr = Math.max(10, Math.min(95, 100 - (pNep + pSind * 0.22)));
-      const saltoSc = Math.max(0, Math.min(100, primaPrepaPct));
-      const impAsc = saltoSc * 0.45 + calidadOitPct * 0.35 + Math.min(100, pCorp * 2.2 + pPyme * 0.6) * 0.20;
-      const meritoPct = Number(Math.max(12, Math.min(96, apContr * 0.40 + impAsc * 0.35 + incOrig * 0.25)).toFixed(1));
+      const tendencia = clasificarTendenciaRealDinamica(
+        serieCelda.length >= 4 ? serieCelda : serieNacSx,
+        vDefault
+      );
 
       const evalScore = calcularScoreDataROIUniversal({
-        Prima_vs_Prepa_Pct: primaPrepaPct,
+        Prima_vs_Prepa_Pct: ind.primaPrepaPct,
         Desempleo_Abierto_Pct: tasaDesempleo,
         Saturacion_ANUIES_Pct: saturacionPct,
-        Empleo_Calidad_OIT_Pct: calidadOitPct,
-        Formalidad_Total_Pct: formalidadPct,
-        Meritocracia_Pct: meritoPct,
-        Blindaje_IA_Pct: 100 - riesgoIA,
-        Tendencia_Codigo: 'estable',
-        Empleo_Unico_Pct: Math.max(0, 100 - pPlur),
-        Arraigo_Local_Pct: Math.max(0, 100 - pDesa)
+        Empleo_Calidad_OIT_Pct: ind.calidadOitPct,
+        Formalidad_Total_Pct: ind.formalidadTotalPct,
+        Meritocracia_Pct: ind.meritocraciaPct,
+        Blindaje_IA_Pct: ind.blindajeIAPct,
+        Tendencia_Codigo: tendencia.codigo,
+        Empleo_Unico_Pct: ind.pctEmpleoUnico,
+        Arraigo_Local_Pct: ind.pctArraigoLocal
       });
 
       listaProcesada.push({
         cve_carrera: cve,
-        nombre_carrera: formatearNombreCarreraEjecutivo(cve, c.nombre_carrera),
+        nombre_carrera: c.nombre_ejecutivo || formatearNombreCarreraEjecutivo(cve, c.nombre_carrera),
         nombre_oficial: c.nombre_carrera,
         is_stem: isStem,
         n_encuestados: nEnc,
         pea_activa: peaActiva,
         score_dataroi: Math.round(evalScore.score),
         sueldo_mensual: sueldoMensual,
-        prima_prepa_pct: primaPrepaPct,
-        calidad_oit_pct: calidadOitPct,
-        formalidad_pct: formalidadPct,
+        prima_prepa_pct: ind.primaPrepaPct,
+        calidad_oit_pct: ind.calidadOitPct,
+        formalidad_pct: ind.formalidadTotalPct,
         tasa_desempleo: tasaDesempleo,
         saturacion_pct: saturacionPct,
         riesgo_ia_score: riesgoIA,
-        blindaje_ia_pct: 100 - riesgoIA,
+        blindaje_ia_pct: ind.blindajeIAPct,
         indice_privilegio: Number(priv.toFixed(2)),
         pct_nepotismo: Number(pNep.toFixed(1)),
         pct_contrato: Number(pCont.toFixed(1)),
@@ -539,6 +540,7 @@ function LaboratorioContenido() {
     return {
       filasActivas: listaProcesada,
       mediaVariables: medias,
+      ventanas: vDefault,
       censoDemografico: {
         encuestadosTotalFiltro,
         peaTotalFiltro,
@@ -552,13 +554,12 @@ function LaboratorioContenido() {
         premioStemPct
       }
     };
-  }, [carrerasRaw, satelitesRaw, seriesRaw, regionActiva, generoActivo, soloStem]);
+  }, [carrerasRaw, satelitesRaw, seriesRaw, prepaRows, metaPipeline, regionActiva, generoActivo, soloStem]);
 
   const metaVarRanking = CATALOGO_VARIABLES_CRUDAS.find(v => v.id === varRankingId) || CATALOGO_VARIABLES_CRUDAS[0];
   const metaEjeX = CATALOGO_VARIABLES_CRUDAS.find(v => v.id === ejeXId) || CATALOGO_VARIABLES_CRUDAS[8];
   const metaEjeY = CATALOGO_VARIABLES_CRUDAS.find(v => v.id === ejeYId) || CATALOGO_VARIABLES_CRUDAS[0];
 
-  // Universo para el Scatter Plot (solo filtrado por región, género y STEM; nunca mutilado por el buscador de la tabla)
   const filasUniversoPlano = useMemo(() => {
     return soloStem ? filasActivas.filter(f => f.is_stem) : filasActivas;
   }, [filasActivas, soloStem]);
@@ -610,7 +611,6 @@ function LaboratorioContenido() {
     return [...filasUniversoPlano].sort((a, b) => a.nombre_carrera.localeCompare(b.nombre_carrera, 'es'));
   }, [filasUniversoPlano]);
 
-  // Regresión Lineal OLS sobre el universo activo del plano
   const regresionOLS = useMemo(() => {
     const xs = filasUniversoPlano.map(f => Number(f[ejeXId] || 0));
     const ys = filasUniversoPlano.map(f => Number(f[ejeYId] || 0));
@@ -625,7 +625,6 @@ function LaboratorioContenido() {
     ];
   }, [filasUniversoPlano.length, regresionOLS, ejeXId, ejeYId]);
 
-  // Dominios con padding holgado para evitar recortes de burbujas y etiquetas contra los bordes
   const { dominioX, dominioY } = useMemo(() => {
     if (filasPlanoVisibles.length === 0) {
       return { dominioX: [0, 100] as [number, number], dominioY: [0, 100] as [number, number] };
@@ -655,7 +654,6 @@ function LaboratorioContenido() {
     };
   }, [filasPlanoVisibles, ejeXId, ejeYId, mediaXActual, mediaYActual, metaEjeX.unidad, metaEjeY.unidad]);
 
-  // Algoritmo anticolisión y posicionamiento inteligente para etiquetas de outliers y carrera destacada
   const mapaEtiquetasPlano = useMemo(() => {
     const mapa = new Map<string, { dx: number; dy: number; anchor: 'middle' | 'start' | 'end'; texto: string; destacada: boolean }>();
     if (filasPlanoVisibles.length === 0) return mapa;
@@ -693,7 +691,6 @@ function LaboratorioContenido() {
       const ny = (vy - dominioY[0]) / spanY;
       const esDestacada = item.cve_carrera === carreraDestacadaCve;
 
-      // Verificar colisión espacial en el plano normalizado [0..1]
       const choca = !esDestacada && colocadas.some(prev => Math.abs(nx - prev.nx) < 0.18 && Math.abs(ny - prev.ny) < 0.15);
       if (choca) return;
 
@@ -727,7 +724,6 @@ function LaboratorioContenido() {
     return mapa;
   }, [filasPlanoVisibles, ejeXId, ejeYId, dominioX, dominioY, carreraDestacadaCve]);
 
-  // Radar Automático de Correlaciones (Variable Y actual contra todas las demás 23 variables)
   const radarCorrelacionesContraY = useMemo(() => {
     if (filasUniversoPlano.length < 4) return { positivas: [], negativas: [] };
     const ys = filasUniversoPlano.map(f => Number(f[ejeYId] || 0));
@@ -744,7 +740,6 @@ function LaboratorioContenido() {
     return { positivas, negativas };
   }, [filasUniversoPlano, ejeYId]);
 
-  // Estadísticos de Distribución con STEM vs. No-STEM ponderados por PEA Activa (100% consistente con el Hero)
   const estadisticosTabla = useMemo(() => {
     if (filasTablaFiltradasYOrdenadas.length === 0) {
       return { p10: 0, p50: 0, p90: 0, min: 0, max: 0, mediaStem: 0, mediaNoStem: 0 };
@@ -815,6 +810,8 @@ function LaboratorioContenido() {
     ? { id: 'saturacion_pct', label: 'Saturación ANUIES', unidad: '%' as const }
     : { id: 'calidad_oit_pct', label: 'Calidad OIT', unidad: '%' as const };
 
+  const corteSlug = metaPipeline.etiqueta_corte.replace(/\s+/g, '_');
+
   const exportarBaseCrudaExcel = () => {
     if (filasTablaFiltradasYOrdenadas.length === 0) return;
     const cabeceras = [
@@ -840,7 +837,7 @@ function LaboratorioContenido() {
     ]);
 
     descargarLibroExcelXLSX(
-      `DataROI_Laboratorio_Crudo_${regionActiva}_${queryGeneroParam}.xlsx`,
+      `DataROI_Laboratorio_Crudo_${regionActiva}_${queryGeneroParam}_${corteSlug}.xlsx`,
       [
         {
           nombre: '1_Matriz_24_Variables_Crudas',
@@ -850,12 +847,15 @@ function LaboratorioContenido() {
         {
           nombre: '2_Diccionario_Variables',
           cabeceras: ['Clave_Variable', 'Nombre_Indicador', 'Media_Regional_Ponderada', 'Descripcion_Metodologica_INEGI_ANUIES'],
-          filas: CATALOGO_VARIABLES_CRUDAS.map(v => [
-            v.id,
-            { v: v.nombre, s: 'bold' },
-            formatearValorVariable(mediaVariables[v.id] ?? 0, v.unidad),
-            v.descripcion
-          ])
+          filas: [
+            ['corte_activo', { v: `Corte Oficial ${metaPipeline.etiqueta_corte}`, s: 'section' }, ventanas.rangoTexto, metaPipeline.etiqueta_pesos_base],
+            ...CATALOGO_VARIABLES_CRUDAS.map(v => [
+              v.id,
+              { v: v.nombre, s: 'bold' as const },
+              formatearValorVariable(mediaVariables[v.id] ?? 0, v.unidad),
+              v.descripcion
+            ])
+          ]
         }
       ]
     );
@@ -883,10 +883,11 @@ function LaboratorioContenido() {
       f.score_dataroi,
       ...CATALOGO_VARIABLES_CRUDAS.map(v => Number(f[v.id] ?? 0))
     ]);
-    descargarCSVEstilizado(`DataROI_Laboratorio_Crudo_${regionActiva}_${queryGeneroParam}.csv`, cabeceras, filas);
+    descargarCSVEstilizado(`DataROI_Laboratorio_Crudo_${regionActiva}_${queryGeneroParam}_${corteSlug}.csv`, cabeceras, filas);
   };
 
   const rFormateado = `${regresionOLS.r > 0 ? '+' : ''}${regresionOLS.r.toFixed(2)}`;
+  const regionLabelCorto = regionActiva === 'nacional' ? 'Nacional' : REGIONES_META[regionActiva].corto;
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:px-8 md:py-4 space-y-4 pb-16">
@@ -897,10 +898,10 @@ function LaboratorioContenido() {
           <div>
             <div className="flex flex-wrap items-center gap-2 mb-1.5">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10.5px] font-extrabold uppercase tracking-wider">
-                <FlaskConical className="w-3 h-3" aria-hidden="true" /> Auditoría de Variables Puras · Cero Fórmulas Compuestas
+                <FlaskConical className="w-3 h-3" aria-hidden="true" /> Auditoría de Variables Puras · Corte {metaPipeline.etiqueta_corte}
               </span>
               <span className="text-[11px] font-bold text-slate-400">
-                {REGIONES_INFO[regionActiva]?.nombre} · {etiquetaGeneroCorto}
+                {REGIONES_META[regionActiva].nombre} · {etiquetaGeneroCorto}
               </span>
             </div>
             <h1 className="text-xl md:text-2xl font-black tracking-tight">
@@ -940,7 +941,7 @@ function LaboratorioContenido() {
               </span>
             </div>
             <span className="text-[10px] text-slate-400 mt-0.5">
-              Microdatos físicos ENOE INEGI
+              Microdatos físicos ENOE INEGI ({ventanas.rangoTexto})
             </span>
           </div>
 
@@ -957,13 +958,13 @@ function LaboratorioContenido() {
               </span>
             </div>
             <span className="text-[10px] text-slate-400 mt-0.5">
-              Población activa en {REGIONES_INFO[regionActiva]?.corto}
+              Población activa en {regionLabelCorto}
             </span>
           </div>
 
           <div className="bg-slate-800/85 border border-slate-700/80 ring-1 ring-white/5 rounded-2xl p-3 flex flex-col justify-between">
             <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              <span className="truncate">Género ({REGIONES_INFO[regionActiva]?.corto})</span>
+              <span className="truncate">Género ({regionLabelCorto})</span>
               <span className="text-violet-300 font-black whitespace-nowrap shrink-0">
                 {censoDemografico.pctMujeresReg}% M · {censoDemografico.pctHombresReg}% H
               </span>
@@ -1006,7 +1007,7 @@ function LaboratorioContenido() {
         </div>
       </div>
 
-      {/* BARRA DE FILTROS DEMOGRÁFICOS (COMPACTA) */}
+      {/* BARRA DE FILTROS DEMOGRÁFICOS */}
       <div className="bg-white px-4 py-2.5 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-black text-slate-800 flex items-center gap-1 mr-0.5">
@@ -1025,7 +1026,7 @@ function LaboratorioContenido() {
                     act ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                   }`}
                 >
-                  {REGIONES_INFO[reg]?.corto}
+                  {reg === 'nacional' ? 'Nacional' : REGIONES_META[reg].corto}
                 </button>
               );
             })}
@@ -1075,10 +1076,9 @@ function LaboratorioContenido() {
         </div>
       </div>
 
-      {/* MÓDULO 1: ESTACIÓN BIVARIADA COMPACTA (CALIBRADA PARA 100% DE ZOOM EN UNA SOLA PANTALLA) */}
+      {/* MÓDULO 1: ESTACIÓN BIVARIADA COMPACTA */}
       <div className="bg-gradient-to-b from-white via-white to-slate-50/70 rounded-3xl p-4 md:p-5 border border-slate-200/90 shadow-xs">
         
-        {/* Encabezado + Presets en una sola franja limpia */}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5 pb-3 mb-3 border-b border-slate-100">
           <div className="flex items-baseline gap-2.5 flex-wrap">
             <h2 className="text-base md:text-lg font-black text-slate-900">
@@ -1113,7 +1113,7 @@ function LaboratorioContenido() {
           </div>
         </div>
 
-        {/* FILA COMPACTA: SELECTOR X (4 COLS) + SELECTOR Y (4 COLS) + CORRELACIÓN OLS (4 COLS) */}
+        {/* FILA COMPACTA: SELECTOR X + SELECTOR Y + CORRELACIÓN OLS */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 mb-3.5 items-stretch">
           
           <div className="lg:col-span-4 bg-slate-50 px-3 py-2.5 rounded-2xl border border-slate-200/80 flex flex-col justify-center">
@@ -1156,7 +1156,6 @@ function LaboratorioContenido() {
             </select>
           </div>
 
-          {/* Cabezal de Correlación con 2 decimales consistentes */}
           <div className="lg:col-span-4 bg-slate-900 text-white px-3.5 py-2.5 rounded-2xl border border-slate-800 flex flex-col justify-between shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-baseline gap-2">
@@ -1180,12 +1179,11 @@ function LaboratorioContenido() {
 
         </div>
 
-        {/* CUERPO PRINCIPAL: SCATTER PLOT (8 COLS) + RADAR DE CORRELACIONES COMPACTO (4 COLS) */}
+        {/* CUERPO PRINCIPAL: SCATTER PLOT + RADAR DE CORRELACIONES */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
           
           <div className="lg:col-span-8 flex flex-col justify-between bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-2xs">
             
-            {/* Barra superior del plano: Cuadrantes + Localizador Co-Localizado de Carrera */}
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-100 text-[10.5px]">
               <div className="flex flex-wrap items-center gap-1">
                 <Filter className="w-3.5 h-3.5 text-blue-600 mr-0.5" aria-hidden="true" />
@@ -1214,7 +1212,6 @@ function LaboratorioContenido() {
                 })}
               </div>
 
-              {/* Localizador Co-Localizado para iluminar una carrera sin perder la nube de puntos */}
               <div className="flex items-center gap-1 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
                 <Crosshair className="w-3.5 h-3.5 text-blue-600 shrink-0" aria-hidden="true" />
                 <select
@@ -1241,7 +1238,6 @@ function LaboratorioContenido() {
               </div>
             </div>
 
-            {/* Lienzo del Gráfico de Dispersión con Unidades y Anticolisión */}
             <div className="h-[315px] md:h-[340px] w-full">
               {!loading && filasPlanoVisibles.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
@@ -1322,7 +1318,6 @@ function LaboratorioContenido() {
                       }}
                     />
 
-                    {/* Recta Diagonal de Regresión Lineal OLS */}
                     {puntosLineaOLS.length === 2 && (
                       <Scatter
                         name="Tendencia Lineal OLS"
@@ -1334,7 +1329,6 @@ function LaboratorioContenido() {
                       />
                     )}
 
-                    {/* Nube de Licenciaturas con Anticolisión de Etiquetas */}
                     <Scatter
                       name="Licenciaturas"
                       data={filasPlanoVisibles}
@@ -1393,7 +1387,6 @@ function LaboratorioContenido() {
               )}
             </div>
 
-            {/* Leyenda Explícita de Color (Grado), Tamaño (PEA) y Tendencia OLS */}
             <div className="mt-1.5 pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[10.5px] text-slate-500">
               <div className="flex flex-wrap items-center gap-3">
                 <span className="inline-flex items-center gap-1 font-bold text-slate-700">
@@ -1416,7 +1409,6 @@ function LaboratorioContenido() {
             </div>
           </div>
 
-          {/* PANEL DERECHO: RADAR AUTOMÁTICO DE CORRELACIONES COMPACTO (4 POSITIVAS + 4 NEGATIVAS EN 1 PANTALLA) */}
           <div className="lg:col-span-4 bg-slate-50 rounded-2xl p-3.5 border border-slate-200/80 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between gap-1 mb-1">
@@ -1429,7 +1421,6 @@ function LaboratorioContenido() {
                 Asociaciones más fuertes con {metaEjeY.corto}
               </h3>
 
-              {/* Top 4 Positivas */}
               <div className="mb-2.5">
                 <span className="text-[9.5px] font-extrabold uppercase tracking-wider text-emerald-700 flex items-center gap-1 mb-1">
                   <TrendingUp className="w-3 h-3" aria-hidden="true" /> Mayor Asociación Positiva (+r)
@@ -1470,7 +1461,6 @@ function LaboratorioContenido() {
                 </div>
               </div>
 
-              {/* Top 4 Inversas */}
               <div>
                 <span className="text-[9.5px] font-extrabold uppercase tracking-wider text-amber-800 flex items-center gap-1 mb-1">
                   <TrendingDown className="w-3 h-3" aria-hidden="true" /> Mayor Asociación Inversa (-r)
@@ -1513,14 +1503,14 @@ function LaboratorioContenido() {
             </div>
 
             <div className="mt-2 pt-2 border-t border-slate-200/80 text-[10px] text-slate-500">
-              Universo: <strong>{filasUniversoPlano.length} carreras</strong> en {REGIONES_INFO[regionActiva]?.corto} ({etiquetaGeneroCorto}).
+              Universo: <strong>{filasUniversoPlano.length} carreras</strong> en {regionLabelCorto} ({etiquetaGeneroCorto}).
             </div>
           </div>
 
         </div>
       </div>
 
-      {/* MÓDULO 2: EXPLORADOR DE RANKING PURO POR VARIABLE INDIVIDUAL + CINTA DE PERCENTILES CONSISTENTE */}
+      {/* MÓDULO 2: EXPLORADOR DE RANKING PURO POR VARIABLE INDIVIDUAL + CINTA DE PERCENTILES */}
       <div className="bg-white rounded-3xl p-6 border border-slate-200/90 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 mb-4 border-b border-slate-100">
           <div>
@@ -1574,7 +1564,6 @@ function LaboratorioContenido() {
           </div>
         </div>
 
-        {/* CINTA DE DISTRIBUCIÓN ESTADÍSTICA (STEM VS OTRAS PONDERADO POR PEA) */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-5 text-xs">
           <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
@@ -1629,7 +1618,6 @@ function LaboratorioContenido() {
           </div>
         </div>
 
-        {/* Tabla Ejecutiva de Ranking Crudo */}
         <div className="overflow-x-auto rounded-2xl border border-slate-200">
           <table className="w-full text-left border-collapse text-xs">
             <thead>

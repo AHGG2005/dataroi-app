@@ -25,8 +25,8 @@ export type CarreraDirectorioItem = {
   riesgo_ia_score: number;
   sueldo_mensual: number;
   premio_prepa_pct: number;
-  sueldo_2022_2023: number;
-  sueldo_2025_2026: number;
+  sueldo_base_tendencia: number;
+  sueldo_reciente_cierre: number;
   cambio_real_pct: number;
   crecimiento_anual_pct: number;
   calidad_oit_pct: number;
@@ -143,7 +143,21 @@ function BadgeTendenciaMini({ codigo, etiqueta }: { codigo: string; etiqueta: st
   );
 }
 
-export default function DirectorioClient({ directorio }: { directorio: CarreraDirectorioItem[] }) {
+export default function DirectorioClient({
+  directorio,
+  sueldoPrepaNacional = 10608,
+  rangoTexto = '2021–2026',
+  cierreTexto = '2025–2026',
+  etiquetaCorte = '2026 Q2',
+  etiquetaPesosBase = 'Pesos constantes'
+}: {
+  directorio: CarreraDirectorioItem[];
+  sueldoPrepaNacional?: number;
+  rangoTexto?: string;
+  cierreTexto?: string;
+  etiquetaCorte?: string;
+  etiquetaPesosBase?: string;
+}) {
   const [busqueda, setBusqueda] = useState('');
   const [filtroStem, setFiltroStem] = useState(false);
   const [filtroRiesgo, setFiltroRiesgo] = useState(false);
@@ -169,7 +183,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
   };
 
   const mediaSalarialCatalogo = useMemo(() => {
-    if (directorio.length === 0) return 15534;
+    if (directorio.length === 0) return 0;
     const sumaPob = directorio.reduce((acc, c) => acc + Math.max(1, c.pea_activa), 0);
     const sumaProd = directorio.reduce((acc, c) => acc + c.sueldo_mensual * Math.max(1, c.pea_activa), 0);
     return Math.round(sumaProd / sumaPob);
@@ -216,10 +230,10 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       'Grado_Viabilidad',
       'Salario_Mensual_MXN',
       'Prima_vs_Prepa_Pct',
-      'Tendencia_2021_2026',
-      'Salario_Base_2022_2023_MXN',
-      'Salario_Reciente_2025_2026_MXN',
-      'Cambio_Real_PostPandemia_Pct',
+      `Tendencia_${rangoTexto.replace(/[^0-9]/g, '_')}`,
+      'Salario_Base_Inicio_MXN',
+      `Salario_Cierre_${cierreTexto.replace(/[^0-9]/g, '_')}_MXN`,
+      'Cambio_Real_Acumulado_Pct',
       'Crecimiento_Anual_Pct',
       'Empleo_Calidad_OIT_Pct',
       'Formalidad_Total_Pct',
@@ -247,8 +261,8 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
         { v: c.sueldo_mensual, s: 'bold' },
         c.premio_prepa_pct,
         c.tendencia_etiqueta,
-        c.sueldo_2022_2023,
-        c.sueldo_2025_2026,
+        c.sueldo_base_tendencia,
+        c.sueldo_reciente_cierre,
         c.cambio_real_pct,
         c.crecimiento_anual_pct,
         c.calidad_oit_pct,
@@ -272,7 +286,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
   const exportarCatalogoExcel = () => {
     const { cabeceras, filas } = construirDatosExportacionCatalogo();
     descargarLibroExcelXLSX(
-      `DataROI_Catalogo_Nacional_${carrerasFiltradas.length}_Carreras.xlsx`,
+      `DataROI_Catalogo_Nacional_${carrerasFiltradas.length}_Carreras_${etiquetaCorte.replace(/\s+/g, '_')}.xlsx`,
       [
         {
           nombre: '1_Catalogo_Nacional',
@@ -283,10 +297,11 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
           nombre: '2_Contexto_Metodologico',
           cabeceras: ['Parametro_Global', 'Valor_Auditado', 'Detalle_Metodologico'],
           filas: [
-            ['Total de Carreras Exportadas', `${carrerasFiltradas.length} licenciaturas`, 'Filtradas según los criterios activos en el Catálogo Nacional'],
+            ['Último Corte Oficial Cargado', etiquetaCorte, `Serie histórica ENOE ${rangoTexto} (Cierre ${cierreTexto})`],
+            ['Total de Carreras Exportadas', `${carrerasFiltradas.length} de ${directorio.length} licenciaturas`, 'Filtradas según los criterios activos en el Catálogo Nacional'],
             ['Criterio de Ordenamiento Aplicado', ETIQUETAS_ORDEN_HUMANO[orden], 'Orden activo en pantalla al momento de exportar el catálogo'],
-            ['Media Salarial Licenciatura Nacional', `${formatoMoneda(mediaSalarialCatalogo)} MXN / mes`, 'Pesos constantes de 2026 deflactados con el INPC'],
-            ['Salario Base Preparatoria Nacional', '$10,608 MXN / mes', 'Benchmark de referencia para el cálculo de Prima Salarial y ROI'],
+            ['Media Salarial Licenciatura Nacional', `${formatoMoneda(mediaSalarialCatalogo)} MXN / mes`, `${etiquetaPesosBase} deflactados con el INPC`],
+            ['Salario Base Preparatoria Nacional', `${formatoMoneda(sueldoPrepaNacional)} MXN / mes`, 'Benchmark vivo desde Supabase para Prima Salarial y ROI'],
             ['Muestra Física Total Auditada', `${totalEncuestadosCatalogo.toLocaleString('es-MX')} encuestados`, 'Profesionistas encuestados físicamente en microdatos ENOE INEGI']
           ]
         }
@@ -297,7 +312,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
   const exportarCatalogoCSV = () => {
     const { cabeceras, filas } = construirDatosExportacionCatalogo();
     descargarCSVEstilizado(
-      `DataROI_Catalogo_Nacional_${carrerasFiltradas.length}_Carreras.csv`,
+      `DataROI_Catalogo_Nacional_${carrerasFiltradas.length}_Carreras_${etiquetaCorte.replace(/\s+/g, '_')}.csv`,
       cabeceras,
       filas
     );
@@ -309,7 +324,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
       try {
         await navigator.share({
           title: 'DataROI México — Catálogo Nacional de Carreras',
-          text: 'Consulta la Calificación Integral DataROI, salarios reales INEGI y riesgo IA de las 64 licenciaturas en México.',
+          text: `Consulta la Calificación Integral DataROI, salarios reales INEGI (${etiquetaCorte}) y riesgo IA de las ${directorio.length} licenciaturas certificadas en México.`,
           url
         });
         return;
@@ -330,10 +345,10 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div>
             <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/15 border border-blue-400/30 text-blue-300 text-xs font-extrabold uppercase tracking-wider mb-3">
-              Catálogo Nacional Auditado · Microdatos ENOE INEGI (2021–2026) + ANUIES
+              Catálogo Nacional Auditado · Microdatos ENOE INEGI ({rangoTexto} · Corte {etiquetaCorte}) + ANUIES
             </span>
             <h1 className="text-2xl md:text-4xl font-black tracking-tight mb-2">
-              Explora y Compara las 64 Licenciaturas de México
+              Explora y Compara las {directorio.length} Licenciaturas de México
             </h1>
             <p className="text-xs md:text-sm text-slate-300 max-w-2xl leading-relaxed">
               Cada carrera es evaluada del <strong>0 al 100</strong> según sus 6 Pilares Estructurales reales observados en el mercado laboral mexicano. Selecciona hasta 3 carreras con el botón <strong>+ Comparar</strong> para contrastarlas Cara a Cara.
@@ -346,7 +361,7 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
               <strong className="text-lg font-black text-emerald-400 mt-0.5 block">
                 {formatoMoneda(mediaSalarialCatalogo)}/mes
               </strong>
-              <span className="text-[10px] text-slate-400">vs. $10,608 Prepa</span>
+              <span className="text-[10px] text-slate-400">vs. {formatoMoneda(sueldoPrepaNacional)} Prepa</span>
             </div>
 
             <div className="bg-slate-800/90 p-3.5 rounded-2xl border border-slate-700/80">
@@ -506,7 +521,6 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                 className={`group bg-gradient-to-b from-white via-white to-slate-50/80 p-5 rounded-2xl border border-slate-200/90 border-t-4 ${sem.topBorderClass} shadow-xs hover:-translate-y-1.5 ${hoverShadowPorGrado} transition-all duration-300 ease-out flex flex-col justify-between`}
               >
                 <div>
-                  {/* Encabezado: Etiquetas + Título Ejecutivo Limpio + Medallón Entero Grande */}
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5 mb-2">
@@ -535,7 +549,6 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                     <MedallonScoreEntero score={carrera.score_dataroi} />
                   </div>
 
-                  {/* Bloque Salarial Puro */}
                   <div className="flex items-baseline justify-between gap-2 pt-3 border-t border-slate-100">
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
@@ -557,7 +570,6 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                   </div>
                 </div>
 
-                {/* 3 Mini-Barras Visuales con Degradado Semántico (Spark-bars) */}
                 <div className="mt-4 pt-3 border-t border-slate-100">
                   <div className="grid grid-cols-3 gap-2.5 text-[11px] mb-3.5">
                     <div className="bg-white p-2.5 rounded-xl border border-slate-200/70 shadow-2xs">
@@ -604,7 +616,6 @@ export default function DirectorioClient({ directorio }: { directorio: CarreraDi
                     </div>
                   </div>
 
-                  {/* Pie de Tarjeta: Botón Directo + Comparar con Número y Color de Slot */}
                   <div className="flex items-center justify-between gap-2 pt-1">
                     <button
                       type="button"

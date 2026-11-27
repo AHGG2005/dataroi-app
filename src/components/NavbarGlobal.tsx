@@ -20,6 +20,37 @@ import {
   EstiloCeldaExcel
 } from '@/lib/excelReportGenerator';
 import {
+  REGIONES_ORDEN,
+  MACRO_REGIONES_5,
+  REGIONES_META,
+  EVENTO_DATOS_ACTUALIZADOS,
+  META_PIPELINE_FALLBACK,
+  CodigoGenero,
+  RegionClave,
+  DimCarreraRow,
+  BenchmarkPrepaRow,
+  SatelitePrepaRow,
+  MetaPipelineInfo,
+  cargarCatalogoCarreras,
+  cargarBenchmarksPrepaRows,
+  cargarSatelitesPrepaRows,
+  cargarMetaPipeline,
+  construirBenchmarksPrepaMap,
+  calcularVentanasTemporales,
+  calcularSueldoConsolidadoCelda,
+  clasificarTendenciaRealDinamica,
+  calcularIndicadoresSatelite,
+  calcularAniosRetornoDinamico,
+  obtenerCapExDinamico,
+  calcularPercentil,
+  normalizarSalarioRadarDinamico,
+  descargarTodoPaginado,
+  esCeldaSateliteValida,
+  normalizarRegion,
+  padCve,
+  numSeguro
+} from '@/lib/dataroiEngine';
+import {
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   ResponsiveContainer, Tooltip as RechartsTooltip
@@ -29,7 +60,6 @@ import {
   FlaskConical,
   LayoutGrid,
   Scale,
-  Sparkles,
   X,
   Trash2,
   Zap,
@@ -44,12 +74,11 @@ import {
   Loader2,
   MapPin,
   Users,
-  ExternalLink
+  ExternalLink,
+  UploadCloud
 } from 'lucide-react';
 
 export const EVENTO_ABRIR_MODAL_VERSUS = 'dataroi-open-versus-modal';
-
-type CodigoGenero = 0 | 1 | 2;
 
 const COLORES_DOTS = ['#2563EB', '#9333EA', '#EA580C'];
 
@@ -74,527 +103,390 @@ const COLORES_VERSUS = [
   }
 ];
 
-const REGIONES_LISTA = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
-
-const ESTADOS_POR_REGION: Record<string, string[]> = {
-  norte: ['02', '05', '08', '19', '26', '28'],
-  noroeste: ['03', '10', '18', '25'],
-  bajio: ['01', '06', '11', '14', '16', '22', '24', '32'],
-  centro: ['09', '13', '15', '17', '21', '29'],
-  sur: ['04', '07', '12', '20', '23', '27', '30', '31']
-};
-
-const PARIDAD_REGIONAL_LIC: Record<string, number> = {
-  nacional: 1.0,
-  norte: 17917 / 15534,
-  noroeste: 15495 / 15534,
-  bajio: 14742 / 15534,
-  centro: 16000 / 15534,
-  sur: 13023 / 15534
-};
-
-const BENCHMARK_REGIONES_VERSUS: Record<string, {
-  nombre: string;
-  corto: string;
-  sueldo_prepa: Record<CodigoGenero, number>;
-  estrato_medio: number;
-  nepotismo_medio: number;
-}> = {
-  nacional: {
-    nombre: 'Nacional (Todo México)',
-    corto: 'Nacional',
-    sueldo_prepa: { 0: 10608, 1: 11832, 2: 8762 },
-    estrato_medio: 2.80,
-    nepotismo_medio: 37.2
-  },
-  norte: {
-    nombre: 'Norte / Frontera Industrial',
-    corto: 'Norte',
-    sueldo_prepa: { 0: 12816, 1: 14113, 2: 10775 },
-    estrato_medio: 3.08,
-    nepotismo_medio: 37.6
-  },
-  noroeste: {
-    nombre: 'Noroeste / Corredor Pacífico',
-    corto: 'Noroeste',
-    sueldo_prepa: { 0: 11858, 1: 13365, 2: 9748 },
-    estrato_medio: 2.83,
-    nepotismo_medio: 43.3
-  },
-  bajio: {
-    nombre: 'Occidente - Bajío',
-    corto: 'Bajío-Occ.',
-    sueldo_prepa: { 0: 10478, 1: 11731, 2: 8707 },
-    estrato_medio: 2.93,
-    nepotismo_medio: 38.8
-  },
-  centro: {
-    nombre: 'Centro / Valle de México',
-    corto: 'Centro',
-    sueldo_prepa: { 0: 9889, 1: 11119, 2: 8069 },
-    estrato_medio: 2.73,
-    nepotismo_medio: 33.5
-  },
-  sur: {
-    nombre: 'Sur - Sureste / Golfo',
-    corto: 'Sur-Sureste',
-    sueldo_prepa: { 0: 9150, 1: 10195, 2: 7469 },
-    estrato_medio: 2.31,
-    nepotismo_medio: 38.6
-  }
-};
-
-const CATALOGO_64_NOMBRES: Record<string, string> = {
-  '011100': 'Diseño curricular y pedagogía',
-  '011300': 'Orientación e intervención educativa',
-  '011500': 'Ciencias de la educación',
-  '012100': 'Docencia en Educación Preescolar',
-  '012200': 'Docencia en Educación Primaria',
-  '012300': 'Docencia en Educación Secundaria',
-  '012601': 'Docencia en Cultura Física y Deporte',
-  '012702': 'Docencia en Educación Especial',
-  '021100': 'Bellas artes',
-  '021300': 'Música',
-  '021400': 'Producción y Tecnologías Audiovisuales',
-  '021500': 'Diseño Gráfico y Comunicación Editorial',
-  '021600': 'Diseño Industrial, de Moda e Interiores',
-  '022200': 'Enseñanza y Lenguas Extranjeras',
-  '022300': 'Literatura',
-  '022500': 'Historia y arqueología',
-  '031100': 'Psicología',
-  '031200': 'Sociología y antropología',
-  '031300': 'Ciencias políticas',
-  '031400': 'Economía',
-  '031500': 'Trabajo y atención social',
-  '032100': 'Comunicación y periodismo',
-  '033100': 'Derecho',
-  '033200': 'Criminología y criminalística',
-  '041100': 'Negocios y comercio',
-  '041200': 'Mercadotecnia y publicidad',
-  '041300': 'Finanzas, banca y seguros',
-  '041400': 'Contabilidad y fiscalización',
-  '042000': 'Administración y Gestión Empresarial',
-  '042100': 'Administración de empresas',
-  '042200': 'Administración Turística y Restaurantera',
-  '042300': 'Administración pública',
-  '042400': 'Administración en Ingeniería y Construcción',
-  '051100': 'Biología',
-  '051200': 'Bioquímica y biofísica',
-  '052200': 'Química',
-  '053100': 'Matemáticas',
-  '061000': 'Innovación en TIC y Sistemas Digitales',
-  '061100': 'Ciencias computacionales',
-  '061300': 'Desarrollo de software',
-  '062100': 'Telecomunicaciones',
-  '062200': 'Informática',
-  '071100': 'Ingeniería Mecánica y Metalmecánica',
-  '071200': 'Electricidad y generación de energía',
-  '071300': 'Ingeniería Electrónica y Automatización',
-  '071400': 'Ingeniería de procesos químicos',
-  '071500': 'Ingeniería Automotriz y Aeronáutica',
-  '071600': 'Ingeniería y Tecnología Ambiental',
-  '071700': 'Ingeniería industrial',
-  '072100': 'Industria de la alimentación',
-  '072400': 'Ingeniería en Minería y Metalurgia',
-  '073100': 'Arquitectura y urbanismo',
-  '073200': 'Ingeniería Civil y Construcción',
-  '081100': 'Ingeniería Agronómica y Zootecnia',
-  '082100': 'Veterinaria',
-  '091100': 'Medicina general',
-  '092100': 'Enfermería y Obstetricia',
-  '093100': 'Odontología y Estomatología General',
-  '094100': 'Terapia y rehabilitación',
-  '094200': 'Nutrición',
-  '095400': 'Farmacia',
-  '101100': 'Deportes',
-  '101500': 'Gastronomía y servicios de alimentos',
-  '101600': 'Hospitalidad y turismo'
-};
-
-function obtenerNombreCortoPorCve(cve: string): string {
-  const pad = String(cve || '').trim().padStart(6, '0');
-  return CATALOGO_64_NOMBRES[pad] || formatearNombreCarreraEjecutivo(pad, `Carrera ${pad}`);
-}
-
 const formatoMoneda = (valor: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(valor || 0);
 
-const num = (val: any, fallback: number) => {
-  const n = Number(val);
-  return Number.isFinite(n) ? n : fallback;
-};
-
-function obtenerCapExCorto(cve: string) {
-  const pref3 = cve.slice(0, 3);
-  const pref4 = cve.slice(0, 4);
-  if (
-    pref4 === '0911' || pref4 === '0931' || pref3 === '073' || pref3 === '021' ||
-    pref4 === '0821' || pref4 === '1014' || pref4 === '1013' || pref4 === '1015'
-  ) {
-    return { nivel: 3, costoEquipo: 85000, etiqueta: 'Equipo Alto ($85k)' };
-  }
-  if (
-    pref3 === '061' || pref3 === '062' || pref3 === '071' || pref3 === '072' ||
-    pref3 === '051' || pref3 === '052' || pref3 === '053' || pref3 === '081' ||
-    pref3 === '091' || pref3 === '092' || pref3 === '094' || pref3 === '095'
-  ) {
-    return { nivel: 2, costoEquipo: 42000, etiqueta: 'Equipo Medio ($42k)' };
-  }
-  return { nivel: 1, costoEquipo: 18000, etiqueta: 'Equipo Básico ($18k)' };
-}
-
-function calcularAniosRetornoRapido(sueldoCarrera: number, sueldoPrepa: number, cve: string, esPrivada: boolean) {
-  const semestres = cve === '091100' ? 12 : 9;
-  const capex = obtenerCapExCorto(cve);
-  const inversionTotal = esPrivada
-    ? semestres * (6500 * 6) + 22000 + capex.costoEquipo
-    : semestres * 1800 + 8500 + capex.costoEquipo;
-  const bonoAnual = (sueldoCarrera - sueldoPrepa) * 12;
-  if (bonoAnual <= 0) return null;
-  return Number((inversionTotal / bonoAnual).toFixed(1));
-}
-
-function obtenerSectorDominante(p: any) {
+function obtenerSectorDominante(p: any): string {
   const sectores = [
-    { label: 'PYME', val: num(p?.pct_pyme, 0) },
-    { label: 'Independiente / Micro', val: num(p?.pct_micro, 0) },
-    { label: 'Gran Corporativo', val: num(p?.pct_corp, 0) },
-    { label: 'Gobierno', val: num(p?.pct_gobierno, 0) }
+    { label: 'PYME', val: numSeguro(p?.pct_pyme, 0) },
+    { label: 'Independiente / Micro', val: numSeguro(p?.pct_micro, 0) },
+    { label: 'Gran Corporativo', val: numSeguro(p?.pct_corp, 0) },
+    { label: 'Gobierno', val: numSeguro(p?.pct_gobierno, 0) }
   ].sort((a, b) => b.val - a.val);
   return `${sectores[0].val.toFixed(1)}% ${sectores[0].label}`;
-}
-
-function calcularSueldoRegionalBuhlmann(
-  sueldoObsCrudo: number,
-  sueldoNac: number,
-  reg: string,
-  nEfectivoKish: number
-): number {
-  if (reg === 'nacional' || sueldoNac <= 0) {
-    return Math.round(sueldoObsCrudo);
-  }
-  const anclaParidad = sueldoNac * (PARIDAD_REGIONAL_LIC[reg] || 1.0);
-  if (sueldoObsCrudo <= 0) {
-    return Math.round(anclaParidad);
-  }
-  const obsAcotado = Math.max(anclaParidad * 0.78, Math.min(anclaParidad * 1.18, sueldoObsCrudo));
-  const K = 140.0;
-  const z = nEfectivoKish > 0 ? nEfectivoKish / (nEfectivoKish + K) : 0.50;
-  return Math.round(z * obsAcotado + (1.0 - z) * anclaParidad);
-}
-
-function clasificarTendenciaReal21_26(filasRealesValidas: any[]) {
-  const porAnioMap: Record<number, { prod: number; peso: number }> = {};
-  filasRealesValidas.forEach(r => {
-    const a = Number(r.anio);
-    const s = Number(r.sueldo_promedio_mensual || 0);
-    const p = Math.max(1, Number(r.poblacion_activa_total || 1));
-    if (a >= 2021 && a <= 2026 && s > 0) {
-      if (!porAnioMap[a]) porAnioMap[a] = { prod: 0, peso: 0 };
-      porAnioMap[a].prod += s * p;
-      porAnioMap[a].peso += p;
-    }
-  });
-
-  const anios = Object.keys(porAnioMap).map(Number).sort((a, b) => a - b);
-  if (anios.length < 4) {
-    return { etiqueta: 'Estable', codigo: 'estable' as const };
-  }
-
-  const sueldos = anios.map(a => porAnioMap[a].prod / porAnioMap[a].peso);
-  let maxSalto = 0;
-  for (let i = 1; i < sueldos.length; i++) {
-    const salto = Math.abs(sueldos[i] - sueldos[i - 1]) / sueldos[i - 1];
-    if (salto > maxSalto) maxSalto = salto;
-  }
-
-  const media = sueldos.reduce((a, b) => a + b, 0) / sueldos.length;
-  const varianza = sueldos.reduce((a, b) => a + Math.pow(b - media, 2), 0) / sueldos.length;
-  const cv = Math.sqrt(varianza) / (media || 1);
-
-  if (maxSalto > 0.22 || cv > 0.16) {
-    return { etiqueta: 'Volátil', codigo: 'volatil' as const };
-  }
-
-  const ptsBase = anios.filter(a => a === 2022 || a === 2023).map(a => porAnioMap[a].prod / porAnioMap[a].peso);
-  const ptsRec = anios.filter(a => a === 2025 || a === 2026).map(a => porAnioMap[a].prod / porAnioMap[a].peso);
-
-  const sueldoBase = ptsBase.length > 0 ? ptsBase.reduce((a, b) => a + b, 0) / ptsBase.length : sueldos[0];
-  const sueldoRec = ptsRec.length > 0 ? ptsRec.reduce((a, b) => a + b, 0) / ptsRec.length : sueldos[sueldos.length - 1];
-
-  const crecRealAcum = sueldoBase > 0 ? (sueldoRec - sueldoBase) / sueldoBase : 0;
-
-  const aniosPost = anios.filter(a => a >= 2022);
-  const aniosEval = aniosPost.length >= 3 ? aniosPost : anios;
-  const sueldosEval = aniosEval.map(a => porAnioMap[a].prod / porAnioMap[a].peso);
-  const mediaEval = sueldosEval.reduce((a, b) => a + b, 0) / sueldosEval.length;
-
-  const meanX = aniosEval.reduce((a, b) => a + b, 0) / aniosEval.length;
-  const numSum = aniosEval.reduce((acc, x, idx) => acc + (x - meanX) * (sueldosEval[idx] - mediaEval), 0);
-  const denSum = aniosEval.reduce((acc, x) => acc + Math.pow(x - meanX, 2), 0) || 1;
-  const pendientePct = (numSum / denSum) / (mediaEval || 1);
-
-  if (crecRealAcum >= 0.040 && pendientePct >= 0.008) {
-    return { etiqueta: 'En crecimiento', codigo: 'crecimiento' as const };
-  }
-  if (crecRealAcum <= -0.040 && pendientePct <= -0.008) {
-    return { etiqueta: 'En ajuste', codigo: 'ajuste' as const };
-  }
-  return { etiqueta: 'Estable', codigo: 'estable' as const };
 }
 
 function AnilloScoreCompactoModal({ score }: { score: number }) {
   const sem = obtenerSemaforoScoreDataROI(score);
   const scoreEntero = Math.round(score);
   const r = 17;
-  const dim = 42;
-  const strokeW = 4.0;
   const circ = 2 * Math.PI * r;
-  const pct = Math.max(0, Math.min(100, scoreEntero));
-  const offset = circ - (pct / 100) * circ;
+  const offset = circ - (Math.max(0, Math.min(100, scoreEntero)) / 100) * circ;
 
   return (
     <div
       role="img"
-      aria-label={`Score DataROI: ${scoreEntero} de 100 puntos, Grado ${sem.grado}, ${sem.etiqueta}`}
-      title={`Score DataROI: ${scoreEntero}/100 (Grado ${sem.grado} · ${sem.etiqueta})`}
+      aria-label={`Calificación DataROI: ${scoreEntero} de 100, Grado ${sem.grado}`}
+      title={`Calificación DataROI: ${scoreEntero}/100 (Grado ${sem.grado} · ${sem.etiqueta})`}
       className="relative w-11 h-11 flex items-center justify-center shrink-0"
     >
-      <svg className="w-11 h-11 -rotate-90" viewBox={`0 0 ${dim} ${dim}`} aria-hidden="true">
-        <circle cx={dim / 2} cy={dim / 2} r={r} fill={sem.fillTintHex} stroke={sem.trackHex} strokeWidth={strokeW} />
+      <svg className="w-11 h-11 -rotate-90" viewBox="0 0 42 42" aria-hidden="true">
+        <circle cx="21" cy="21" r={r} fill={sem.fillTintHex} stroke={sem.trackHex} strokeWidth="3.8" />
         <circle
-          cx={dim / 2}
-          cy={dim / 2}
+          cx="21"
+          cy="21"
           r={r}
           fill="none"
           stroke={sem.colorHex}
-          strokeWidth={strokeW}
+          strokeWidth="3.8"
           strokeLinecap="round"
           strokeDasharray={circ}
           strokeDashoffset={offset}
-          className="transition-all duration-700 ease-out"
         />
       </svg>
-      <span className="absolute text-xs font-black text-slate-900">{scoreEntero}</span>
+      <span className="absolute text-xs font-black text-slate-900 leading-none">{scoreEntero}</span>
     </div>
   );
 }
 
 function NavbarGlobalContenido() {
-  const pathname = usePathname();
-  const [cvesVersus, setCvesVersus] = useState<string[]>([]);
-  const [popoverAbierto, setPopoverAbierto] = useState<boolean>(false);
-  const [navbarVisible, setNavbarVisible] = useState<boolean>(true);
-  const [enTope, setEnTope] = useState<boolean>(true);
+  const pathname = usePathname() || '/';
 
-  // Estados del Modal Global Independiente de Versus
-  const [modalVersusAbierto, setModalVersusAbierto] = useState<boolean>(false);
-  const [regionVersus, setRegionVersus] = useState<string>('nacional');
+  const [cvesVersus, setCvesVersus] = useState<string[]>([]);
+  const [popoverAbierto, setPopoverAbierto] = useState(false);
+
+  // Smart Auto-Hide al hacer scroll
+  const [navbarVisible, setNavbarVisible] = useState(true);
+  const ultimoScrollYRef = useRef(0);
+
+  // Metadatos globales vivos desde Supabase
+  const [catalogoCarreras, setCatalogoCarreras] = useState<DimCarreraRow[]>([]);
+  const [totalCarrerasCertificadas, setTotalCarrerasCertificadas] = useState<number | null>(null);
+  const [prepaRows, setPrepaRows] = useState<BenchmarkPrepaRow[]>([]);
+  const [satPrepaRows, setSatPrepaRows] = useState<SatelitePrepaRow[]>([]);
+  const [metaPipeline, setMetaPipeline] = useState<MetaPipelineInfo>(META_PIPELINE_FALLBACK);
+  const [mediasSatPorRegSexo, setMediasSatPorRegSexo] = useState<Record<string, { estrato: number; nepotismo: number }>>({});
+  const [percentilesSalarioGlobal, setPercentilesSalarioGlobal] = useState<{ p05: number; p95: number }>({ p05: 9500, p95: 22000 });
+  const [reloadMetaTick, setReloadMetaTick] = useState(0);
+
+  // Estado del Modal Global Independiente
+  const [modalVersusAbierto, setModalVersusAbierto] = useState(false);
+  const [regionVersus, setRegionVersus] = useState<RegionClave>('nacional');
   const [generoVersus, setGeneroVersus] = useState<CodigoGenero>(0);
   const [vistaGraficoVersus, setVistaGraficoVersus] = useState<'radar' | 'regiones'>('radar');
-  const [copiadoVersus, setCopiadoVersus] = useState<boolean>(false);
-  const [cargandoVersus, setCargandoVersus] = useState<boolean>(false);
-  const [versionCacheVersus, setVersionCacheVersus] = useState<number>(0);
+  const [cargandoVersus, setCargandoVersus] = useState(false);
+  const [copiadoVersus, setCopiadoVersus] = useState(false);
+  const [versionCache, setVersionCache] = useState(0);
 
   const cacheVersusRef = useRef<Record<string, { satelites: any[]; series: any[] }>>({});
-  const lastScrollYRef = useRef<number>(0);
   const contenedorPopoverRef = useRef<HTMLDivElement>(null);
 
-  const sincronizarContextoRegional = () => {
-    const estado = leerEstadoDescubridorGlobal();
-    let reg = estado.regionActiva || 'nacional';
-    let gen: CodigoGenero = estado.generoActivo || 0;
-
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const regUrl = params.get('region');
-      const genUrl = params.get('genero');
-      if (regUrl && BENCHMARK_REGIONES_VERSUS[regUrl]) reg = regUrl;
-      if (genUrl === 'mujeres' || genUrl === '2') gen = 2;
-      else if (genUrl === 'hombres' || genUrl === '1') gen = 1;
-      else if (genUrl === 'total' || genUrl === '0') gen = 0;
+  // Smart Auto-Hide: oculta al bajar, reaparece al subir; siempre visible arriba o con menús abiertos
+  useEffect(() => {
+    if (popoverAbierto || modalVersusAbierto) {
+      setNavbarVisible(true);
+      return;
     }
 
-    setRegionVersus(reg);
-    setGeneroVersus(gen);
-  };
-
-  useEffect(() => {
-    const sincronizar = () => {
-      const estado = leerEstadoDescubridorGlobal();
-      const nueva = estado.carrerasCompararCves || [];
-      setCvesVersus(prev => (prev.join(',') === nueva.join(',') ? prev : nueva));
+    const onScroll = () => {
+      const y = window.scrollY;
+      if (y <= 64) {
+        setNavbarVisible(true);
+      } else if (y > ultimoScrollYRef.current + 8) {
+        setNavbarVisible(false);
+      } else if (y < ultimoScrollYRef.current - 6) {
+        setNavbarVisible(true);
+      }
+      ultimoScrollYRef.current = y;
     };
 
-    sincronizar();
-    window.addEventListener(EVENTO_VERSUS_SYNC, sincronizar);
-    window.addEventListener('storage', sincronizar);
-    return () => {
-      window.removeEventListener(EVENTO_VERSUS_SYNC, sincronizar);
-      window.removeEventListener('storage', sincronizar);
-    };
-  }, [pathname]);
+    ultimoScrollYRef.current = window.scrollY;
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [popoverAbierto, modalVersusAbierto]);
 
-  // Escuchar evento global para abrir el Modal Versus desde cualquier vista
+  // Cargar metadatos vivos (dim_carreras, conteo certificado, benchmarks_prepa, satelites_prepa, meta_pipeline y medias)
   useEffect(() => {
-    const handleAbrirModalGlobal = () => {
-      sincronizarContextoRegional();
-      setPopoverAbierto(false);
-      setModalVersusAbierto(true);
-    };
-
-    window.addEventListener(EVENTO_ABRIR_MODAL_VERSUS, handleAbrirModalGlobal);
-    return () => window.removeEventListener(EVENTO_ABRIR_MODAL_VERSUS, handleAbrirModalGlobal);
-  }, []);
-
-  // Cerrar el modal con Escape
-  useEffect(() => {
-    if (!modalVersusAbierto) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setModalVersusAbierto(false);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [modalVersusAbierto]);
-
-  // Carga quirúrgica bajo demanda en memoria cuando el modal se abre
-  useEffect(() => {
-    if (!modalVersusAbierto || cvesVersus.length === 0) return;
-
-    const faltantes = cvesVersus.filter(cve => !cacheVersusRef.current[cve]);
-    if (faltantes.length === 0) return;
-
     let cancelado = false;
-    async function descargarDatosVersusFaltantes() {
-      setCargandoVersus(true);
-      const variantesCve = Array.from(
-        new Set(faltantes.flatMap(c => [c, String(Number(c))]))
-      );
-
-      const [resSat, resSer] = await Promise.all([
-        supabase
-          .from('satelites_cultura')
-          .select('*')
-          .in('cve_carrera', variantesCve),
-        supabase
-          .from('predicciones_roi')
-          .select('cve_carrera, cve_ent, anio, sexo, tipo_dato, poblacion_activa_total, desempleados_reales, sueldo_promedio_mensual, indice_saturacion_pct')
-          .eq('tipo_dato', 'Real')
-          .in('cve_carrera', variantesCve)
-          .order('anio', { ascending: true })
+    async function cargarMetadatosGlobales() {
+      const [catRows, metaInfo, benchRows, satPrepaData, satRes] = await Promise.all([
+        cargarCatalogoCarreras(supabase),
+        cargarMetaPipeline(supabase),
+        cargarBenchmarksPrepaRows(supabase),
+        cargarSatelitesPrepaRows(supabase),
+        descargarTodoPaginado(() =>
+          supabase
+            .from('satelites_cultura')
+            .select('cve_carrera, region, sexo, n_encuestados_reales, n_efectivo_kish, volumen_muestra_nacional, indice_privilegio, pct_nepotismo')
+            .order('cve_carrera', { ascending: true })
+            .order('region', { ascending: true })
+            .order('sexo', { ascending: true })
+        )
       ]);
 
       if (cancelado) return;
 
-      const sats = resSat.data || [];
-      const sers = (resSer.data || []).map(r => {
-        const entRaw = String(r.cve_ent || 'nacional').toLowerCase().trim();
-        let regDestino = entRaw;
-        if (entRaw === '0' || entRaw === '00' || entRaw === 'nacional') {
-          regDestino = 'nacional';
-        } else if (!REGIONES_LISTA.includes(entRaw as any)) {
-          const entPad = entRaw.padStart(2, '0');
-          const encontrada = Object.entries(ESTADOS_POR_REGION).find(([, lista]) => lista.includes(entPad));
-          if (encontrada) regDestino = encontrada[0];
+      setCatalogoCarreras(catRows);
+      setMetaPipeline(metaInfo);
+      setPrepaRows(benchRows);
+      setSatPrepaRows(satPrepaData);
+
+      const certificadasNac = satRes.filter(
+        (s: any) =>
+          padCve(s.cve_carrera) !== '999999' &&
+          normalizarRegion(s.region) === 'nacional' &&
+          Number(s.sexo ?? 0) === 0 &&
+          esCeldaSateliteValida(s, 'nacional', 0)
+      );
+      setTotalCarrerasCertificadas(certificadasNac.length);
+
+      const acum: Record<string, { w: number; est: number; nep: number }> = {};
+      satRes.forEach((s: any) => {
+        const reg = normalizarRegion(s.region);
+        const sx = Number(s.sexo ?? 0) as CodigoGenero;
+        if (!esCeldaSateliteValida(s, reg, sx)) return;
+        const k = `${reg}_${sx}`;
+        const w = Math.max(1, numSeguro(s.volumen_muestra_nacional, 1));
+        if (!acum[k]) acum[k] = { w: 0, est: 0, nep: 0 };
+        acum[k].w += w;
+        acum[k].est += numSeguro(s.indice_privilegio, 2.8) * w;
+        acum[k].nep += numSeguro(s.pct_nepotismo, 37.2) * w;
+      });
+
+      const mapaMedias: Record<string, { estrato: number; nepotismo: number }> = {};
+      Object.entries(acum).forEach(([k, val]) => {
+        if (val.w > 0) {
+          mapaMedias[k] = {
+            estrato: Number((val.est / val.w).toFixed(2)),
+            nepotismo: Number((val.nep / val.w).toFixed(1))
+          };
         }
-        return {
-          ...r,
-          cve_ent: regDestino,
-          sexo: Number(r.sexo ?? 0)
-        };
       });
+      setMediasSatPorRegSexo(mapaMedias);
 
-      faltantes.forEach(cve => {
-        const cvePad = cve.padStart(6, '0');
-        cacheVersusRef.current[cvePad] = {
-          satelites: sats.filter(s => String(s.cve_carrera).padStart(6, '0') === cvePad),
-          series: sers.filter(r => String(r.cve_carrera).padStart(6, '0') === cvePad)
-        };
-      });
+      const { data: ultSueldos } = await supabase
+        .from('predicciones_roi')
+        .select('sueldo_promedio_mensual')
+        .eq('tipo_dato', 'Real')
+        .eq('anio', metaInfo.ultimo_anio)
+        .in('cve_ent', ['nacional', '0', '00'])
+        .eq('sexo', 0);
 
-      setVersionCacheVersus(v => v + 1);
-      setCargandoVersus(false);
+      if (!cancelado && ultSueldos && ultSueldos.length >= 4) {
+        const vals = ultSueldos.map((r: any) => numSeguro(r.sueldo_promedio_mensual, 0)).filter(v => v > 0);
+        if (vals.length >= 4) {
+          setPercentilesSalarioGlobal({
+            p05: Math.round(calcularPercentil(vals, 0.05)),
+            p95: Math.round(calcularPercentil(vals, 0.95))
+          });
+        }
+      }
     }
 
-    descargarDatosVersusFaltantes();
+    cargarMetadatosGlobales();
     return () => {
       cancelado = true;
     };
-  }, [modalVersusAbierto, cvesVersus]);
+  }, [reloadMetaTick]);
 
-  // Patrón Smart Auto-Hide (Headroom)
+  // Limpiar caché de Versus y recargar metadatos si llega una actualización desde /actualizar
   useEffect(() => {
-    const handleScroll = () => {
-      const currentY = window.scrollY;
-      setEnTope(currentY < 16);
+    const onDataUpdated = () => {
+      cacheVersusRef.current = {};
+      setVersionCache(v => v + 1);
+      setReloadMetaTick(t => t + 1);
+    };
+    window.addEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
+    return () => window.removeEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
+  }, []);
 
-      if (currentY < 45) {
-        setNavbarVisible(true);
-      } else if (currentY > lastScrollYRef.current + 10 && !popoverAbierto) {
-        setNavbarVisible(false);
-      } else if (currentY < lastScrollYRef.current - 6) {
-        setNavbarVisible(true);
+  const mapaCatalogo = useMemo(() => {
+    const m: Record<string, DimCarreraRow> = {};
+    catalogoCarreras.forEach(c => {
+      m[padCve(c.cve_carrera)] = c;
+    });
+    return m;
+  }, [catalogoCarreras]);
+
+  const obtenerNombreCortoPorCve = (cve: string): string => {
+    const pad = padCve(cve);
+    const row = mapaCatalogo[pad];
+    if (row) {
+      return row.nombre_ejecutivo || formatearNombreCarreraEjecutivo(pad, row.nombre_carrera);
+    }
+    return formatearNombreCarreraEjecutivo(pad, `Carrera ${pad}`);
+  };
+
+  // Sincronización global con el estado del comparador
+  useEffect(() => {
+    const sincronizar = () => {
+      const est = leerEstadoDescubridorGlobal();
+      setCvesVersus(est.carrerasCompararCves || []);
+      if (est.regionActiva && (REGIONES_ORDEN as readonly string[]).includes(est.regionActiva)) {
+        setRegionVersus(est.regionActiva as RegionClave);
       }
-
-      lastScrollYRef.current = currentY;
+      if (est.generoActivo === 0 || est.generoActivo === 1 || est.generoActivo === 2) {
+        setGeneroVersus(est.generoActivo);
+      }
     };
 
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [popoverAbierto]);
+    const abrirModalPorEvento = () => {
+      sincronizar();
+      const est = leerEstadoDescubridorGlobal();
+      if ((est.carrerasCompararCves || []).length >= 2) {
+        setPopoverAbierto(false);
+        setModalVersusAbierto(true);
+      }
+    };
+
+    sincronizar();
+    window.addEventListener(EVENTO_VERSUS_SYNC, sincronizar);
+    window.addEventListener(EVENTO_ABRIR_MODAL_VERSUS, abrirModalPorEvento);
+    window.addEventListener('storage', sincronizar);
+    return () => {
+      window.removeEventListener(EVENTO_VERSUS_SYNC, sincronizar);
+      window.removeEventListener(EVENTO_ABRIR_MODAL_VERSUS, abrirModalPorEvento);
+      window.removeEventListener('storage', sincronizar);
+    };
+  }, [pathname]);
 
   useEffect(() => {
-    if (!popoverAbierto) return;
+    setPopoverAbierto(false);
+    setNavbarVisible(true);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (cvesVersus.length < 2 && modalVersusAbierto) {
+      setModalVersusAbierto(false);
+    }
+  }, [cvesVersus.length, modalVersusAbierto]);
+
+  useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (contenedorPopoverRef.current && !contenedorPopoverRef.current.contains(e.target as Node)) {
         setPopoverAbierto(false);
       }
     };
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPopoverAbierto(false);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (modalVersusAbierto) setModalVersusAbierto(false);
+        else if (popoverAbierto) setPopoverAbierto(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    window.addEventListener('keydown', handleEscape);
+    window.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [popoverAbierto]);
+  }, [popoverAbierto, modalVersusAbierto]);
+
+  // Carga bajo demanda de las 2 o 3 carreras del Modal Global
+  useEffect(() => {
+    if (!modalVersusAbierto || cvesVersus.length < 2) return;
+
+    const faltantes = cvesVersus.filter(cve => !cacheVersusRef.current[padCve(cve)]);
+    if (faltantes.length === 0) return;
+
+    let cancelado = false;
+    async function cargarDatosVersus() {
+      setCargandoVersus(true);
+      const variantes = Array.from(
+        new Set(faltantes.flatMap(cve => [padCve(cve), String(Number(cve))]))
+      );
+
+      const [sats, sers] = await Promise.all([
+        descargarTodoPaginado(() =>
+          supabase
+            .from('satelites_cultura')
+            .select('*')
+            .in('cve_carrera', variantes)
+            .order('cve_carrera', { ascending: true })
+            .order('region', { ascending: true })
+            .order('sexo', { ascending: true })
+        ),
+        descargarTodoPaginado(() =>
+          supabase
+            .from('predicciones_roi')
+            .select('cve_carrera, cve_ent, anio, sexo, tipo_dato, poblacion_activa_total, desempleados_reales, sueldo_promedio_mensual, indice_saturacion_pct')
+            .eq('tipo_dato', 'Real')
+            .in('cve_carrera', variantes)
+            .order('cve_carrera', { ascending: true })
+            .order('cve_ent', { ascending: true })
+            .order('sexo', { ascending: true })
+            .order('anio', { ascending: true })
+        )
+      ]);
+
+      if (cancelado) return;
+
+      faltantes.forEach(cveRaw => {
+        const cvePad = padCve(cveRaw);
+        const satsC = (sats || []).filter((r: any) => padCve(r.cve_carrera) === cvePad);
+        const sersC = (sers || [])
+          .filter((r: any) => padCve(r.cve_carrera) === cvePad)
+          .map((r: any) => ({
+            ...r,
+            cve_carrera: cvePad,
+            cve_ent: normalizarRegion(r.cve_ent),
+            sexo: Number(r.sexo ?? 0),
+            anio: Number(r.anio)
+          }));
+
+        cacheVersusRef.current[cvePad] = {
+          satelites: satsC,
+          series: sersC
+        };
+      });
+
+      setCargandoVersus(false);
+      setVersionCache(v => v + 1);
+    }
+
+    cargarDatosVersus();
+    return () => {
+      cancelado = true;
+    };
+  }, [modalVersusAbierto, cvesVersus, reloadMetaTick]);
 
   const esCatalogo = pathname === '/';
-  const esDescubridor = pathname?.startsWith('/descubrir');
-  const esLaboratorio = pathname?.startsWith('/laboratorio');
-  const esCarrera = pathname?.startsWith('/carrera');
+  const esDescubridor = pathname.startsWith('/descubrir');
+  const esLaboratorio = pathname.startsWith('/laboratorio');
+  const esActualizar = pathname.startsWith('/actualizar');
+  const esCarrera = pathname.startsWith('/carrera');
 
   const quitarCarreraDesdeNavbar = (cve: string) => {
     const nueva = toggleCarreraComparadorGlobal(cve);
     setCvesVersus(nueva);
-    if (nueva.length < 2) {
-      setModalVersusAbierto(false);
-    }
   };
 
   const limpiarTodasDesdeNavbar = () => {
     limpiarComparadorGlobal();
     setCvesVersus([]);
+    setPopoverAbierto(false);
     setModalVersusAbierto(false);
   };
 
-  // Abre el Modal Global en la página actual sin redirigir a /descubrir
   const ejecutarComparativaCaraACara = () => {
     if (cvesVersus.length < 2) return;
-    sincronizarContextoRegional();
+    const est = leerEstadoDescubridorGlobal();
+    if (est.regionActiva && (REGIONES_ORDEN as readonly string[]).includes(est.regionActiva)) {
+      setRegionVersus(est.regionActiva as RegionClave);
+    }
+    if (est.generoActivo === 0 || est.generoActivo === 1 || est.generoActivo === 2) {
+      setGeneroVersus(est.generoActivo);
+    }
     setPopoverAbierto(false);
     setModalVersusAbierto(true);
   };
 
-  const actualizarRegionVersus = (nuevaReg: string) => {
+  const actualizarRegionVersus = (nuevaReg: RegionClave) => {
     setRegionVersus(nuevaReg);
     try {
       const actual = leerEstadoDescubridorGlobal();
       sessionStorage.setItem(STORAGE_KEY_DESCUBRIDOR, JSON.stringify({ ...actual, regionActiva: nuevaReg }));
     } catch {
-      // Ignorar errores en modo privado
+      // Sin impacto
     }
   };
 
@@ -604,267 +496,277 @@ function NavbarGlobalContenido() {
       const actual = leerEstadoDescubridorGlobal();
       sessionStorage.setItem(STORAGE_KEY_DESCUBRIDOR, JSON.stringify({ ...actual, generoActivo: nuevoGen }));
     } catch {
-      // Ignorar errores en modo privado
+      // Sin impacto
     }
   };
 
-  // Procesamiento en vivo de las carreras seleccionadas para el Modal Global
-  const carrerasEnVersus = useMemo(() => {
-    const infoReg = BENCHMARK_REGIONES_VERSUS[regionVersus] || BENCHMARK_REGIONES_VERSUS.nacional;
-    const sueldoPrepaBase = infoReg.sueldo_prepa[generoVersus] || infoReg.sueldo_prepa[0];
-    const mediaEstratoReg = infoReg.estrato_medio || 2.80;
-    const mediaNepotismoReg = infoReg.nepotismo_medio || 37.2;
-
-    const calcularPonderado = (filas: any[]) => {
-      const validas = filas.filter(r => Number(r.sueldo_promedio_mensual || 0) > 0);
-      if (validas.length === 0) return 0;
-      const pob = validas.reduce((acc, c) => acc + Math.max(1, Number(c.poblacion_activa_total || 1)), 0);
-      return pob > 0
-        ? validas.reduce((acc, c) => acc + Number(c.sueldo_promedio_mensual) * Math.max(1, Number(c.poblacion_activa_total || 1)), 0) / pob
-        : 0;
+  const { ventanasVersus, benchPrepaMap } = useMemo(() => {
+    const aniosCache: number[] = [];
+    cvesVersus.forEach(cve => {
+      const cached = cacheVersusRef.current[padCve(cve)];
+      if (cached) {
+        cached.series.forEach(s => aniosCache.push(Number(s.anio)));
+      }
+    });
+    const v = calcularVentanasTemporales(aniosCache, metaPipeline);
+    return {
+      ventanasVersus: v,
+      benchPrepaMap: construirBenchmarksPrepaMap(prepaRows, v, satPrepaRows)
     };
+  }, [cvesVersus, versionCache, metaPipeline, prepaRows, satPrepaRows]);
 
-    return cvesVersus.map(cve => {
-      const cvePad = cve.padStart(6, '0');
-      const nombreCorto = obtenerNombreCortoPorCve(cvePad);
+  const infoRegVersus = REGIONES_META[regionVersus] || REGIONES_META.nacional;
+  const sueldoPrepaVersus =
+    benchPrepaMap[regionVersus]?.sueldo_prepa[generoVersus] ??
+    benchPrepaMap.nacional.sueldo_prepa[0];
+  const calidadOitPrepaVersus =
+    benchPrepaMap[regionVersus]?.calidad_oit_prepa_pct[generoVersus] ?? null;
+  const mediasCtxVersus =
+    mediasSatPorRegSexo[`${regionVersus}_${generoVersus}`] ||
+    mediasSatPorRegSexo['nacional_0'] ||
+    { estrato: 2.80, nepotismo: 37.2 };
+
+  const etiquetaGeneroVersus =
+    generoVersus === 2 ? 'Solo Mujeres' : generoVersus === 1 ? 'Solo Hombres' : 'Total General';
+  const queryGeneroVersus =
+    generoVersus === 2 ? 'mujeres' : generoVersus === 1 ? 'hombres' : 'total';
+
+  const carrerasEnVersus = useMemo(() => {
+    if (!modalVersusAbierto || cvesVersus.length < 2) return [];
+
+    return cvesVersus.map(cveRaw => {
+      const cvePad = padCve(cveRaw);
       const cached = cacheVersusRef.current[cvePad];
+      const metaCar = mapaCatalogo[cvePad];
+      const nombre = obtenerNombreCortoPorCve(cvePad);
+      const semestresDefault = metaCar?.semestres_default ?? (cvePad === '091100' ? 12 : 9);
+      const capexMxn = metaCar?.capex_mxn ?? null;
 
       if (!cached) {
         return {
           cve_carrera: cvePad,
-          nombre_carrera: nombreCorto,
-          cargando: true,
-          sueldo_esperado: 15000,
-          premioVsPrepaPct: 35,
-          tasaCalidadOIT: 60,
-          tasaFormalidadTotal: 68,
-          pctEmpleoUnico: 94,
-          pctArraigoLocal: 97,
-          scoreDataROI: 70,
+          nombre_carrera: nombre,
+          semestres_default: semestresDefault,
+          capex_mxn: capexMxn,
+          sueldo_esperado: 0,
+          premioVsPrepaPct: 0,
+          tasaCalidadOIT: 0,
+          tasaFormalidadTotal: 0,
+          pctEmpleoUnico: 0,
+          pctArraigoLocal: 0,
+          scoreDataROI: 0,
           perfilActivo: {},
-          perfiles: {},
-          pilaresRadar: { Salario: 60, Formalidad: 65, Empleabilidad: 65, Meritocracia: 60, 'Blindaje IA': 60, Estabilidad: 65 },
-          crudos: { movilidad: 60 }
+          crudos: { movilidad: 50 },
+          pilaresRadar: { Salario: 50, Formalidad: 50, Empleabilidad: 50, Meritocracia: 50, 'Blindaje IA': 50, Estabilidad: 50 },
+          perfiles: {}
         };
       }
 
-      const { satelites, series } = cached;
-      const obtenerSat = (reg: string, sx: number) =>
-        satelites.find(s => String(s.region || 'nacional').toLowerCase() === reg && Number(s.sexo ?? 0) === sx) ||
-        satelites.find(s => String(s.region || 'nacional').toLowerCase() === reg && Number(s.sexo ?? 0) === 0) ||
-        satelites.find(s => String(s.region || 'nacional').toLowerCase() === 'nacional' && Number(s.sexo ?? 0) === sx) ||
-        satelites.find(s => String(s.region || 'nacional').toLowerCase() === 'nacional' && Number(s.sexo ?? 0) === 0) ||
-        satelites[0] ||
-        {};
+      const sats = cached.satelites;
+      const sers = cached.series;
 
-      const obtenerSer = (reg: string, sx: number) => {
-        const dir = series.filter(r => r.cve_ent === reg && r.sexo === sx);
+      const buscarSat = (reg: RegionClave, sx: CodigoGenero) =>
+        sats.find((r: any) => normalizarRegion(r.region) === reg && Number(r.sexo ?? 0) === sx);
+
+      const obtenerSer = (reg: RegionClave, sx: CodigoGenero) => {
+        const dir = sers.filter((r: any) => r.cve_ent === reg && r.sexo === sx);
         if (dir.length > 0) return dir;
-        if (sx === 0) return series.filter(r => r.cve_ent === reg && (r.sexo === 1 || r.sexo === 2));
+        if (sx === 0) return sers.filter((r: any) => r.cve_ent === reg && (r.sexo === 1 || r.sexo === 2));
         return [];
       };
 
       const serieNacSx = obtenerSer('nacional', generoVersus);
-      const fNac25_26 = serieNacSx.filter(r => r.anio === 2025 || r.anio === 2026);
-      const sueldoNacRef = Math.round(calcularPonderado(fNac25_26.length > 0 ? fNac25_26 : serieNacSx));
+      const sueldoNacRef = calcularSueldoConsolidadoCelda(serieNacSx, ventanasVersus);
+      const tendenciaNac = clasificarTendenciaRealDinamica(serieNacSx, ventanasVersus);
 
-      const perfilesReg: Record<string, Record<number, any>> = {};
-      REGIONES_LISTA.forEach(rk => {
-        perfilesReg[rk] = {};
-        const satRk = satelites.find(s => String(s.region || 'nacional').toLowerCase() === rk && Number(s.sexo ?? 0) === generoVersus);
-        const nRealRk = Number(satRk?.n_encuestados_reales || 0);
-        const minReq = rk === 'nacional' ? (generoVersus === 0 ? 180 : 25) : (generoVersus === 0 ? 30 : 25);
-        const celdaValida = rk === 'nacional' ? true : nRealRk >= minReq;
+      const perfilesPorRegion: Record<string, Record<number, any>> = {};
+      REGIONES_ORDEN.forEach(rKey => {
+        const satRk = buscarSat(rKey, generoVersus);
+        const celdaValida = esCeldaSateliteValida(satRk, rKey, generoVersus);
+        const serRk = obtenerSer(rKey, generoVersus);
+        const fRkEmp = serRk.filter((r: any) => ventanasVersus.aniosEmpleo.includes(r.anio));
+        const loteEmp = fRkEmp.length > 0 ? fRkEmp : serRk;
 
-        const serRk = obtenerSer(rk, generoVersus);
-        const fRk25_26 = serRk.filter(r => r.anio === 2025 || r.anio === 2026);
-        const fRk22_26 = serRk.filter(r => r.anio >= 2022 && r.anio <= 2026);
-        const sueldoObsRk = calcularPonderado(fRk25_26.length > 0 ? fRk25_26 : fRk22_26);
-        const nKishRk = Number(satRk?.n_efectivo_kish || 0);
+        const sueldoRk = calcularSueldoConsolidadoCelda(serRk, ventanasVersus, sueldoNacRef);
 
-        const sueldoRk = rk === 'nacional'
-          ? sueldoNacRef
-          : (sueldoObsRk > 0
-              ? (nKishRk > 0 ? calcularSueldoRegionalBuhlmann(sueldoObsRk, sueldoNacRef, rk, nKishRk) : Math.round(sueldoObsRk))
-              : sueldoNacRef);
+        const pea = loteEmp.length > 0
+          ? Math.round(loteEmp.reduce((a: number, b: any) => a + numSeguro(b.poblacion_activa_total, 0), 0) / loteEmp.length)
+          : 0;
 
-        perfilesReg[rk][generoVersus] = {
-          celdaValida,
-          sueldo_esperado: sueldoRk
+        perfilesPorRegion[rKey] = {
+          [generoVersus]: {
+            celdaValida: celdaValida && sueldoRk > 0 && pea >= 100,
+            sueldo_esperado: sueldoRk
+          }
         };
       });
 
-      const satAct = obtenerSat(regionVersus, generoVersus);
-      const serAct = obtenerSer(regionVersus, generoVersus);
-      const loteAct = serAct.length >= 3 ? serAct : serieNacSx;
-      const fAct22_26 = loteAct.filter(r => r.anio >= 2022 && r.anio <= 2026);
-      const loteEmp = fAct22_26.length > 0 ? fAct22_26 : loteAct;
+      const satExacto = buscarSat(regionVersus, generoVersus);
+      const satActivo = satExacto || buscarSat(regionVersus, 0) || buscarSat('nacional', generoVersus) || buscarSat('nacional', 0) || {};
+      const serieAct = obtenerSer(regionVersus, generoVersus);
+      const loteAct = serieAct.length > 0 ? serieAct : serieNacSx;
+      const fActEmp = loteAct.filter((r: any) => ventanasVersus.aniosEmpleo.includes(r.anio));
+      const loteEmpAct = fActEmp.length > 0 ? fActEmp : loteAct;
 
-      const sumaPea = loteEmp.reduce((a, b) => a + Number(b.poblacion_activa_total || 0), 0);
-      const sumaDes = loteEmp.reduce((a, b) => a + Number(b.desempleados_reales || 0), 0);
-      const desempleo = sumaPea > 0 ? Math.max(0.8, (sumaDes / sumaPea) * 100) : 3.2;
+      const sumaPea = loteEmpAct.reduce((a: number, b: any) => a + numSeguro(b.poblacion_activa_total, 0), 0);
+      const sumaDes = loteEmpAct.reduce((a: number, b: any) => a + numSeguro(b.desempleados_reales, 0), 0);
+      const tasaDesempleo = sumaPea > 0 ? Number(Math.max(0.8, (sumaDes / sumaPea) * 100).toFixed(1)) : 3.2;
 
-      const filaRec = loteAct.find(r => r.anio === 2026) || loteAct[loteAct.length - 1];
-      const saturacion = Math.round(Number(filaRec?.indice_saturacion_pct || 92));
-      const tendencia = clasificarTendenciaReal21_26(loteAct);
+      const filaRec = loteAct.find((r: any) => r.anio === ventanasVersus.anioMax) || loteAct[loteAct.length - 1];
+      const satRaw = numSeguro(filaRec?.indice_saturacion_pct, 92);
+      const saturacion = satRaw > 5 ? Math.round(satRaw) : 92;
 
-      const sueldoEsp = perfilesReg[regionVersus]?.[generoVersus]?.sueldo_esperado || sueldoNacRef;
-      const pContrato = num(satAct.pct_contrato, 65);
-      const pAguinaldo = num(satAct.pct_aguinaldo, 63);
-      const pAfore = num(satAct.pct_afore, 55);
-      const pPluri = num(satAct.pct_pluriempleo, 5.6);
-      const pDesarr = num(satAct.pct_desarraigo, 2.7);
-      const pCorp = num(satAct.pct_corp, 12);
-      const pPyme = num(satAct.pct_pyme, 30);
-      const pSind = num(satAct.pct_sindicato, 15);
-      const nep = num(satAct.pct_nepotismo, mediaNepotismoReg);
-      const privRaw = num(satAct.indice_privilegio, mediaEstratoReg);
-      const riesgoIA = num(satAct.riesgo_ia_score, 40);
+      const tendAct = loteAct.length >= 4 ? clasificarTendenciaRealDinamica(loteAct, ventanasVersus) : tendenciaNac;
+      const sueldoEsp = perfilesPorRegion[regionVersus]?.[generoVersus]?.sueldo_esperado || sueldoNacRef;
 
-      const tasaCalidadOIT = Number((((Math.min(pContrato, pAfore) * 0.70 + pContrato * 0.30) * (1 - pPluri / 200))).toFixed(1));
-      const tasaFormalidadTotal = Number((pContrato * 0.45 + pAguinaldo * 0.30 + pAfore * 0.25).toFixed(1));
-
-      const diffEst = privRaw - mediaEstratoReg;
-      const penalizacionElitismo = diffEst > 0.05 ? (diffEst - 0.05) * 110 : diffEst * 35;
-      const inclusionOrigen = Math.max(15, Math.min(92, 70 - penalizacionElitismo));
-      const aperturaContratacion = Math.max(10, Math.min(95, 100 - (nep + pSind * 0.22)));
-      const saltoSalarialScore = sueldoPrepaBase > 0
-        ? Math.max(0, Math.min(100, ((sueldoEsp - sueldoPrepaBase) / sueldoPrepaBase) * 100))
-        : 40;
-      const impulsoAscenso = saltoSalarialScore * 0.45 + tasaCalidadOIT * 0.35 + Math.min(100, pCorp * 2.2 + pPyme * 0.6) * 0.20;
-      const rawMovilidad = Math.max(12, Math.min(96, aperturaContratacion * 0.40 + impulsoAscenso * 0.35 + inclusionOrigen * 0.25));
-
-      const premioVsPrepaPct = sueldoPrepaBase > 0 && sueldoEsp > 0
-        ? Number((((sueldoEsp - sueldoPrepaBase) / sueldoPrepaBase) * 100).toFixed(1))
-        : 0;
-
-      const pctEmpleoUnico = Number(Math.max(0, 100 - pPluri).toFixed(1));
-      const pctArraigoLocal = Number(Math.max(0, 100 - pDesarr).toFixed(1));
-
-      const evalUniversal = calcularScoreDataROIUniversal({
-        Prima_vs_Prepa_Pct: premioVsPrepaPct,
-        Desempleo_Abierto_Pct: Number(desempleo.toFixed(1)),
-        Saturacion_ANUIES_Pct: saturacion,
-        Empleo_Calidad_OIT_Pct: tasaCalidadOIT,
-        Formalidad_Total_Pct: tasaFormalidadTotal,
-        Meritocracia_Pct: Number(rawMovilidad.toFixed(1)),
-        Blindaje_IA_Pct: 100 - riesgoIA,
-        Tendencia_Codigo: tendencia.codigo,
-        Empleo_Unico_Pct: pctEmpleoUnico,
-        Arraigo_Local_Pct: pctArraigoLocal
+      const ind = calcularIndicadoresSatelite({
+        sat: satActivo,
+        sueldoMensual: sueldoEsp,
+        sueldoPrepa: sueldoPrepaVersus,
+        mediaEstratoContexto: mediasCtxVersus.estrato,
+        mediaNepotismoContexto: mediasCtxVersus.nepotismo
       });
 
-      const radarSalario = Math.round(Math.max(15, Math.min(100, ((sueldoEsp - 9500) / (22000 - 9500)) * 100)));
-      const radarFormalidad = Math.round(tasaFormalidadTotal);
-      const radarEmpleo = Math.round(Math.max(10, Math.min(100, 100 - desempleo * 8.0)) * 0.60 + Math.max(10, Math.min(100, 168 - saturacion)) * 0.40);
-      const radarMerito = Math.round(rawMovilidad);
+      const pContrato = numSeguro(satActivo.pct_contrato, 65);
+      const pPluri = numSeguro(satActivo.pct_pluriempleo, 5.5);
+      const pDesarr = numSeguro(satActivo.pct_desarraigo, 2.7);
+      const hrsH = numSeguro(satActivo.hrs_doble_jornada_hombres, 9.6);
+      const hrsM = numSeguro(satActivo.hrs_doble_jornada_mujeres, 21.1);
+      const hrsHogar = generoVersus === 1 ? hrsH : generoVersus === 2 ? hrsM : Number(((hrsH + hrsM) / 2).toFixed(1));
+
+      const evalUniversal = calcularScoreDataROIUniversal({
+        Prima_vs_Prepa_Pct: ind.primaPrepaPct,
+        Desempleo_Abierto_Pct: tasaDesempleo,
+        Saturacion_ANUIES_Pct: saturacion,
+        Empleo_Calidad_OIT_Pct: ind.calidadOitPct,
+        Formalidad_Total_Pct: ind.formalidadTotalPct,
+        Meritocracia_Pct: ind.meritocraciaPct,
+        Blindaje_IA_Pct: ind.blindajeIAPct,
+        Tendencia_Codigo: tendAct.codigo,
+        Empleo_Unico_Pct: ind.pctEmpleoUnico,
+        Arraigo_Local_Pct: ind.pctArraigoLocal
+      });
+
+      const radarSalario = normalizarSalarioRadarDinamico(sueldoEsp, percentilesSalarioGlobal.p05, percentilesSalarioGlobal.p95);
+      const radarEmpleo = Math.round(
+        Math.max(10, Math.min(100, 100 - tasaDesempleo * 8)) * 0.60 +
+        Math.max(10, Math.min(100, 168 - saturacion)) * 0.40
+      );
       const radarEstabilidad = Math.round(
-        Math.max(10, Math.min(100, 100 - pPluri * 5.0)) * 0.35 +
+        Math.max(10, Math.min(100, 100 - pPluri * 5)) * 0.35 +
         Math.max(10, Math.min(100, 100 - pDesarr * 6.5)) * 0.30 +
         pContrato * 0.35
       );
 
       return {
         cve_carrera: cvePad,
-        nombre_carrera: nombreCorto,
-        cargando: false,
+        nombre_carrera: nombre,
+        semestres_default: semestresDefault,
+        capex_mxn: capexMxn,
         sueldo_esperado: sueldoEsp,
-        premioVsPrepaPct,
-        tasaCalidadOIT,
-        tasaFormalidadTotal,
-        pctEmpleoUnico,
-        pctArraigoLocal,
+        premioVsPrepaPct: ind.primaPrepaPct,
+        tasaCalidadOIT: ind.calidadOitPct,
+        tasaFormalidadTotal: ind.formalidadTotalPct,
+        pctEmpleoUnico: ind.pctEmpleoUnico,
+        pctArraigoLocal: ind.pctArraigoLocal,
         scoreDataROI: evalUniversal.score,
-        tendencia_salarial: tendencia.etiqueta,
-        perfiles: perfilesReg,
         perfilActivo: {
-          ...satAct,
-          tasa_desempleo: Number(desempleo.toFixed(1)),
+          ...satActivo,
+          tasa_desempleo: tasaDesempleo,
           indice_saturacion_pct: saturacion,
-          tendencia_salarial: tendencia.etiqueta
+          tendencia_salarial: tendAct.etiqueta,
+          tendencia_codigo: tendAct.codigo,
+          hrs_hogar_activa: hrsHogar
         },
+        crudos: { movilidad: ind.meritocraciaPct },
         pilaresRadar: {
           Salario: radarSalario,
-          Formalidad: radarFormalidad,
+          Formalidad: Math.round(ind.formalidadTotalPct),
           Empleabilidad: radarEmpleo,
-          Meritocracia: radarMerito,
+          Meritocracia: Math.round(ind.meritocraciaPct),
           'Blindaje IA': evalUniversal.pilares.blindajeFuturo,
           Estabilidad: radarEstabilidad
         },
-        crudos: {
-          movilidad: rawMovilidad
-        }
+        perfiles: perfilesPorRegion
       };
     });
-  }, [cvesVersus, regionVersus, generoVersus, versionCacheVersus]);
-
-  const infoRegVersus = BENCHMARK_REGIONES_VERSUS[regionVersus] || BENCHMARK_REGIONES_VERSUS.nacional;
-  const sueldoPrepaVersus = infoRegVersus.sueldo_prepa[generoVersus];
-  const queryGeneroVersus = generoVersus === 2 ? 'mujeres' : generoVersus === 1 ? 'hombres' : 'total';
-  const etiquetaGeneroVersus = generoVersus === 2 ? 'Solo Mujeres' : generoVersus === 1 ? 'Solo Hombres' : 'Total General';
+  }, [
+    modalVersusAbierto,
+    cvesVersus,
+    versionCache,
+    regionVersus,
+    generoVersus,
+    sueldoPrepaVersus,
+    mediasCtxVersus,
+    ventanasVersus,
+    percentilesSalarioGlobal,
+    mapaCatalogo
+  ]);
 
   const datosRadarVersus = useMemo(() => {
+    if (carrerasEnVersus.length < 2) return [];
     const ejes = ['Salario', 'Formalidad', 'Empleabilidad', 'Meritocracia', 'Blindaje IA', 'Estabilidad'] as const;
     return ejes.map(eje => {
-      const fila: Record<string, any> = { eje };
+      const punto: Record<string, any> = { eje };
       carrerasEnVersus.forEach((c: any) => {
-        fila[c.cve_carrera] = c.pilaresRadar?.[eje] ?? 50;
+        punto[c.cve_carrera] = c.pilaresRadar?.[eje] ?? 50;
       });
-      return fila;
+      return punto;
     });
   }, [carrerasEnVersus]);
 
   const datosRegionesVersus = useMemo(() => {
-    const regs = ['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
-    return regs.map(rKey => {
-      const fila: Record<string, any> = {
-        region: BENCHMARK_REGIONES_VERSUS[rKey]?.corto || rKey
+    if (carrerasEnVersus.length < 2) return [];
+    return MACRO_REGIONES_5.map(rKey => {
+      const punto: Record<string, any> = {
+        region: REGIONES_META[rKey].corto
       };
       carrerasEnVersus.forEach((c: any) => {
-        const perfReg = c.perfiles?.[rKey]?.[generoVersus];
-        fila[c.cve_carrera] = perfReg && perfReg.celdaValida !== false && Number(perfReg.sueldo_esperado) > 0
-          ? Number(perfReg.sueldo_esperado)
-          : null;
+        const perfilR = c.perfiles?.[rKey]?.[generoVersus];
+        punto[c.cve_carrera] =
+          perfilR && perfilR.celdaValida !== false && Number(perfilR.sueldo_esperado) > 0
+            ? Number(perfilR.sueldo_esperado)
+            : null;
       });
-      return fila;
+      return punto;
     });
   }, [carrerasEnVersus, generoVersus]);
 
   const compartirVersusLink = async () => {
-    const url = new URL('/descubrir', window.location.origin);
-    url.searchParams.set('region', regionVersus);
-    url.searchParams.set('genero', queryGeneroVersus);
-    url.searchParams.set('comparar', cvesVersus.join(','));
-    const linkFinal = url.toString().replace(/%2C/gi, ',');
+    const params = new URLSearchParams();
+    params.set('region', regionVersus);
+    params.set('genero', queryGeneroVersus);
+    params.set('comparar', cvesVersus.join(','));
+    const url = `${window.location.origin}/descubrir?${params.toString().replace(/%2C/gi, ',')}`;
 
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `DataROI Versus — ${carrerasEnVersus.map((c: any) => c.nombre_carrera).join(' vs. ')}`,
-          text: `Comparativa ejecutiva Cara a Cara en ${infoRegVersus.nombre} (${etiquetaGeneroVersus}).`,
-          url: linkFinal
+          title: `Comparativa DataROI (${metaPipeline.etiqueta_corte}) en ${infoRegVersus.corto} (${etiquetaGeneroVersus})`,
+          text: `Contraste directo de ${carrerasEnVersus.map((c: any) => c.nombre_carrera).join(' vs. ')}`,
+          url
         });
         return;
       } catch {
         // Fallback al portapapeles
       }
     }
-    await navigator.clipboard.writeText(linkFinal);
+    await navigator.clipboard.writeText(url);
     setCopiadoVersus(true);
     setTimeout(() => setCopiadoVersus(false), 2200);
   };
 
   const construirHojasVersus = () => {
-    const conteoVictorias = new Array(carrerasEnVersus.length).fill(0);
+    const conteoVictorias = carrerasEnVersus.map(() => 0);
 
-    const encontrarLider = (valores: number[], mejorAlto: boolean, invalido = Infinity): ValorCeldaExcel => {
-      const validos = valores.filter(v => Number.isFinite(v) && v < invalido);
-      if (validos.length === 0) return 'Sin muestra';
+    const encontrarLider = (valores: number[], mejorAlto: boolean, invalido = Infinity) => {
+      const validos = valores.filter(v => v < invalido && v > -900);
+      if (validos.length === 0) return 'N/D';
       const mejor = mejorAlto ? Math.max(...validos) : Math.min(...validos);
       const ganadores = carrerasEnVersus
-        .filter((_, idx) => valores[idx] === mejor && valores[idx] < invalido)
+        .filter((_: any, i: number) => valores[i] === mejor && valores[i] < invalido)
         .map((c: any) => c.nombre_carrera);
-      return ganadores.length > 0 ? { v: `★ ${ganadores.join(' / ')}`, s: 'winner' } : '-';
+      return ganadores.length === carrerasEnVersus.length ? 'Empate técnico' : ganadores.join(' / ');
     };
 
     const registrarFilaNumerica = (
@@ -875,7 +777,7 @@ function NavbarGlobalContenido() {
       mejorAlto: boolean,
       invalido = Infinity
     ): ValorCeldaExcel[] => {
-      const validos = vals.filter(v => Number.isFinite(v) && v < invalido);
+      const validos = vals.filter(v => v < invalido && v > -900);
       const mejor = validos.length > 0 ? (mejorAlto ? Math.max(...validos) : Math.min(...validos)) : null;
 
       const celdasCarreras: ValorCeldaExcel[] = vals.map((v, idx) => {
@@ -885,12 +787,18 @@ function NavbarGlobalContenido() {
         return esGanador ? { v: `★ ${txt}`, s: 'winner' } : txt;
       });
 
-      return [
-        cat,
-        ind,
-        ...celdasCarreras,
-        encontrarLider(vals, mejorAlto, invalido)
-      ];
+      return [cat, ind, ...celdasCarreras, encontrarLider(vals, mejorAlto, invalido)];
+    };
+
+    // Fila descriptiva (ej. Ecosistema Empleador): muestra quién tiene mayor inserción sin alterar el Podio Global objetivo
+    const filaDescriptiva = (
+      cat: string,
+      ind: string,
+      vals: number[],
+      fmt: (v: number) => string
+    ): ValorCeldaExcel[] => {
+      const mayor = encontrarLider(vals, true);
+      return [cat, ind, ...vals.map(v => fmt(v)), `Mayor inserción: ${mayor}`];
     };
 
     const cabecerasMatriz = [
@@ -909,29 +817,87 @@ function NavbarGlobalContenido() {
     const fmtAnios = (v: number) => (v >= 900 ? 'Retorno negativo' : v === 1 ? '1 año' : `${v} años`);
 
     const filasHoja1: ValorCeldaExcel[][] = [
+      ['1. Contexto y Trazabilidad', 'Último Corte Oficial Cargado', ...carrerasEnVersus.map(() => `${metaPipeline.etiqueta_corte} (${ventanasVersus.rangoTexto})`), metaPipeline.etiqueta_pesos_base],
       ['1. Contexto y Trazabilidad', 'Macro-Región y Perfil Evaluado', ...carrerasEnVersus.map(() => `${infoRegVersus.nombre} (${etiquetaGeneroVersus})`), 'Contexto Activo'],
-      ['1. Contexto y Trazabilidad', 'Sueldo Base Preparatoria de Referencia', ...carrerasEnVersus.map(() => `${formatoMoneda(sueldoPrepaVersus)} / mes`), 'Referencia Regional'],
-      registrarFilaNumerica('1. Contexto y Trazabilidad', 'Muestra Física Certificada INEGI', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.n_encuestados_reales, 0)), v => `${v} encuestados`, true),
+      [
+        '1. Contexto y Trazabilidad',
+        'Base Preparatoria de Referencia',
+        ...carrerasEnVersus.map(() =>
+          calidadOitPrepaVersus != null
+            ? `${formatoMoneda(sueldoPrepaVersus)} / mes · OIT ${calidadOitPrepaVersus}%`
+            : `${formatoMoneda(sueldoPrepaVersus)} / mes`
+        ),
+        'Benchmark Vivo Supabase'
+      ],
+      registrarFilaNumerica('1. Contexto y Trazabilidad', 'Muestra Física Certificada INEGI', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.n_encuestados_reales, 0)), v => `${v} encuestados`, true),
       registrarFilaNumerica('1. Calificación Global', 'Calificación Integral DataROI (0 a 100)', carrerasEnVersus.map((c: any) => Math.round(Number(c.scoreDataROI ?? 60))), v => `${v} / 100 pts`, true),
       ...filasRadar,
       registrarFilaNumerica('3. Salario y Retorno (ROI)', 'Salario Mensual Consolidado', carrerasEnVersus.map((c: any) => c.sueldo_esperado), v => `${formatoMoneda(v)} / mes`, true),
       registrarFilaNumerica('3. Salario y Retorno (ROI)', 'Prima Salarial vs. Preparatoria', carrerasEnVersus.map((c: any) => c.premioVsPrepaPct), v => `${v >= 0 ? `+${v}%` : `${v}%`} vs. Prepa`, true),
-      ['3. Salario y Retorno (ROI)', 'Tendencia Salarial Real (2021–2026)', ...carrerasEnVersus.map((c: any) => c.perfilActivo?.tendencia_salarial || c.tendencia_salarial || 'Estable'), 'Trayectoria INPC'],
-      registrarFilaNumerica('3. Salario y Retorno (ROI)', 'Retorno Inversión Univ. Pública', carrerasEnVersus.map((c: any) => calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaVersus, c.cve_carrera, false) ?? 999), fmtAnios, false, 900),
-      registrarFilaNumerica('3. Salario y Retorno (ROI)', 'Retorno Inversión Univ. Privada Media', carrerasEnVersus.map((c: any) => calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaVersus, c.cve_carrera, true) ?? 999), fmtAnios, false, 900),
-      registrarFilaNumerica('3. Salario y Retorno (ROI)', 'Inversión Requerida en Equipo (CapEx)', carrerasEnVersus.map((c: any) => obtenerCapExCorto(c.cve_carrera).costoEquipo), v => formatoMoneda(v), false),
+      ['3. Salario y Retorno (ROI)', `Tendencia Salarial Real (${ventanasVersus.rangoTexto})`, ...carrerasEnVersus.map((c: any) => c.perfilActivo?.tendencia_salarial || 'Estable'), 'Trayectoria INPC'],
+      registrarFilaNumerica(
+        '3. Salario y Retorno (ROI)',
+        'Retorno Inversión Univ. Pública',
+        carrerasEnVersus.map((c: any) =>
+          calcularAniosRetornoDinamico({
+            sueldoCarrera: c.sueldo_esperado,
+            sueldoPrepa: sueldoPrepaVersus,
+            cve: c.cve_carrera,
+            escenario: 'publica',
+            semestres: c.semestres_default,
+            capexMxn: c.capex_mxn,
+            costosRoi: metaPipeline.costos_roi
+          }) ?? 999
+        ),
+        fmtAnios,
+        false,
+        900
+      ),
+      registrarFilaNumerica(
+        '3. Salario y Retorno (ROI)',
+        'Retorno Inversión Univ. Privada Media',
+        carrerasEnVersus.map((c: any) =>
+          calcularAniosRetornoDinamico({
+            sueldoCarrera: c.sueldo_esperado,
+            sueldoPrepa: sueldoPrepaVersus,
+            cve: c.cve_carrera,
+            escenario: 'privada_media',
+            semestres: c.semestres_default,
+            capexMxn: c.capex_mxn,
+            costosRoi: metaPipeline.costos_roi
+          }) ?? 999
+        ),
+        fmtAnios,
+        false,
+        900
+      ),
+      registrarFilaNumerica('3. Salario y Retorno (ROI)', 'Inversión Requerida en Equipo (CapEx)', carrerasEnVersus.map((c: any) => obtenerCapExDinamico(c.cve_carrera, c.capex_mxn).costoEquipo), v => formatoMoneda(v), false),
       registrarFilaNumerica('4. Calidad y Mercado Laboral', 'Empleo de Calidad (Estándar OIT)', carrerasEnVersus.map((c: any) => c.tasaCalidadOIT), v => `${v}%`, true),
       registrarFilaNumerica('4. Calidad y Mercado Laboral', 'Formalidad Laboral Total', carrerasEnVersus.map((c: any) => c.tasaFormalidadTotal), v => `${v}%`, true),
-      registrarFilaNumerica('4. Calidad y Mercado Laboral', 'Tasa de Desempleo Abierto', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.tasa_desempleo, 3.5)), v => `${v.toFixed(1)}%`, false),
-      registrarFilaNumerica('4. Calidad y Mercado Laboral', 'Índice de Saturación ANUIES', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_saturacion_pct, 100)), v => `${v}%`, false),
+      registrarFilaNumerica('4. Calidad y Mercado Laboral', 'Tasa de Desempleo Abierto', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.tasa_desempleo, 3.5)), v => `${v.toFixed(1)}%`, false),
+      registrarFilaNumerica('4. Calidad y Mercado Laboral', 'Índice de Saturación ANUIES', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.indice_saturacion_pct, 100)), v => `${v}%`, false),
       ['4. Calidad y Mercado Laboral', 'Sector Empleador Dominante', ...carrerasEnVersus.map((c: any) => obtenerSectorDominante(c.perfilActivo)), 'Composición INEGI'],
-      registrarFilaNumerica('5. Movilidad, Barreras y Futuro', 'Apertura y Movilidad Social (% Mérito)', carrerasEnVersus.map((c: any) => Number((c.crudos?.movilidad ?? 50).toFixed(1))), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('5. Movilidad, Barreras y Futuro', 'Estrato Socioeconómico de Origen (1 a 4)', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_privilegio, 2.8)), v => `${v.toFixed(2)} / 4`, false),
-      registrarFilaNumerica('5. Movilidad, Barreras y Futuro', 'Contratación por Contactos / Nepotismo', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_nepotismo, 37)), v => `${v.toFixed(1)}%`, false),
-      registrarFilaNumerica('5. Movilidad, Barreras y Futuro', 'Blindaje Humano ante IA', carrerasEnVersus.map((c: any) => 100 - num(c.perfilActivo?.riesgo_ia_score, 40)), v => `${v}%`, true),
-      registrarFilaNumerica('5. Movilidad, Barreras y Futuro', 'Trabajo Remoto / Home Office', carrerasEnVersus.map((c: any) => num(c.perfilActivo?.pct_home_office, 0)), v => `${v.toFixed(1)}%`, true),
-      registrarFilaNumerica('5. Movilidad, Barreras y Futuro', 'Empleo Único sin Pluriempleo', carrerasEnVersus.map((c: any) => c.pctEmpleoUnico), v => `${v}%`, true),
-      registrarFilaNumerica('5. Movilidad, Barreras y Futuro', 'Arraigo Local sin Migrar de Estado', carrerasEnVersus.map((c: any) => c.pctArraigoLocal), v => `${v}%`, true)
+      // 4 filas restauradas de Ecosistema Empleador
+      filaDescriptiva('5. Ecosistema Empleador', 'Gran Corporativo y Transnacional (>100 emp.)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_corp, 0)), v => `${v.toFixed(1)}%`),
+      filaDescriptiva('5. Ecosistema Empleador', 'Sector PYME (Empresas 6–100 empleados)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_pyme, 0)), v => `${v.toFixed(1)}%`),
+      filaDescriptiva('5. Ecosistema Empleador', 'Microempresa y Práctica Independiente', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_micro, 0)), v => `${v.toFixed(1)}%`),
+      filaDescriptiva('5. Ecosistema Empleador', 'Administración Pública y Gobierno', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_gobierno, 0)), v => `${v.toFixed(1)}%`),
+      // 6 filas restauradas de Escalera de Prestaciones
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Contrato Escrito Estable', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_contrato, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Aguinaldo de Ley', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_aguinaldo, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Fondo de Retiro (AFORE)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_afore, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Seguro Médico Privado (SGMM)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_sgmm, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Afiliación Sindical / Gremial', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_sindicato, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('6. Escalera de Prestaciones', 'Protección Materna / Paterna', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_materno, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Apertura y Movilidad Social (% Mérito)', carrerasEnVersus.map((c: any) => Number((c.crudos?.movilidad ?? 50).toFixed(1))), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Estrato Socioeconómico de Origen (1 a 4)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.indice_privilegio, 2.8)), v => `${v.toFixed(2)} / 4`, false),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Contratación por Contactos / Nepotismo', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_nepotismo, 37)), v => `${v.toFixed(1)}%`, false),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Blindaje Humano ante IA', carrerasEnVersus.map((c: any) => 100 - numSeguro(c.perfilActivo?.riesgo_ia_score, 40)), v => `${v}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Trabajo Remoto / Home Office', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_home_office, 0)), v => `${v.toFixed(1)}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Jornada de Medio Tiempo (<30h)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.pct_medio_tiempo, 14)), v => `${v.toFixed(1)}%`, false),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Trabajo Doméstico No Remunerado (Hrs/sem)', carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.hrs_hogar_activa, 15)), v => `${v.toFixed(1)} hrs`, false),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Empleo Único sin Pluriempleo', carrerasEnVersus.map((c: any) => c.pctEmpleoUnico), v => `${v}%`, true),
+      registrarFilaNumerica('7. Movilidad, Barreras y Futuro', 'Arraigo Local sin Migrar de Estado', carrerasEnVersus.map((c: any) => c.pctArraigoLocal), v => `${v}%`, true)
     ];
 
     const victoriasUnicas = Array.from(new Set(conteoVictorias)).sort((a, b) => b - a);
@@ -943,16 +909,15 @@ function NavbarGlobalContenido() {
     });
 
     filasHoja1.push([
-      { v: '6. Veredicto y Podio Global', s: 'section' },
+      { v: '8. Veredicto y Podio Global', s: 'section' },
       { v: 'Podio por Total de Indicadores Liderados', s: 'section' },
       ...celdasPodioFinal,
       encontrarLider(conteoVictorias, true)
     ]);
 
-    const regs = ['nacional', 'norte', 'noroeste', 'bajio', 'centro', 'sur'] as const;
-    const filasHoja2: ValorCeldaExcel[][] = regs.map(rKey => {
-      const metaR = BENCHMARK_REGIONES_VERSUS[rKey];
-      const prepaR = metaR.sueldo_prepa[generoVersus];
+    const filasHoja2: ValorCeldaExcel[][] = REGIONES_ORDEN.map(rKey => {
+      const metaR = REGIONES_META[rKey];
+      const prepaR = benchPrepaMap[rKey]?.sueldo_prepa[generoVersus] ?? sueldoPrepaVersus;
       const vals = carrerasEnVersus.map((c: any) => {
         const pr = c.perfiles?.[rKey]?.[generoVersus];
         return pr && pr.celdaValida !== false && Number(pr.sueldo_esperado) > 0 ? Number(pr.sueldo_esperado) : -1;
@@ -978,11 +943,13 @@ function NavbarGlobalContenido() {
     return { cabecerasMatriz, filasHoja1, filasHoja2 };
   };
 
+  const corteSlug = metaPipeline.etiqueta_corte.replace(/\s+/g, '_');
+
   const exportarVersusExcel = () => {
     if (carrerasEnVersus.length < 2) return;
     const { cabecerasMatriz, filasHoja1, filasHoja2 } = construirHojasVersus();
     descargarLibroExcelXLSX(
-      `DataROI_Versus_${regionVersus}_${queryGeneroVersus}_${cvesVersus.join('_')}.xlsx`,
+      `DataROI_Versus_${regionVersus}_${queryGeneroVersus}_${cvesVersus.join('_')}_${corteSlug}.xlsx`,
       [
         {
           nombre: '1_Matriz_Cara_a_Cara',
@@ -1007,7 +974,7 @@ function NavbarGlobalContenido() {
     if (carrerasEnVersus.length < 2) return;
     const { cabecerasMatriz, filasHoja1 } = construirHojasVersus();
     descargarCSVEstilizado(
-      `DataROI_Versus_${regionVersus}_${queryGeneroVersus}_${cvesVersus.join('_')}.csv`,
+      `DataROI_Versus_${regionVersus}_${queryGeneroVersus}_${cvesVersus.join('_')}_${corteSlug}.csv`,
       cabecerasMatriz,
       filasHoja1
     );
@@ -1021,68 +988,75 @@ function NavbarGlobalContenido() {
       perfilEtiqueta: etiquetaGeneroVersus,
       sueldoPrepa: sueldoPrepaVersus,
       carreras: carrerasEnVersus.map((c: any) => {
-        const sueldosRegMap: Record<string, number | null> = {};
-        (['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const).forEach(rk => {
+        const sueldosPorRegion: Record<string, number | null> = {};
+        MACRO_REGIONES_5.forEach(rk => {
           const pr = c.perfiles?.[rk]?.[generoVersus];
-          sueldosRegMap[rk] = pr && pr.celdaValida !== false && Number(pr.sueldo_esperado) > 0
-            ? Number(pr.sueldo_esperado)
-            : null;
+          sueldosPorRegion[rk] = pr && pr.celdaValida !== false && Number(pr.sueldo_esperado) > 0 ? Number(pr.sueldo_esperado) : null;
         });
+
         return {
           cve_carrera: c.cve_carrera,
           nombre_carrera: c.nombre_carrera,
-          scoreDataROI: Math.round(c.scoreDataROI),
+          scoreDataROI: Math.round(Number(c.scoreDataROI ?? 60)),
           sueldo_esperado: c.sueldo_esperado,
-          premioVsPrepaPct: Math.round(c.premioVsPrepaPct),
-          roiPublica: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaVersus, c.cve_carrera, false),
-          roiPrivada: calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaVersus, c.cve_carrera, true),
-          costoEquipo: obtenerCapExCorto(c.cve_carrera).costoEquipo,
+          premioVsPrepaPct: c.premioVsPrepaPct,
+          roiPublica: calcularAniosRetornoDinamico({
+            sueldoCarrera: c.sueldo_esperado,
+            sueldoPrepa: sueldoPrepaVersus,
+            cve: c.cve_carrera,
+            escenario: 'publica',
+            semestres: c.semestres_default,
+            capexMxn: c.capex_mxn,
+            costosRoi: metaPipeline.costos_roi
+          }),
+          roiPrivada: calcularAniosRetornoDinamico({
+            sueldoCarrera: c.sueldo_esperado,
+            sueldoPrepa: sueldoPrepaVersus,
+            cve: c.cve_carrera,
+            escenario: 'privada_media',
+            semestres: c.semestres_default,
+            capexMxn: c.capex_mxn,
+            costosRoi: metaPipeline.costos_roi
+          }),
+          costoEquipo: obtenerCapExDinamico(c.cve_carrera, c.capex_mxn).costoEquipo,
           tasaCalidadOIT: c.tasaCalidadOIT,
-          tasaDesempleo: num(c.perfilActivo?.tasa_desempleo, 3.5),
-          saturacionPct: num(c.perfilActivo?.indice_saturacion_pct, 100),
-          meritoPct: Number((c.crudos?.movilidad ?? 50).toFixed(1)),
-          blindajeIA: 100 - num(c.perfilActivo?.riesgo_ia_score, 40),
+          tasaDesempleo: numSeguro(c.perfilActivo?.tasa_desempleo, 3.5),
+          saturacionPct: numSeguro(c.perfilActivo?.indice_saturacion_pct, 100),
+          meritoPct: Number(c.crudos?.movilidad ?? 50),
+          blindajeIA: 100 - numSeguro(c.perfilActivo?.riesgo_ia_score, 40),
           empleoUnicoPct: c.pctEmpleoUnico,
           sectorPrincipal: obtenerSectorDominante(c.perfilActivo),
           pilaresRadar: c.pilaresRadar || {},
-          sueldosPorRegion: sueldosRegMap
+          sueldosPorRegion
         };
       }),
-      nombreArchivo: `DataROI_Comparativa_Versus_${regionVersus}_${queryGeneroVersus}_${cvesVersus.join('_')}.pdf`
+      nombreArchivo: `DataROI_Versus_${regionVersus}_${queryGeneroVersus}_${cvesVersus.join('_')}_${corteSlug}.pdf`
     });
   };
 
-  const mostrarBarra = navbarVisible || popoverAbierto;
-
   return (
     <>
-      <header className="no-print sticky top-0 z-40 mb-1">
-        <div
-          className={`w-full transition-all duration-300 ease-out ${
-            mostrarBarra ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'
-          } ${
-            enTope
-              ? 'bg-white/85 backdrop-blur-md border-b border-slate-200/80'
-              : 'bg-white/95 backdrop-blur-xl border-b border-slate-200 shadow-md'
-          }`}
-        >
+      <header
+        className={`no-print sticky top-0 z-40 mb-1 transition-transform duration-300 ease-out ${
+          navbarVisible ? 'translate-y-0' : '-translate-y-full'
+        }`}
+      >
+        <div className="w-full bg-white/90 backdrop-blur-md border-b border-slate-200/80 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
           <div className="max-w-7xl mx-auto px-4 md:px-8 py-2.5 flex flex-wrap items-center justify-between gap-3">
             
-            {/* IDENTIDAD PROPIA DATAROI MÉXICO */}
+            {/* IDENTIDAD DE MARCA + CORTE VIVO */}
             <div className="flex items-center gap-3">
-              <Link href="/" className="flex items-center gap-2.5 group">
-                <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center font-black text-sm shadow-2xs group-hover:bg-blue-600 group-hover:scale-105 transition-all">
+              <Link href="/" className="flex items-center gap-2.5 group focus:outline-none">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-slate-900 via-slate-800 to-blue-900 text-white flex items-center justify-center font-black text-sm shadow-sm ring-1 ring-slate-900/10 group-hover:scale-105 transition-transform">
                   DR
                 </div>
                 <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-black text-sm md:text-base text-slate-900 tracking-tight leading-none group-hover:text-blue-600 transition-colors">
-                      DataROI México
+                  <span className="font-black text-sm md:text-base text-slate-900 tracking-tight flex items-center gap-1.5 leading-none">
+                    DataROI México
+                    <span className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200/80 text-[9.5px] font-extrabold uppercase tracking-wider">
+                      {metaPipeline.etiqueta_corte}
                     </span>
-                    <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Sparkles className="w-2.5 h-2.5" aria-hidden="true" /> ENOE · ANUIES
-                    </span>
-                  </div>
+                  </span>
                   <span className="block text-[10.5px] font-medium text-slate-400 leading-none mt-1">
                     Auditoría de Retorno y Empleabilidad Universitaria
                   </span>
@@ -1093,25 +1067,25 @@ function NavbarGlobalContenido() {
             {/* CÁPSULA CENTRAL DE NAVEGACIÓN GLOBAL PERSISTENTE */}
             <nav
               aria-label="Navegación global de la plataforma"
-              className="flex items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200/80"
+              className="flex flex-wrap items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200/80"
             >
               <Link
                 href="/"
                 aria-current={esCatalogo ? 'page' : undefined}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
                   esCatalogo
                     ? 'bg-slate-900 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                 }`}
               >
                 <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Catálogo (64)</span>
+                <span>{totalCarrerasCertificadas !== null ? `Catálogo (${totalCarrerasCertificadas})` : 'Catálogo'}</span>
               </Link>
 
               <Link
                 href="/descubrir"
                 aria-current={esDescubridor ? 'page' : undefined}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
                   esDescubridor
                     ? 'bg-slate-900 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
@@ -1124,7 +1098,7 @@ function NavbarGlobalContenido() {
               <Link
                 href="/laboratorio"
                 aria-current={esLaboratorio ? 'page' : undefined}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
                   esLaboratorio
                     ? 'bg-slate-900 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
@@ -1132,6 +1106,19 @@ function NavbarGlobalContenido() {
               >
                 <FlaskConical className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
                 <span>Laboratorio Crudo</span>
+              </Link>
+
+              <Link
+                href="/actualizar"
+                aria-current={esActualizar ? 'page' : undefined}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
+                  esActualizar
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-blue-700 hover:bg-white/70'
+                }`}
+              >
+                <UploadCloud className={`w-3.5 h-3.5 ${esActualizar ? 'text-white' : 'text-blue-600'}`} aria-hidden="true" />
+                <span>Subir Corte</span>
               </Link>
             </nav>
 
@@ -1170,7 +1157,6 @@ function NavbarGlobalContenido() {
                 </span>
               </button>
 
-              {/* POPOVER FLOTANTE DE SELECCIÓN VERSUS */}
               {popoverAbierto && (
                 <div className="absolute right-0 top-full mt-2.5 w-80 sm:w-96 bg-white rounded-2xl border border-slate-200 shadow-2xl p-4 z-50 animate-in fade-in zoom-in-95 duration-150">
                   <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-100">
@@ -1217,7 +1203,7 @@ function NavbarGlobalContenido() {
                                 {obtenerNombreCortoPorCve(cve)}
                               </span>
                               <span className="text-[10px] font-mono text-slate-400">
-                                CVE: {cve}
+                                CVE: {padCve(cve)}
                               </span>
                             </div>
                           </div>
@@ -1274,9 +1260,7 @@ function NavbarGlobalContenido() {
         </div>
       </header>
 
-      {/* ========================================================================= */}
-      {/* MODAL GLOBAL INDEPENDIENTE DE COMPARACIÓN CARA A CARA (SIN REDIRECCIÓN)   */}
-      {/* ========================================================================= */}
+      {/* MODAL GLOBAL INDEPENDIENTE DE COMPARACIÓN CARA A CARA */}
       {modalVersusAbierto && cvesVersus.length >= 2 && (
         <div
           role="dialog"
@@ -1289,11 +1273,10 @@ function NavbarGlobalContenido() {
         >
           <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-5xl w-full max-h-[92vh] overflow-y-auto p-6 md:p-8 animate-in zoom-in-95 duration-200">
             
-            {/* Cabecera del Modal Global */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
               <div>
                 <span className="text-xs font-black uppercase tracking-wider text-blue-600 block mb-0.5">
-                  Comparador Ejecutivo Global Cara a Cara · {infoRegVersus.corto} ({etiquetaGeneroVersus})
+                  Comparador Ejecutivo Global Cara a Cara · {infoRegVersus.corto} ({etiquetaGeneroVersus}) · Corte {metaPipeline.etiqueta_corte}
                 </span>
                 <h2 className="text-xl md:text-2xl font-black text-slate-900">
                   Contraste Directo de Calificación DataROI, Indicadores y Retorno
@@ -1365,13 +1348,12 @@ function NavbarGlobalContenido() {
               </div>
             </div>
 
-            {/* BARRA INTERACTIVA DE MACRO-REGIÓN Y PERFIL DENTRO DEL PROPIO MODAL */}
             <div className="no-print my-4 px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200/80 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-xs font-black text-slate-700 flex items-center gap-1 mr-1">
                   <MapPin className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" /> Región de contraste:
                 </span>
-                {REGIONES_LISTA.map(rKey => {
+                {REGIONES_ORDEN.map(rKey => {
                   const act = regionVersus === rKey;
                   return (
                     <button
@@ -1382,7 +1364,7 @@ function NavbarGlobalContenido() {
                         act ? 'bg-blue-600 text-white shadow-2xs' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
                       }`}
                     >
-                      {BENCHMARK_REGIONES_VERSUS[rKey]?.corto}
+                      {REGIONES_META[rKey].corto}
                     </button>
                   );
                 })}
@@ -1416,7 +1398,6 @@ function NavbarGlobalContenido() {
               </div>
             </div>
 
-            {/* BLOQUE VISUAL: TARJETAS DE CARRERAS + RADAR O BARRAS REGIONALES */}
             <div className="print-avoid-break grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6 items-center bg-slate-50 p-5 rounded-2xl border border-slate-200/80 relative">
               {cargandoVersus && (
                 <div className="absolute inset-0 bg-white/75 backdrop-blur-[1px] z-20 rounded-2xl flex items-center justify-center gap-2 text-xs font-black text-slate-700">
@@ -1530,7 +1511,6 @@ function NavbarGlobalContenido() {
               </div>
             </div>
 
-            {/* TABLA COMPARATIVA DE 13 INDICADORES */}
             <div className="print-avoid-break overflow-x-auto rounded-2xl border border-slate-200">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -1578,7 +1558,15 @@ function NavbarGlobalContenido() {
                     {
                       label: 'Retorno de Inversión (Univ. Pública)',
                       valores: carrerasEnVersus.map((c: any) =>
-                        calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaVersus, c.cve_carrera, false) ?? 999
+                        calcularAniosRetornoDinamico({
+                          sueldoCarrera: c.sueldo_esperado,
+                          sueldoPrepa: sueldoPrepaVersus,
+                          cve: c.cve_carrera,
+                          escenario: 'publica',
+                          semestres: c.semestres_default,
+                          capexMxn: c.capex_mxn,
+                          costosRoi: metaPipeline.costos_roi
+                        }) ?? 999
                       ),
                       formato: (v: number) =>
                         v >= 900 ? 'Retorno negativo' : v === 1 ? '1 año de trabajo' : `${v} años de trabajo`,
@@ -1588,7 +1576,15 @@ function NavbarGlobalContenido() {
                     {
                       label: 'Retorno de Inversión (Univ. Privada Media)',
                       valores: carrerasEnVersus.map((c: any) =>
-                        calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaVersus, c.cve_carrera, true) ?? 999
+                        calcularAniosRetornoDinamico({
+                          sueldoCarrera: c.sueldo_esperado,
+                          sueldoPrepa: sueldoPrepaVersus,
+                          cve: c.cve_carrera,
+                          escenario: 'privada_media',
+                          semestres: c.semestres_default,
+                          capexMxn: c.capex_mxn,
+                          costosRoi: metaPipeline.costos_roi
+                        }) ?? 999
                       ),
                       formato: (v: number) =>
                         v >= 900 ? 'Retorno negativo' : v === 1 ? '1 año de trabajo' : `${v} años de trabajo`,
@@ -1597,9 +1593,9 @@ function NavbarGlobalContenido() {
                     },
                     {
                       label: 'Inversión Requerida en Equipo (CapEx)',
-                      valores: carrerasEnVersus.map((c: any) => obtenerCapExCorto(c.cve_carrera).costoEquipo),
+                      valores: carrerasEnVersus.map((c: any) => obtenerCapExDinamico(c.cve_carrera, c.capex_mxn).costoEquipo),
                       formato: (v: number) =>
-                        v === 18000 ? 'Básica ($18,000 MXN)' : v === 42000 ? 'Media ($42,000 MXN)' : 'Alta ($85,000 MXN)',
+                        `${v >= 70000 ? 'Alta' : v >= 30000 ? 'Media' : 'Básica'} (${formatoMoneda(v)} MXN)`,
                       mejorAlto: false,
                       invalidoSiMayorIgualA: Infinity
                     },
@@ -1612,14 +1608,14 @@ function NavbarGlobalContenido() {
                     },
                     {
                       label: 'Tasa de Desempleo Abierto',
-                      valores: carrerasEnVersus.map((c: any) => num(c.perfilActivo?.tasa_desempleo, 3.5)),
+                      valores: carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.tasa_desempleo, 3.5)),
                       formato: (v: number) => `${v.toFixed(1)}%`,
                       mejorAlto: false,
                       invalidoSiMayorIgualA: Infinity
                     },
                     {
                       label: 'Índice de Saturación ANUIES',
-                      valores: carrerasEnVersus.map((c: any) => num(c.perfilActivo?.indice_saturacion_pct, 100)),
+                      valores: carrerasEnVersus.map((c: any) => numSeguro(c.perfilActivo?.indice_saturacion_pct, 100)),
                       formato: (v: number) => `${v}%`,
                       mejorAlto: false,
                       invalidoSiMayorIgualA: Infinity
@@ -1633,7 +1629,7 @@ function NavbarGlobalContenido() {
                     },
                     {
                       label: 'Blindaje Humano ante IA',
-                      valores: carrerasEnVersus.map((c: any) => 100 - num(c.perfilActivo?.riesgo_ia_score, 40)),
+                      valores: carrerasEnVersus.map((c: any) => 100 - numSeguro(c.perfilActivo?.riesgo_ia_score, 40)),
                       formato: (v: number) => `${v}% blindaje`,
                       mejorAlto: true,
                       invalidoSiMayorIgualA: Infinity
@@ -1730,9 +1726,10 @@ function NavbarGlobalFallback() {
           </div>
 
           <div className="flex items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200/80 text-xs font-black text-slate-600">
-            <span className="px-3.5 py-1.5">Catálogo (64)</span>
-            <span className="px-3.5 py-1.5">Descubridor y Ranking</span>
-            <span className="px-3.5 py-1.5">Laboratorio Crudo</span>
+            <span className="px-3 py-1.5">Catálogo</span>
+            <span className="px-3 py-1.5">Descubridor y Ranking</span>
+            <span className="px-3 py-1.5">Laboratorio Crudo</span>
+            <span className="px-3 py-1.5">Subir Corte</span>
           </div>
 
           <div className="px-3.5 py-1.5 rounded-xl text-xs font-black bg-slate-50 text-slate-600 border border-slate-200">

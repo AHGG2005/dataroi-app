@@ -1,5 +1,5 @@
 // src/lib/pdfReportGenerator.ts
-// Motor Vectorial Nativo PDF 1.4 de Alta Fidelidad (Con Score DataROI Entero 0-100, Curvas de Bézier, Opacidad /ExtGState, Mosaico Bento y Rieles Divergentes)
+// Motor Vectorial Nativo PDF 1.4 de Alta Fidelidad (100% Dinámico · Score DataROI Entero 0-100, Curvas de Bézier, Opacidad /ExtGState, Mosaico Bento y Rieles Divergentes)
 
 const CP1252_EXTRA_MAP: Record<number, number> = {
   0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85,
@@ -334,6 +334,8 @@ export interface ReporteCarreraPDFPayload {
   scoreDataROI?: number;
   etiquetaScoreDataROI?: string;
   lugarScoreRegion?: string;
+  rangoAniosTexto?: string;
+  etiquetaPesosBase?: string;
   sueldoActivo: number;
   sueldoPrepa: number;
   premioVsPrepaPct: number;
@@ -480,9 +482,19 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     yCon += 2.5;
   });
 
+  const aniosSeriePdf = d.serieAnual.map(s => s.anio).filter(a => Number.isFinite(a) && a > 0);
+  const rangoPdf =
+    d.rangoAniosTexto ||
+    (aniosSeriePdf.length >= 2
+      ? `${Math.min(...aniosSeriePdf)}–${Math.max(...aniosSeriePdf)}`
+      : aniosSeriePdf.length === 1
+        ? String(aniosSeriePdf[0])
+        : 'Serie Histórica');
+  const pesosBasePdf = d.etiquetaPesosBase || 'Pesos constantes deflactados con INPC';
+
   p1.roundedRect(24, 294, 470, 278, 10, C_WHITE, C_BORDER);
-  p1.text('EVOLUCIÓN SALARIAL REAL VS. PREPARATORIA (2021–2026)', 36, 304, 9.5, true, C_DARK);
-  p1.text(`Tendencia Real: ${d.tendenciaEtiqueta} (Pesos constantes de 2026 deflactados con INPC)`, 36, 317, 7.6, false, C_SLATE);
+  p1.text(`EVOLUCIÓN SALARIAL REAL VS. PREPARATORIA (${rangoPdf})`, 36, 304, 9.5, true, C_DARK);
+  p1.text(`Tendencia Real: ${d.tendenciaEtiqueta} (${pesosBasePdf})`, 36, 317, 7.6, false, C_SLATE);
 
   const gridLeft = 64;
   const gridRight = 476;
@@ -494,7 +506,7 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
   const chartH = chartBottom - chartTop;
 
   const valsCurva = d.serieAnual.flatMap(s => [s.sueldoLic || 0, s.sueldoPrepa || 0]);
-  const maxCurva = Math.max(25000, Math.ceil((Math.max(...valsCurva) + 2000) / 5000) * 5000);
+  const maxCurva = Math.max(25000, Math.ceil((Math.max(...valsCurva, 0) + 2000) / 5000) * 5000);
 
   for (let v = 0; v <= maxCurva; v += 5000) {
     const yTick = chartBottom - (v / maxCurva) * chartH;
@@ -762,7 +774,7 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       label: 'Índice de Privilegio (Estrato Origen 1-4)',
       val: d.barreras.estrato,
       media: d.barreras.mediaEstrato,
-      maxDesv: 0.65,
+      maxDesv: Math.max(0.65, Math.abs(d.barreras.estrato - d.barreras.mediaEstrato) * 1.15),
       valTxt: `${d.barreras.estrato.toFixed(2)} / 4`,
       mediaTxt: `${d.barreras.mediaEstrato.toFixed(2)}`,
       diff: Number((d.barreras.estrato - d.barreras.mediaEstrato).toFixed(2)),
@@ -772,7 +784,7 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       label: 'Ingreso por Redes Familiares (Nepotismo)',
       val: d.barreras.nepotismo,
       media: d.barreras.mediaNepotismo,
-      maxDesv: 18,
+      maxDesv: Math.max(18, Math.abs(d.barreras.nepotismo - d.barreras.mediaNepotismo) * 1.15),
       valTxt: `${d.barreras.nepotismo.toFixed(1)}%`,
       mediaTxt: `${d.barreras.mediaNepotismo.toFixed(1)}%`,
       diff: Number((d.barreras.nepotismo - d.barreras.mediaNepotismo).toFixed(1)),
@@ -782,7 +794,7 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       label: 'Pluriempleo (Dos o más empleos simultáneos)',
       val: d.barreras.pluriempleo,
       media: d.barreras.mediaPluriempleo,
-      maxDesv: 14,
+      maxDesv: Math.max(14, Math.abs(d.barreras.pluriempleo - d.barreras.mediaPluriempleo) * 1.15),
       valTxt: `${d.barreras.pluriempleo.toFixed(1)}%`,
       mediaTxt: `${d.barreras.mediaPluriempleo.toFixed(1)}%`,
       diff: Number((d.barreras.pluriempleo - d.barreras.mediaPluriempleo).toFixed(1)),
@@ -792,7 +804,7 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       label: 'Migración Forzada (Cambio de estado para ejercer)',
       val: d.barreras.desarraigo,
       media: d.barreras.mediaDesarraigo,
-      maxDesv: 10,
+      maxDesv: Math.max(10, Math.abs(d.barreras.desarraigo - d.barreras.mediaDesarraigo) * 1.15),
       valTxt: `${d.barreras.desarraigo.toFixed(1)}%`,
       mediaTxt: `${d.barreras.mediaDesarraigo.toFixed(1)}%`,
       diff: Number((d.barreras.desarraigo - d.barreras.mediaDesarraigo).toFixed(1)),
@@ -802,7 +814,7 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
       label: 'Trabajo Doméstico No Remunerado (Doble Jornada)',
       val: d.barreras.hrsHogar,
       media: d.barreras.mediaHrsHogar,
-      maxDesv: 13,
+      maxDesv: Math.max(13, Math.abs(d.barreras.hrsHogar - d.barreras.mediaHrsHogar) * 1.15),
       valTxt: `${d.barreras.hrsHogar.toFixed(1)} hrs`,
       mediaTxt: `${d.barreras.mediaHrsHogar.toFixed(1)} hrs`,
       diff: Number((d.barreras.hrsHogar - d.barreras.mediaHrsHogar).toFixed(1)),
@@ -837,21 +849,30 @@ export function descargarReporteCarreraPDF(d: ReporteCarreraPDFPayload) {
     yBar += 34;
   });
 
+  const maxEscalaHO = Math.max(
+    20,
+    Math.ceil((Math.max(d.barreras.homeOffice, d.barreras.mediaHomeOffice) * 1.15) / 5) * 5
+  );
+  const maxEscalaMT = Math.max(
+    46,
+    Math.ceil((Math.max(d.barreras.medioTiempo, d.barreras.mediaMedioTiempo) * 1.15) / 5) * 5
+  );
+
   const modW = 175;
   p2.roundedRect(446, 514, modW, 46, 7, C_BG, C_BORDER, 0.6);
   p2.text('TRABAJO REMOTO (HOME OFFICE)', 454, 521, 6.8, true, C_BLUE);
   p2.text(`${d.barreras.homeOffice.toFixed(1)}%`, 613, 520, 8.5, true, C_DARK, 'right');
   p2.roundedRect(454, 533, 159, 6, 3, C_WHITE, C_BORDER, 0.4);
-  p2.roundedRect(454, 533, (159 * Math.min(20, d.barreras.homeOffice)) / 20, 6, 3, C_BLUE);
-  p2.rect(454 + (159 * Math.min(20, d.barreras.mediaHomeOffice)) / 20 - 1, 531.5, 2, 9, C_DARK);
+  p2.roundedRect(454, 533, (159 * Math.min(maxEscalaHO, d.barreras.homeOffice)) / maxEscalaHO, 6, 3, C_BLUE);
+  p2.rect(454 + (159 * Math.min(maxEscalaHO, d.barreras.mediaHomeOffice)) / maxEscalaHO - 1, 531.5, 2, 9, C_DARK);
   p2.text(`Marca negra (Media): ${d.barreras.mediaHomeOffice}%`, 454, 545, 6.3, false, C_SLATE);
 
   p2.roundedRect(631, 514, modW, 46, 7, C_BG, C_BORDER, 0.6);
   p2.text('MEDIO TIEMPO (<30H SEMANALES)', 639, 521, 6.8, true, C_SLATE);
   p2.text(`${d.barreras.medioTiempo.toFixed(1)}%`, 798, 520, 8.5, true, C_DARK, 'right');
   p2.roundedRect(639, 533, 159, 6, 3, C_WHITE, C_BORDER, 0.4);
-  p2.roundedRect(639, 533, (159 * Math.min(46, d.barreras.medioTiempo)) / 46, 6, 3, C_SLATE);
-  p2.rect(639 + (159 * Math.min(46, d.barreras.mediaMedioTiempo)) / 46 - 1, 531.5, 2, 9, C_DARK);
+  p2.roundedRect(639, 533, (159 * Math.min(maxEscalaMT, d.barreras.medioTiempo)) / maxEscalaMT, 6, 3, C_SLATE);
+  p2.rect(639 + (159 * Math.min(maxEscalaMT, d.barreras.mediaMedioTiempo)) / maxEscalaMT - 1, 531.5, 2, 9, C_DARK);
   p2.text(`Marca negra (Media): ${d.barreras.mediaMedioTiempo}%`, 639, 545, 6.3, false, C_SLATE);
 
   buildAndDownloadPdfDocument([p1, p2], d.nombreArchivo);
@@ -971,12 +992,18 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
   const bTop = 114;
   const bBottom = 242;
   const bH = bBottom - bTop;
-  const maxSalReg = 25000;
 
-  [0, 10000, 20000].forEach(val => {
+  const todosSueldosRegPdf = v.carreras.flatMap(c =>
+    Object.values(c.sueldosPorRegion || {}).filter((n): n is number => typeof n === 'number' && n > 0)
+  );
+  const maxObsRegPdf = todosSueldosRegPdf.length > 0 ? Math.max(...todosSueldosRegPdf) : 22000;
+  const maxSalReg = Math.max(25000, Math.ceil((maxObsRegPdf + 2000) / 5000) * 5000);
+  const mitadSalReg = Math.round(maxSalReg / 2);
+
+  [0, mitadSalReg, maxSalReg].forEach(val => {
     const yG = bBottom - (val / maxSalReg) * bH;
     p.line(bLeft, yG, bRight, yG, C_BORDER, 0.5, true);
-    p.text(`$${val / 1000}k`, bLeft - 5, yG - 3, 6.8, false, C_SLATE, 'right');
+    p.text(`$${Math.round(val / 1000)}k`, bLeft - 5, yG - 3, 6.8, false, C_SLATE, 'right');
   });
 
   const groupW = (bRight - bLeft) / regs.length;
@@ -1047,7 +1074,7 @@ export function descargarComparativaVersusPDF(v: ComparativaVersusPDFPayload) {
     {
       label: 'Inversión Requerida en Equipo (CapEx)',
       vals: v.carreras.map(c => c.costoEquipo),
-      fmt: (n: number) => (n === 18000 ? 'Básica ($18,000 MXN)' : n === 42000 ? 'Media ($42,000 MXN)' : 'Alta ($85,000 MXN)'),
+      fmt: (n: number) => `${n >= 70000 ? 'Alta' : n >= 30000 ? 'Media' : 'Básica'} (${fmtMoney(n)} MXN)`,
       mejorAlto: false,
       invalido: Infinity
     },

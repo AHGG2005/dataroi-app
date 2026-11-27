@@ -27,8 +27,8 @@
     page-break-inside: avoid !important;
   }
 
-  /* Si el modal del Comparador Cara a Cara está abierto al imprimir, imprime solo el modal limpio */
-  body:has(.versus-print-modal) main > *:not(.versus-print-modal) {
+  /* Si el modal global del Comparador Cara a Cara está abierto al imprimir, oculta el resto del layout */
+  body:has(.versus-print-modal) > div.flex-1 {
     display: none !important;
   }
 

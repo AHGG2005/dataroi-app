@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   descargarLibroExcelXLSX,
   descargarCSVEstilizado,
@@ -13,6 +14,21 @@ import {
   ValorCeldaExcel,
   EstiloCeldaExcel
 } from '@/lib/excelReportGenerator';
+import {
+  REGIONES_ORDEN,
+  REGIONES_META,
+  META_PIPELINE_FALLBACK,
+  EVENTO_DATOS_ACTUALIZADOS,
+  CodigoGenero,
+  RegionClave,
+  BenchmarksPrepaMap,
+  MetaPipelineInfo,
+  VentanasTemporales,
+  obtenerCapExDinamico,
+  calcularAniosRetornoDinamico,
+  calcularPercentil,
+  numSeguro
+} from '@/lib/dataroiEngine';
 import {
   Home, ShieldAlert, Scale, ChevronRight, ChevronLeft, Trophy,
   ShieldCheck, Sparkles, Building, CheckCircle2,
@@ -26,7 +42,6 @@ import {
 
 type ModoEvaluacionRanking = 'calificacion' | 'afinidad';
 type CriterioOrden = 'principal_desc' | 'principal_asc' | 'salario_desc' | 'salario_asc';
-type CodigoGenero = 0 | 1 | 2; // 0 = Total, 1 = Hombres, 2 = Mujeres
 type ModoVistaFiltros = 'wizard' | 'colapsado' | 'expandido';
 
 const MAX_PRIORIDADES = 5;
@@ -64,99 +79,6 @@ const COLORES_VERSUS = [
   }
 ];
 
-const BENCHMARK_REGIONES_BASE: Record<string, {
-  nombre: string;
-  corto: string;
-  estados: string;
-  colorHex: string;
-  badgeActivo: string;
-  sueldo_prepa: Record<CodigoGenero, number>;
-  sueldo_lic: number;
-  formalidad_prepa: number;
-  formalidad_lic: number;
-  estrato_medio: number;
-  nepotismo_medio: number;
-}> = {
-  nacional: {
-    nombre: 'Nacional (Todo México)',
-    corto: 'Todo México',
-    estados: 'Promedio de las 32 entidades federativas',
-    colorHex: '#2563EB',
-    badgeActivo: 'bg-blue-600 text-white border-blue-600',
-    sueldo_prepa: { 0: 10608, 1: 11832, 2: 8762 },
-    sueldo_lic: 15534,
-    formalidad_prepa: 50.1,
-    formalidad_lic: 70.3,
-    estrato_medio: 2.80,
-    nepotismo_medio: 37.2
-  },
-  norte: {
-    nombre: 'Norte / Frontera Industrial',
-    corto: 'Norte',
-    estados: 'Baja California, Sonora, Chihuahua, Coahuila, Nuevo León, Tamaulipas',
-    colorHex: '#4F46E5',
-    badgeActivo: 'bg-indigo-600 text-white border-indigo-600',
-    sueldo_prepa: { 0: 12816, 1: 14113, 2: 10775 },
-    sueldo_lic: 17917,
-    formalidad_prepa: 66.3,
-    formalidad_lic: 78.2,
-    estrato_medio: 3.08,
-    nepotismo_medio: 37.6
-  },
-  noroeste: {
-    nombre: 'Noroeste / Corredor Pacífico',
-    corto: 'Noroeste',
-    estados: 'Baja California Sur, Sinaloa, Durango, Nayarit',
-    colorHex: '#0891B2',
-    badgeActivo: 'bg-cyan-600 text-white border-cyan-600',
-    sueldo_prepa: { 0: 11858, 1: 13365, 2: 9748 },
-    sueldo_lic: 15495,
-    formalidad_prepa: 54.0,
-    formalidad_lic: 71.4,
-    estrato_medio: 2.83,
-    nepotismo_medio: 43.3
-  },
-  bajio: {
-    nombre: 'Occidente - Bajío',
-    corto: 'Bajío-Occ.',
-    estados: 'Jalisco, Guanajuato, Querétaro, Aguascalientes, SLP, Michoacán, Colima, Zacatecas',
-    colorHex: '#D97706',
-    badgeActivo: 'bg-amber-600 text-white border-amber-600',
-    sueldo_prepa: { 0: 10478, 1: 11731, 2: 8707 },
-    sueldo_lic: 14742,
-    formalidad_prepa: 53.2,
-    formalidad_lic: 72.3,
-    estrato_medio: 2.93,
-    nepotismo_medio: 38.8
-  },
-  centro: {
-    nombre: 'Centro / Valle de México',
-    corto: 'Centro',
-    estados: 'CDMX, Estado de México, Puebla, Hidalgo, Morelos, Tlaxcala',
-    colorHex: '#7C3AED',
-    badgeActivo: 'bg-purple-600 text-white border-purple-600',
-    sueldo_prepa: { 0: 9889, 1: 11119, 2: 8069 },
-    sueldo_lic: 16000,
-    formalidad_prepa: 45.3,
-    formalidad_lic: 68.3,
-    estrato_medio: 2.73,
-    nepotismo_medio: 33.5
-  },
-  sur: {
-    nombre: 'Sur - Sureste / Golfo',
-    corto: 'Sur-Sureste',
-    estados: 'Veracruz, Tabasco, Campeche, Yucatán, Quintana Roo, Chiapas, Oaxaca, Guerrero',
-    colorHex: '#059669',
-    badgeActivo: 'bg-emerald-600 text-white border-emerald-600',
-    sueldo_prepa: { 0: 9150, 1: 10195, 2: 7469 },
-    sueldo_lic: 13023,
-    formalidad_prepa: 37.9,
-    formalidad_lic: 61.9,
-    estrato_medio: 2.31,
-    nepotismo_medio: 38.6
-  }
-};
-
 const ESTILOS_GENERO: Record<CodigoGenero, {
   activoBtn: string;
   activoCard: string;
@@ -183,7 +105,7 @@ const ESTILOS_GENERO: Record<CodigoGenero, {
   }
 };
 
-const PATHS_CARTOGRAFICOS_MEXICO: Record<string, string> = {
+const PATHS_CARTOGRAFICOS_MEXICO: Record<Exclude<RegionClave, 'nacional'>, string> = {
   norte: "M 44.1,22.1 L 66.5,20.0 L 64.8,23.8 L 91.5,33.1 L 131.8,46.7 L 166.9,46.5 L 180.9,46.5 L 180.9,38.6 L 211.5,38.6 L 217.9,45.4 L 226.9,51.5 L 237.4,60.0 L 243.3,70.0 L 247.7,80.6 L 256.8,86.4 L 271.4,92.2 L 282.6,77.0 L 297.0,76.6 L 309.4,84.3 L 318.3,97.5 L 324.4,108.8 L 334.8,119.7 L 338.7,133.2 L 343.6,142.3 L 357.4,148.2 L 369.9,152.5 L 376.8,151.9 L 370.0,168.8 L 366.9,182.6 L 365.6,208.4 L 363.9,217.8 L 365.2,222.2 L 344.0,218.7 L 317.5,203.3 L 305.2,180.2 L 266.3,172.5 L 255.7,135.9 L 216.9,157.1 L 176.3,130.1 L 162.0,142.2 L 162.3,140.8 L 153.3,136.4 L 142.9,127.0 L 138.5,113.6 L 129.0,112.0 L 118.8,101.9 L 110.5,92.5 L 109.7,86.5 L 100.2,72.0 L 94.0,57.2 L 94.2,49.8 L 81.5,42.2 L 75.6,43.0 L 65.5,37.7 L 62.7,45.6 L 65.6,54.8 L 67.3,69.2 L 73.4,77.2 L 86.5,90.4 L 89.4,95.0 L 92.1,96.3 L 94.4,103.0 L 97.5,102.7 L 99.9,110.9 L 73.7,110.9 L 75.7,108.7 L 76.4,100.0 L 62.8,86.2 L 52.4,80.9 L 45.9,68.9 L 39.3,56.3 L 31.2,40.9 L 24.0,23.6 L 44.1,22.1 Z",
   noroeste: "M 225.2,256.5 L 231.1,254.6 L 229.2,249.1 L 233.3,244.2 L 233.4,237.5 L 227.4,228.9 L 225.8,221.2 L 219.9,211.5 L 204.4,192.3 L 186.6,177.3 L 178.0,165.3 L 162.9,157.4 L 159.6,152.7 L 162.0,142.2 L 176.3,130.1 L 216.9,157.1 L 255.7,135.9 L 266.3,172.5 L 276.9,184.0 L 259.3,197.5 L 254.0,218.7 L 255.7,245.6 L 227.5,257.2 L 225.5,257.2 L 225.2,256.5 Z M 101.1,115.1 L 106.4,120.0 L 110.2,126.8 L 121.3,136.6 L 127.1,154.5 L 132.4,163.0 L 137.3,172.0 L 138.3,182.1 L 146.8,182.8 L 153.8,191.5 L 160.3,200.1 L 159.8,203.6 L 152.4,210.6 L 149.3,210.5 L 144.6,198.8 L 133.1,187.9 L 120.3,178.5 L 111.3,173.7 L 111.9,159.6 L 109.2,149.1 L 100.8,143.2 L 88.7,134.6 L 86.3,137.1 L 81.9,132.0 L 71.0,127.4 L 60.6,116.2 L 61.9,114.8 L 69.1,115.9 L 73.7,110.9 L 99.9,110.9 L 101.1,115.1 Z",
   bajio: "M 282.6,303.8 L 264.5,297.7 L 257.2,289.0 L 238.2,278.0 L 229.4,265.9 L 225.5,257.2 L 227.5,257.2 L 255.7,245.6 L 254.0,218.7 L 259.3,197.5 L 276.9,184.0 L 266.3,172.5 L 305.2,180.2 L 317.5,203.3 L 344.0,218.7 L 356.3,226.4 L 356.3,239.8 L 333.4,243.7 L 324.6,261.0 L 319.3,278.3 L 317.5,295.7 L 289.5,304.6 L 282.6,303.8 Z",
@@ -191,7 +113,7 @@ const PATHS_CARTOGRAFICOS_MEXICO: Record<string, string> = {
   sur: "M 367.0,228.3 L 372.4,237.7 L 376.0,252.6 L 387.7,267.0 L 391.8,278.0 L 398.7,287.4 L 417.4,292.5 L 424.7,300.6 L 440.2,295.2 L 453.7,293.3 L 466.9,289.8 L 478.0,286.5 L 489.2,278.7 L 493.4,267.4 L 494.9,251.3 L 497.9,245.6 L 509.9,240.6 L 528.6,236.1 L 544.2,236.8 L 554.9,235.2 L 559.1,239.2 L 558.5,248.5 L 549.1,260.0 L 544.9,271.7 L 548.1,275.0 L 545.5,283.4 L 541.0,298.4 L 536.6,293.4 L 532.9,293.7 L 529.5,294.0 L 523.2,305.6 L 520.0,303.3 L 517.8,304.2 L 518.0,307.1 L 501.7,306.9 L 485.2,306.9 L 485.2,317.7 L 477.2,317.8 L 483.8,324.2 L 490.3,328.6 L 492.3,332.8 L 495.1,334.0 L 494.7,340.5 L 472.0,340.6 L 463.5,356.3 L 466.0,359.9 L 464.0,364.4 L 463.5,370.0 L 443.6,349.3 L 434.5,343.0 L 420.0,338.0 L 410.2,339.4 L 396.0,346.6 L 387.1,348.5 L 374.6,343.5 L 361.4,339.8 L 344.9,331.0 L 331.7,328.3 L 311.7,319.3 L 296.9,310.1 L 292.5,305.0 L 289.5,304.6 L 317.5,295.7 L 336.9,295.7 L 351.1,303.4 L 361.6,305.3 L 379.3,299.5 L 377.5,272.6 L 366.9,255.2 L 356.3,239.8 L 356.3,226.4 L 344.0,218.7 L 365.2,222.2 L 367.0,228.3 Z"
 };
 
-const ETIQUETAS_MAPA: { id: string; label: string; x: number; y: number; w: number }[] = [
+const ETIQUETAS_MAPA: { id: Exclude<RegionClave, 'nacional'>; label: string; x: number; y: number; w: number }[] = [
   { id: 'norte', label: 'NORTE', x: 238, y: 107, w: 58 },
   { id: 'noroeste', label: 'NOROESTE', x: 222, y: 185, w: 76 },
   { id: 'bajio', label: 'BAJÍO-OCC.', x: 294, y: 242, w: 78 },
@@ -268,41 +190,6 @@ const IDS_PREFERENCIAS_VALIDAS = new Set(PREFERENCIAS.map(p => p.id));
 
 const formatoMoneda = (valor: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(valor || 0);
-
-const num = (val: any, fallback: number) => {
-  const n = Number(val);
-  return Number.isFinite(n) ? n : fallback;
-};
-
-function obtenerCapExCorto(cve: string) {
-  const pref3 = cve.slice(0, 3);
-  const pref4 = cve.slice(0, 4);
-  if (
-    pref4 === '0911' || pref4 === '0931' || pref3 === '073' || pref3 === '021' ||
-    pref4 === '0821' || pref4 === '1014' || pref4 === '1013' || pref4 === '1015'
-  ) {
-    return { nivel: 3, costoEquipo: 85000, etiqueta: 'Equipo Alto ($85k)', corto: 'Equipo Alto', clase: 'bg-rose-50 text-rose-700 border-rose-200' };
-  }
-  if (
-    pref3 === '061' || pref3 === '062' || pref3 === '071' || pref3 === '072' ||
-    pref3 === '051' || pref3 === '052' || pref3 === '053' || pref3 === '081' ||
-    pref3 === '091' || pref3 === '092' || pref3 === '094' || pref3 === '095'
-  ) {
-    return { nivel: 2, costoEquipo: 42000, etiqueta: 'Equipo Medio ($42k)', corto: 'Equipo Medio', clase: 'bg-amber-50 text-amber-800 border-amber-200' };
-  }
-  return { nivel: 1, costoEquipo: 18000, etiqueta: 'Equipo Básico ($18k)', corto: 'Equipo Básico', clase: 'bg-slate-100 text-slate-600 border-slate-200' };
-}
-
-function calcularAniosRetornoRapido(sueldoCarrera: number, sueldoPrepa: number, cve: string, esPrivada: boolean) {
-  const semestres = cve === '091100' ? 12 : 9;
-  const capex = obtenerCapExCorto(cve);
-  const inversionTotal = esPrivada
-    ? semestres * (6500 * 6) + 22000 + capex.costoEquipo
-    : semestres * 1800 + 8500 + capex.costoEquipo;
-  const bonoAnual = (sueldoCarrera - sueldoPrepa) * 12;
-  if (bonoAnual <= 0) return null;
-  return Number((inversionTotal / bonoAnual).toFixed(1));
-}
 
 function AnilloScoreDataROIGrande({
   score,
@@ -393,47 +280,21 @@ function MapaMexicoMacroRegiones({
   onSelectRegion,
   onHoverRegion
 }: {
-  regionActiva: string;
-  regionHover: string | null;
-  onSelectRegion: (r: string) => void;
-  onHoverRegion: (r: string | null) => void;
+  regionActiva: RegionClave;
+  regionHover: RegionClave | null;
+  onSelectRegion: (r: RegionClave) => void;
+  onHoverRegion: (r: RegionClave | null) => void;
 }) {
-  const obtenerEstiloPoligono = (idReg: string) => {
-    const info = BENCHMARK_REGIONES_BASE[idReg];
+  const obtenerEstiloPoligono = (idReg: Exclude<RegionClave, 'nacional'>) => {
+    const info = REGIONES_META[idReg];
     const esNacional = regionActiva === 'nacional';
     const esActiva = regionActiva === idReg;
     const esHover = regionHover === idReg;
 
-    if (esActiva) {
-      return {
-        fill: info.colorHex,
-        stroke: '#FFFFFF',
-        strokeWidth: 2.3,
-        opacity: 1
-      };
-    }
-    if (esHover) {
-      return {
-        fill: info.colorHex,
-        stroke: '#FFFFFF',
-        strokeWidth: 2.1,
-        opacity: 0.92
-      };
-    }
-    if (esNacional) {
-      return {
-        fill: '#CBD5E1',
-        stroke: '#FFFFFF',
-        strokeWidth: 1.6,
-        opacity: 0.85
-      };
-    }
-    return {
-      fill: '#E2E8F0',
-      stroke: '#FFFFFF',
-      strokeWidth: 1.5,
-      opacity: 0.75
-    };
+    if (esActiva) return { fill: info.colorHex, stroke: '#FFFFFF', strokeWidth: 2.3, opacity: 1 };
+    if (esHover) return { fill: info.colorHex, stroke: '#FFFFFF', strokeWidth: 2.1, opacity: 0.92 };
+    if (esNacional) return { fill: '#CBD5E1', stroke: '#FFFFFF', strokeWidth: 1.6, opacity: 0.85 };
+    return { fill: '#E2E8F0', stroke: '#FFFFFF', strokeWidth: 1.5, opacity: 0.75 };
   };
 
   return (
@@ -446,7 +307,7 @@ function MapaMexicoMacroRegiones({
         onMouseLeave={() => onHoverRegion(null)}
       >
         {(['norte', 'noroeste', 'bajio', 'centro', 'sur'] as const).map((idReg) => {
-          const info = BENCHMARK_REGIONES_BASE[idReg];
+          const info = REGIONES_META[idReg];
           return (
             <path
               key={idReg}
@@ -508,9 +369,34 @@ function MapaMexicoMacroRegiones({
   );
 }
 
-export default function DescubridorClient({ datos }: { datos: any[] }) {
-  const [regionActiva, setRegionActiva] = useState<string>('nacional');
-  const [regionHover, setRegionHover] = useState<string | null>(null);
+interface BenchmarkRegionDinamicoUI {
+  nombre: string;
+  corto: string;
+  estados: string;
+  colorHex: string;
+  badgeActivo: string;
+  sueldo_prepa: Record<CodigoGenero, number>;
+  sueldo_lic: number;
+  formalidad_prepa: number;
+  formalidad_lic: number;
+  estrato_medio: number;
+  nepotismo_medio: number;
+}
+
+export default function DescubridorClient({
+  datos,
+  benchmarksPrepa,
+  metaPipeline = META_PIPELINE_FALLBACK,
+  ventanas
+}: {
+  datos: any[];
+  benchmarksPrepa?: BenchmarksPrepaMap;
+  metaPipeline?: MetaPipelineInfo;
+  ventanas?: VentanasTemporales;
+}) {
+  const router = useRouter();
+  const [regionActiva, setRegionActiva] = useState<RegionClave>('nacional');
+  const [regionHover, setRegionHover] = useState<RegionClave | null>(null);
   const [generoActivo, setGeneroActivo] = useState<CodigoGenero>(0);
 
   const [modoEvaluacion, setModoEvaluacion] = useState<ModoEvaluacionRanking>('calificacion');
@@ -529,7 +415,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   const ignorarSyncInternoRef = useRef<boolean>(false);
   const abrirVersusAlHidratarRef = useRef<boolean>(false);
 
-  // Sincronización con cambios realizados desde el Popover o el Modal Global de NavbarGlobal
+  // Sincronización con NavbarGlobal y recarga automática si entra una nueva ingesta
   useEffect(() => {
     const syncExterna = () => {
       if (ignorarSyncInternoRef.current) return;
@@ -537,67 +423,81 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const nueva = est.carrerasCompararCves || [];
       setCarrerasCompararCves(prev => (prev.join(',') === nueva.join(',') ? prev : nueva));
     };
+    const onDataUpdated = () => router.refresh();
 
     window.addEventListener(EVENTO_VERSUS_SYNC, syncExterna);
+    window.addEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
     return () => {
       window.removeEventListener(EVENTO_VERSUS_SYNC, syncExterna);
+      window.removeEventListener(EVENTO_DATOS_ACTUALIZADOS, onDataUpdated);
     };
-  }, []);
+  }, [router]);
 
+  // Benchmarks 100% dinámicos: Preparatoria desde Supabase + Licenciaturas calculadas sobre `datos`
   const benchmarksDinamicosPorRegion = useMemo(() => {
-    const mapa: Record<string, typeof BENCHMARK_REGIONES_BASE['nacional']> = {};
+    const mapa = {} as Record<RegionClave, BenchmarkRegionDinamicoUI>;
 
-    Object.entries(BENCHMARK_REGIONES_BASE).forEach(([regKey, metaBase]) => {
+    REGIONES_ORDEN.forEach((regKey) => {
+      const metaGeo = REGIONES_META[regKey];
+      const prepaReg = benchmarksPrepa?.[regKey];
+      const sueldoPrepaMap: Record<CodigoGenero, number> = prepaReg?.sueldo_prepa || { 0: 10608, 1: 11832, 2: 8762 };
+      const formPrepa = prepaReg?.formalidad_prepa_pct?.[generoActivo] ?? prepaReg?.formalidad_prepa_pct?.[0] ?? 50.1;
+
       const celdasValidas = datos
         .map(d => d.perfiles?.[regKey]?.[generoActivo])
         .filter(p => p && p.celdaValida !== false && Number(p.sueldo_esperado) > 0);
 
-      if (celdasValidas.length === 0) {
-        mapa[regKey] = metaBase;
-        return;
+      let sueldoLicDin = 15500;
+      let formLicDin = 62.0;
+      let estratoDin = 2.80;
+      let nepotismoDin = 37.2;
+
+      if (celdasValidas.length > 0) {
+        const sumaPesoSueldo = celdasValidas.reduce((acc, p) => acc + Math.max(1, Number(p.volumen_validado || 1)), 0);
+        const sumaPesoSat = celdasValidas.reduce((acc, p) => acc + Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0);
+
+        sueldoLicDin = Math.round(
+          celdasValidas.reduce((acc, p) => acc + Number(p.sueldo_esperado) * Math.max(1, Number(p.volumen_validado || 1)), 0) / sumaPesoSueldo
+        );
+        formLicDin = Number(
+          (
+            celdasValidas.reduce((acc, p) => {
+              const f = Number(p.pct_contrato || 60) * 0.45 + Number(p.pct_aguinaldo || 60) * 0.30 + Number(p.pct_afore || 50) * 0.25;
+              return acc + f * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1));
+            }, 0) / sumaPesoSat
+          ).toFixed(1)
+        );
+        estratoDin = Number(
+          (
+            celdasValidas.reduce((acc, p) => acc + Number(p.indice_privilegio || 2.8) * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0) / sumaPesoSat
+          ).toFixed(2)
+        );
+        nepotismoDin = Number(
+          (
+            celdasValidas.reduce((acc, p) => acc + Number(p.pct_nepotismo || 37) * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0) / sumaPesoSat
+          ).toFixed(1)
+        );
       }
 
-      const sumaPesoSueldo = celdasValidas.reduce((acc, p) => acc + Math.max(1, Number(p.volumen_validado || 1)), 0);
-      const sumaPesoSat = celdasValidas.reduce((acc, p) => acc + Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0);
-
-      const sueldoLicDin = Math.round(
-        celdasValidas.reduce((acc, p) => acc + Number(p.sueldo_esperado) * Math.max(1, Number(p.volumen_validado || 1)), 0) / sumaPesoSueldo
-      );
-
-      const formLicDin = Number(
-        (
-          celdasValidas.reduce((acc, p) => {
-            const f = Number(p.pct_contrato || 60) * 0.45 + Number(p.pct_aguinaldo || 60) * 0.30 + Number(p.pct_afore || 50) * 0.25;
-            return acc + f * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1));
-          }, 0) / sumaPesoSat
-        ).toFixed(1)
-      );
-
-      const estratoDin = Number(
-        (
-          celdasValidas.reduce((acc, p) => acc + Number(p.indice_privilegio || 2.8) * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0) / sumaPesoSat
-        ).toFixed(2)
-      );
-
-      const nepotismoDin = Number(
-        (
-          celdasValidas.reduce((acc, p) => acc + Number(p.pct_nepotismo || 37) * Math.max(1, Number(p.volumen_muestra_nacional || p.volumen_validado || 1)), 0) / sumaPesoSat
-        ).toFixed(1)
-      );
-
       mapa[regKey] = {
-        ...metaBase,
-        sueldo_lic: sueldoLicDin > 0 ? sueldoLicDin : metaBase.sueldo_lic,
-        formalidad_lic: formLicDin > 0 ? formLicDin : metaBase.formalidad_lic,
-        estrato_medio: estratoDin > 0 ? estratoDin : metaBase.estrato_medio,
-        nepotismo_medio: nepotismoDin > 0 ? nepotismoDin : metaBase.nepotismo_medio
+        nombre: metaGeo.nombre,
+        corto: metaGeo.corto,
+        estados: metaGeo.estados,
+        colorHex: metaGeo.colorHex,
+        badgeActivo: metaGeo.badgeActivo,
+        sueldo_prepa: sueldoPrepaMap,
+        sueldo_lic: sueldoLicDin,
+        formalidad_prepa: formPrepa,
+        formalidad_lic: formLicDin,
+        estrato_medio: estratoDin,
+        nepotismo_medio: nepotismoDin
       };
     });
 
     return mapa;
-  }, [datos, generoActivo]);
+  }, [datos, generoActivo, benchmarksPrepa]);
 
-  const { minSueldoCatalogo, maxSueldoCatalogo, sueldoSugerido } = useMemo(() => {
+  const { minSueldoCatalogo, maxSueldoCatalogo, sueldoSugerido, metaAltaDinamica } = useMemo(() => {
     const prepaRef = benchmarksDinamicosPorRegion[regionActiva]?.sueldo_prepa[generoActivo] || 10500;
     const pisoPrepaFloor = Math.floor(prepaRef / 500) * 500;
 
@@ -607,7 +507,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       .filter(s => s > 0);
 
     if (sueldos.length === 0) {
-      return { minSueldoCatalogo: pisoPrepaFloor, maxSueldoCatalogo: 21000, sueldoSugerido: pisoPrepaFloor };
+      return {
+        minSueldoCatalogo: pisoPrepaFloor,
+        maxSueldoCatalogo: pisoPrepaFloor + 10000,
+        sueldoSugerido: pisoPrepaFloor,
+        metaAltaDinamica: pisoPrepaFloor + 6000
+      };
     }
 
     const minReal = Math.min(...sueldos);
@@ -616,19 +521,24 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     const maxFloor = Math.floor(maxReal / 500) * 500;
     const sugerido = Math.max(minFloor, Math.min(maxFloor - 1500, Math.ceil(prepaRef / 500) * 500));
 
+    // Meta Alta = Percentil 75 real de esta región y género redondeado a $500
+    const p75 = Math.round(calcularPercentil(sueldos, 0.75) / 500) * 500;
+    const metaAlta = Math.max(sugerido + 500, Math.min(maxFloor, p75));
+
     return {
       minSueldoCatalogo: minFloor,
       maxSueldoCatalogo: maxFloor > minFloor ? maxFloor : minFloor + 1000,
-      sueldoSugerido: sugerido
+      sueldoSugerido: sugerido,
+      metaAltaDinamica: metaAlta
     };
   }, [datos, regionActiva, generoActivo, benchmarksDinamicosPorRegion]);
 
-  const [sueldoMinimo, setSueldoMinimo] = useState<number>(10500);
+  const [sueldoMinimo, setSueldoMinimo] = useState<number>(sueldoSugerido);
 
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const regUrl = params.get('region');
+      const regUrl = params.get('region') as RegionClave | null;
       const genUrl = params.get('genero');
       const modoUrl = params.get('modo');
       const sueldoUrl = params.get('sueldo');
@@ -637,15 +547,16 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
       const guardadoRaw = sessionStorage.getItem(STORAGE_KEY_DESCUBRIDOR);
       const parsedSession = guardadoRaw ? JSON.parse(guardadoRaw) : null;
+      const esRegValida = (r: any): r is RegionClave => (REGIONES_ORDEN as readonly string[]).includes(String(r));
 
       const tieneParamsUrl = Boolean(regUrl || genUrl || modoUrl || sueldoUrl || prioUrl || compUrl);
 
       if (tieneParamsUrl) {
-        let regInicial = 'nacional';
-        if (regUrl && BENCHMARK_REGIONES_BASE[regUrl]) {
+        let regInicial: RegionClave = 'nacional';
+        if (regUrl && esRegValida(regUrl)) {
           regInicial = regUrl;
           setRegionActiva(regUrl);
-        } else if (parsedSession?.regionActiva && BENCHMARK_REGIONES_BASE[parsedSession.regionActiva]) {
+        } else if (esRegValida(parsedSession?.regionActiva)) {
           regInicial = parsedSession.regionActiva;
           setRegionActiva(regInicial);
         }
@@ -656,12 +567,12 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         else if (parsedSession?.generoActivo === 1 || parsedSession?.generoActivo === 2) genInicial = parsedSession.generoActivo;
         setGeneroActivo(genInicial);
 
-        if (sueldoUrl && Number(sueldoUrl) >= 6000) {
+        if (sueldoUrl && Number(sueldoUrl) >= 4000) {
           setSueldoMinimo(Number(sueldoUrl));
-        } else if (typeof parsedSession?.sueldoMinimo === 'number' && parsedSession.sueldoMinimo >= 6000) {
+        } else if (typeof parsedSession?.sueldoMinimo === 'number' && parsedSession.sueldoMinimo >= 4000) {
           setSueldoMinimo(parsedSession.sueldoMinimo);
         } else {
-          const prepaRef = BENCHMARK_REGIONES_BASE[regInicial]?.sueldo_prepa[genInicial] || 10500;
+          const prepaRef = benchmarksPrepa?.[regInicial]?.sueldo_prepa[genInicial] || 10500;
           setSueldoMinimo(Math.floor(prepaRef / 500) * 500);
         }
 
@@ -713,13 +624,13 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
           setCarrerasCompararCves(parsedSession.carrerasCompararCves.slice(0, MAX_COMPARAR));
         }
       } else if (parsedSession) {
-        if (parsedSession.regionActiva && BENCHMARK_REGIONES_BASE[parsedSession.regionActiva]) {
+        if (esRegValida(parsedSession.regionActiva)) {
           setRegionActiva(parsedSession.regionActiva);
         }
         if (parsedSession.generoActivo === 0 || parsedSession.generoActivo === 1 || parsedSession.generoActivo === 2) {
           setGeneroActivo(parsedSession.generoActivo);
         }
-        if (typeof parsedSession.sueldoMinimo === 'number' && parsedSession.sueldoMinimo >= 6000) {
+        if (typeof parsedSession.sueldoMinimo === 'number' && parsedSession.sueldoMinimo >= 4000) {
           setSueldoMinimo(parsedSession.sueldoMinimo);
         }
         if (Array.isArray(parsedSession.activos) && parsedSession.activos.length > 0) {
@@ -795,15 +706,15 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     }
   }, [hidratado, regionActiva, generoActivo, sueldoMinimo, modoEvaluacion, activos, modoVistaFiltros, carrerasCompararCves]);
 
-  const cambiarRegionConCalibracion = (nuevaReg: string) => {
+  const cambiarRegionConCalibracion = (nuevaReg: RegionClave) => {
     setRegionActiva(nuevaReg);
-    const prepaRef = BENCHMARK_REGIONES_BASE[nuevaReg]?.sueldo_prepa[generoActivo] || 10500;
+    const prepaRef = benchmarksDinamicosPorRegion[nuevaReg]?.sueldo_prepa[generoActivo] || 10500;
     setSueldoMinimo(Math.ceil(prepaRef / 500) * 500);
   };
 
   const cambiarGeneroConCalibracion = (nuevoGen: CodigoGenero) => {
     setGeneroActivo(nuevoGen);
-    const prepaRef = BENCHMARK_REGIONES_BASE[regionActiva]?.sueldo_prepa[nuevoGen] || 10500;
+    const prepaRef = benchmarksDinamicosPorRegion[regionActiva]?.sueldo_prepa[nuevoGen] || 10500;
     setSueldoMinimo(Math.ceil(prepaRef / 500) * 500);
   };
 
@@ -862,7 +773,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   const tieneResultadosActivos = modoEvaluacion === 'calificacion' || activos.length > 0;
 
   const { rankingVisible, rankingCompleto, listaOrdenadaCompleta, totalFiltradas, totalEnRegion } = useMemo(() => {
-    const infoReg = benchmarksDinamicosPorRegion[regionActiva] || BENCHMARK_REGIONES_BASE.nacional;
+    const infoReg = benchmarksDinamicosPorRegion[regionActiva] || benchmarksDinamicosPorRegion.nacional;
     const sueldoPrepaBase = infoReg.sueldo_prepa[generoActivo] || infoReg.sueldo_prepa[0];
     const mediaEstratoReg = infoReg.estrato_medio || 2.80;
     const mediaNepotismoReg = infoReg.nepotismo_medio || 37.2;
@@ -875,23 +786,23 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     const listaConPerfil = carrerasValidasEnCelda.map(carrera => {
       const p = carrera.perfiles?.[regionActiva]?.[generoActivo] || {};
 
-      const desempleo = num(p.tasa_desempleo, 3.8);
+      const desempleo = numSeguro(p.tasa_desempleo, 3.8);
       const ocupacionScore = Math.max(0, 100 - desempleo * 11);
-      const satRaw = num(p.indice_saturacion_pct, 100);
-      const saturacion = satRaw > 5 ? satRaw : num(carrera.perfiles?.nacional?.[0]?.indice_saturacion_pct, 100);
+      const satRaw = numSeguro(p.indice_saturacion_pct, 100);
+      const saturacion = satRaw > 5 ? satRaw : numSeguro(carrera.perfiles?.nacional?.[0]?.indice_saturacion_pct, 100);
       const saturacionScore = Math.max(0, Math.min(100, 145 - saturacion));
       const rawEmpleabilidad = ocupacionScore * 0.55 + saturacionScore * 0.45;
 
-      const pContrato = num(p.pct_contrato, 55);
-      const pAfore = num(p.pct_afore, 45);
-      const pAguinaldo = num(p.pct_aguinaldo, 60);
-      const pSgmm = num(p.pct_sgmm, 7);
-      const pPluri = num(p.pct_pluriempleo, 5.5);
-      const pDesarr = num(p.pct_desarraigo, 2.6);
-      const pMicro = num(p.pct_micro, 0);
-      const pPyme = num(p.pct_pyme, 0);
-      const pCorp = num(p.pct_corp, 0);
-      const pHomeOffice = num(p.pct_home_office, 0);
+      const pContrato = numSeguro(p.pct_contrato, 55);
+      const pAfore = numSeguro(p.pct_afore, 45);
+      const pAguinaldo = numSeguro(p.pct_aguinaldo, 60);
+      const pSgmm = numSeguro(p.pct_sgmm, 7);
+      const pPluri = numSeguro(p.pct_pluriempleo, 5.5);
+      const pDesarr = numSeguro(p.pct_desarraigo, 2.6);
+      const pMicro = numSeguro(p.pct_micro, 0);
+      const pPyme = numSeguro(p.pct_pyme, 0);
+      const pCorp = numSeguro(p.pct_corp, 0);
+      const pHomeOffice = numSeguro(p.pct_home_office, 0);
 
       const tasaCalidadOIT = Number((((Math.min(pContrato, pAfore) * 0.70 + pContrato * 0.30) * (1 - pPluri / 200))).toFixed(1));
       const rawFormalidad = tasaCalidadOIT + pSgmm * 0.001;
@@ -900,34 +811,31 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       const rawCorporativo = pCorp + pSgmm * 0.001;
       const sumaIndepPyme = Number((pMicro + pPyme).toFixed(1));
       const rawEmprendimiento = sumaIndepPyme + pMicro * 0.001;
-
       const rawRemoto = pHomeOffice;
 
-      const nep = num(p.pct_nepotismo, mediaNepotismoReg);
-      const privRaw = num(p.indice_privilegio, mediaEstratoReg);
+      const nep = numSeguro(p.pct_nepotismo, mediaNepotismoReg);
+      const privRaw = numSeguro(p.indice_privilegio, mediaEstratoReg);
       const diffEst = privRaw - mediaEstratoReg;
       const penalizacionElitismo = diffEst > 0.05 ? (diffEst - 0.05) * 110 : diffEst * 35;
       const inclusionOrigen = Math.max(15, Math.min(92, 70 - penalizacionElitismo));
-      const aperturaContratacion = Math.max(10, Math.min(95, 100 - (nep + num(p.pct_sindicato, 15) * 0.22)));
-      const sueldoEsp = num(p.sueldo_esperado, 0);
+      const aperturaContratacion = Math.max(10, Math.min(95, 100 - (nep + numSeguro(p.pct_sindicato, 15) * 0.22)));
+      const sueldoEsp = numSeguro(p.sueldo_esperado, 0);
       const saltoSalarialScore = sueldoPrepaBase > 0
         ? Math.max(0, Math.min(100, ((sueldoEsp - sueldoPrepaBase) / sueldoPrepaBase) * 100))
         : 40;
       const impulsoAscenso = saltoSalarialScore * 0.45 + tasaCalidadOIT * 0.35 + Math.min(100, pCorp * 2.2 + pPyme * 0.6) * 0.20;
       const rawMovilidad = Math.max(12, Math.min(96, aperturaContratacion * 0.40 + impulsoAscenso * 0.35 + inclusionOrigen * 0.25));
 
-      const materno = num(p.pct_materno ?? p.pct_materno_estructural, 23);
-      const brechaSal = num(p.brecha_salarial_pct, 12);
+      const materno = numSeguro(p.pct_materno ?? p.pct_materno_estructural, 23);
+      const brechaSal = numSeguro(p.brecha_salarial_pct, 12);
       const paridadSalarialPct = Math.max(60, Math.round(100 - brechaSal));
       const rawEquidad = materno * 0.50 + paridadSalarialPct * 0.50;
 
-      const rawIA = Math.max(0, 100 - num(p.riesgo_ia_score, 40));
-
+      const rawIA = Math.max(0, 100 - numSeguro(p.riesgo_ia_score, 40));
       const pctEmpleoUnico = Number(Math.max(0, 100 - pPluri).toFixed(1));
       const pctArraigoLocal = Number(Math.max(0, 100 - pDesarr).toFixed(1));
       const rawBalance = Math.max(0, 100 - pPluri * 5.0) * 0.55 + Math.max(0, 100 - pDesarr * 6.5) * 0.45;
-
-      const rawPublico = num(p.pct_gobierno, 0) * 0.65 + num(p.pct_sindicato, 0) * 0.35;
+      const rawPublico = numSeguro(p.pct_gobierno, 0) * 0.65 + numSeguro(p.pct_sindicato, 0) * 0.35;
 
       const premioVsPrepaPct = sueldoPrepaBase > 0 && sueldoEsp > 0
         ? Number((((sueldoEsp - sueldoPrepaBase) / sueldoPrepaBase) * 100).toFixed(1))
@@ -1026,7 +934,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         const val = item.crudos[dim];
         const minMaxScore = ((val - minV) / rango) * 100;
         const pctRankScore = totalViables > 1 ? ((totalViables - posRank) / (totalViables - 1)) * 100 : 80;
-
         const hibrido = (minMaxScore * 0.65 + pctRankScore * 0.35) * 0.996;
         scoresPorDim[dim][item.cve_carrera] = Math.max(10, hibrido);
       });
@@ -1046,44 +953,44 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         totalViables: number;
       }[] = [];
 
-      const sinContactosPct = Math.max(10, Math.round(100 - num(p.pct_nepotismo, 37)));
+      const sinContactosPct = Math.max(10, Math.round(100 - numSeguro(p.pct_nepotismo, 37)));
       const tendTexto = p.tendencia_salarial || carrera.tendencia_salarial || 'Estable';
 
       const datoRealPorDim: Record<string, string> = {
-        empleabilidad: `Desempleo ${num(p.tasa_desempleo, 0).toFixed(1)}% · Saturación ${num(p.indice_saturacion_pct, 100)}%`,
+        empleabilidad: `Desempleo ${numSeguro(p.tasa_desempleo, 0).toFixed(1)}% · Saturación ${numSeguro(p.indice_saturacion_pct, 100)}%`,
         formalidad: `${Math.round(carrera.tasaCalidadOIT)}% con Empleo de Calidad OIT`,
-        corporativo: `${num(p.pct_corp, 0).toFixed(1)}% en Grandes Corporativos`,
-        emprendimiento: `${(num(p.pct_micro, 0) + num(p.pct_pyme, 0)).toFixed(1)}% en Independiente y PYME`,
-        remoto: `${num(p.pct_home_office, 0).toFixed(1)}% en modalidad Home Office`,
-        movilidad: `${Math.round(carrera.crudos.movilidad)}% Mérito (${sinContactosPct}% Sin Contactos · Estrato ${num(p.indice_privilegio, 2.80).toFixed(2)})`,
-        equidad: `${carrera.paridadSalarialPct}% Paridad Salarial · ${num(p.pct_materno ?? p.pct_materno_estructural, 23).toFixed(0)}% Lic. Parental`,
-        ia: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje Humano ante IA`,
+        corporativo: `${numSeguro(p.pct_corp, 0).toFixed(1)}% en Grandes Corporativos`,
+        emprendimiento: `${(numSeguro(p.pct_micro, 0) + numSeguro(p.pct_pyme, 0)).toFixed(1)}% en Independiente y PYME`,
+        remoto: `${numSeguro(p.pct_home_office, 0).toFixed(1)}% en modalidad Home Office`,
+        movilidad: `${Math.round(carrera.crudos.movilidad)}% Mérito (${sinContactosPct}% Sin Contactos · Estrato ${numSeguro(p.indice_privilegio, 2.80).toFixed(2)})`,
+        equidad: `${carrera.paridadSalarialPct}% Paridad Salarial · ${numSeguro(p.pct_materno ?? p.pct_materno_estructural, 23).toFixed(0)}% Lic. Parental`,
+        ia: `${(100 - numSeguro(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje Humano ante IA`,
         balance: `${Math.round(carrera.pctEmpleoUnico)}% Empleo Único · ${Math.round(carrera.pctArraigoLocal)}% Arraigo Local`,
-        publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gobierno · ${num(p.pct_sindicato, 0).toFixed(1)}% Sindicato`,
+        publico: `${numSeguro(p.pct_gobierno, 0).toFixed(1)}% Gobierno · ${numSeguro(p.pct_sindicato, 0).toFixed(1)}% Sindicato`,
         pilar_retorno: `${formatoMoneda(carrera.sueldo_esperado)}/mes (${Math.round(carrera.premioVsPrepaPct) >= 0 ? `+${Math.round(carrera.premioVsPrepaPct)}%` : `${Math.round(carrera.premioVsPrepaPct)}%`} vs. Prepa)`,
-        pilar_empleo: `Desempleo ${num(p.tasa_desempleo, 0).toFixed(1)}% · Saturación ${num(p.indice_saturacion_pct, 100)}%`,
+        pilar_empleo: `Desempleo ${numSeguro(p.tasa_desempleo, 0).toFixed(1)}% · Saturación ${numSeguro(p.indice_saturacion_pct, 100)}%`,
         pilar_calidad: `${Math.round(carrera.tasaCalidadOIT)}% Calidad OIT (${Math.round(carrera.tasaFormalidadTotal)}% Formalidad)`,
         pilar_merito: `${Math.round(carrera.crudos.movilidad)}% Mérito (${sinContactosPct}% Sin Contactos)`,
-        pilar_futuro: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje IA · ${tendTexto}`,
+        pilar_futuro: `${(100 - numSeguro(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje IA · ${tendTexto}`,
         pilar_estabilidad: `${Math.round(carrera.pctEmpleoUnico)}% Empleo Único · ${Math.round(carrera.pctArraigoLocal)}% Arraigo`
       };
 
       const datoCortoPorDim: Record<string, string> = {
-        empleabilidad: `Desemp ${num(p.tasa_desempleo, 0).toFixed(1)}% / Sat ${num(p.indice_saturacion_pct, 100)}%`,
+        empleabilidad: `Desemp ${numSeguro(p.tasa_desempleo, 0).toFixed(1)}% / Sat ${numSeguro(p.indice_saturacion_pct, 100)}%`,
         formalidad: `${carrera.tasaCalidadOIT}% Calidad OIT`,
-        corporativo: `${num(p.pct_corp, 0).toFixed(1)}% Corp`,
-        emprendimiento: `${(num(p.pct_micro, 0) + num(p.pct_pyme, 0)).toFixed(1)}% Indep+PYME`,
-        remoto: `${num(p.pct_home_office, 0).toFixed(1)}% Home Office`,
+        corporativo: `${numSeguro(p.pct_corp, 0).toFixed(1)}% Corp`,
+        emprendimiento: `${(numSeguro(p.pct_micro, 0) + numSeguro(p.pct_pyme, 0)).toFixed(1)}% Indep+PYME`,
+        remoto: `${numSeguro(p.pct_home_office, 0).toFixed(1)}% Home Office`,
         movilidad: `${carrera.crudos.movilidad.toFixed(1)}% Mérito`,
-        equidad: `${carrera.paridadSalarialPct}% Paridad / ${num(p.pct_materno ?? p.pct_materno_estructural, 23).toFixed(0)}% Parental`,
-        ia: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje IA`,
+        equidad: `${carrera.paridadSalarialPct}% Paridad / ${numSeguro(p.pct_materno ?? p.pct_materno_estructural, 23).toFixed(0)}% Parental`,
+        ia: `${(100 - numSeguro(p.riesgo_ia_score, 40)).toFixed(0)}% Blindaje IA`,
         balance: `${carrera.pctEmpleoUnico}% Único / ${carrera.pctArraigoLocal}% Arraigo`,
-        publico: `${num(p.pct_gobierno, 0).toFixed(1)}% Gob / ${num(p.pct_sindicato, 0).toFixed(1)}% Sind`,
+        publico: `${numSeguro(p.pct_gobierno, 0).toFixed(1)}% Gob / ${numSeguro(p.pct_sindicato, 0).toFixed(1)}% Sind`,
         pilar_retorno: `${formatoMoneda(carrera.sueldo_esperado)} (${carrera.premioVsPrepaPct >= 0 ? `+${carrera.premioVsPrepaPct}%` : `${carrera.premioVsPrepaPct}%`})`,
-        pilar_empleo: `Desemp ${num(p.tasa_desempleo, 0).toFixed(1)}% / Sat ${num(p.indice_saturacion_pct, 100)}%`,
+        pilar_empleo: `Desemp ${numSeguro(p.tasa_desempleo, 0).toFixed(1)}% / Sat ${numSeguro(p.indice_saturacion_pct, 100)}%`,
         pilar_calidad: `${carrera.tasaCalidadOIT}% Calidad OIT`,
         pilar_merito: `${carrera.crudos.movilidad.toFixed(1)}% Mérito`,
-        pilar_futuro: `${(100 - num(p.riesgo_ia_score, 40)).toFixed(0)}% IA · ${tendTexto}`,
+        pilar_futuro: `${(100 - numSeguro(p.riesgo_ia_score, 40)).toFixed(0)}% IA · ${tendTexto}`,
         pilar_estabilidad: `${carrera.pctEmpleoUnico}% Único / ${carrera.pctArraigoLocal}% Arraigo`
       };
 
@@ -1205,9 +1112,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
   ]);
 
   const carrerasRestantes = Math.max(0, totalFiltradas - 10);
-  const regionMostradaEnTarjeta = regionHover || regionActiva;
-  const infoRegionTarjeta = benchmarksDinamicosPorRegion[regionMostradaEnTarjeta] || BENCHMARK_REGIONES_BASE.nacional;
-  const infoRegActiva = benchmarksDinamicosPorRegion[regionActiva] || BENCHMARK_REGIONES_BASE.nacional;
+  const regionMostradaEnTarjeta: RegionClave = regionHover || regionActiva;
+  const infoRegionTarjeta = benchmarksDinamicosPorRegion[regionMostradaEnTarjeta] || benchmarksDinamicosPorRegion.nacional;
+  const infoRegActiva = benchmarksDinamicosPorRegion[regionActiva] || benchmarksDinamicosPorRegion.nacional;
   const sueldoPrepaActual = infoRegActiva.sueldo_prepa[generoActivo];
   const diferenciaSliderVsPrepaPct = sueldoPrepaActual > 0
     ? Math.round(((sueldoMinimo - sueldoPrepaActual) / sueldoPrepaActual) * 100)
@@ -1220,6 +1127,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
   const queryGeneroParam = generoActivo === 2 ? 'mujeres' : generoActivo === 1 ? 'hombres' : 'total';
   const etiquetaGeneroCorto = generoActivo === 2 ? 'Solo Mujeres' : generoActivo === 1 ? 'Solo Hombres' : 'Total General';
+  const etiquetaCorte = metaPipeline.etiqueta_corte;
+  const rangoTexto = ventanas?.rangoTexto || `${metaPipeline.anio_inicio}–${metaPipeline.ultimo_anio}`;
 
   const carrerasEnVersus = useMemo(() => {
     return carrerasCompararCves
@@ -1232,7 +1141,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `DataROI — Ranking en ${infoRegActiva.corto} (${etiquetaGeneroCorto})`,
+          title: `DataROI (${etiquetaCorte}) — Ranking en ${infoRegActiva.corto} (${etiquetaGeneroCorto})`,
           text: `Consulta el ranking de carreras en ${infoRegActiva.nombre} con DataROI.`,
           url
         });
@@ -1293,8 +1202,24 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         estiloPodioIdentificador ? { v, s: estiloPodioIdentificador } : { v, s: 'bold' };
 
       const sem = obtenerSemaforoScoreDataROI(c.scoreDataROI);
-      const roiPub = calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, false);
-      const roiPriv = calcularAniosRetornoRapido(c.sueldo_esperado, sueldoPrepaActual, c.cve_carrera, true);
+      const roiPub = calcularAniosRetornoDinamico({
+        sueldoCarrera: c.sueldo_esperado,
+        sueldoPrepa: sueldoPrepaActual,
+        cve: c.cve_carrera,
+        escenario: 'publica',
+        semestres: c.semestres_default,
+        capexMxn: c.capex_mxn,
+        costosRoi: metaPipeline.costos_roi
+      });
+      const roiPriv = calcularAniosRetornoDinamico({
+        sueldoCarrera: c.sueldo_esperado,
+        sueldoPrepa: sueldoPrepaActual,
+        cve: c.cve_carrera,
+        escenario: 'privada_media',
+        semestres: c.semestres_default,
+        capexMxn: c.capex_mxn,
+        costosRoi: metaPipeline.costos_roi
+      });
 
       const celdasPrioridades: ValorCeldaExcel[] = [];
       for (let idx = 0; idx < numRubros; idx++) {
@@ -1338,10 +1263,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         roiPub ?? 'Negativo',
         roiPriv ?? 'Negativo',
         c.tasaCalidadOIT,
-        Number(num(c.perfilActivo?.tasa_desempleo, 3.2).toFixed(1)),
-        num(c.perfilActivo?.indice_saturacion_pct, 92),
+        Number(numSeguro(c.perfilActivo?.tasa_desempleo, 3.2).toFixed(1)),
+        numSeguro(c.perfilActivo?.indice_saturacion_pct, 92),
         Number((c.crudos?.movilidad ?? 50).toFixed(1)),
-        100 - num(c.perfilActivo?.riesgo_ia_score, 40),
+        100 - numSeguro(c.perfilActivo?.riesgo_ia_score, 40),
         ...celdasPrioridades
       ];
     });
@@ -1349,11 +1274,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     return { cabeceras, filas };
   };
 
+  const corteSlug = etiquetaCorte.replace(/\s+/g, '_');
+
   const exportarRankingExcel = () => {
     if (listaOrdenadaCompleta.length === 0) return;
     const { cabeceras, filas } = construirTablasRanking();
 
     const filasParametros: ValorCeldaExcel[][] = [
+      ['Corte Oficial Activo', etiquetaCorte, `Serie histórica ENOE ${rangoTexto} (${metaPipeline.etiqueta_pesos_base})`],
       ['Macro-Región Económica', infoRegActiva.nombre, infoRegActiva.estados],
       ['Perspectiva de Género', etiquetaGeneroCorto, `Sueldo Base Preparatoria: ${formatoMoneda(sueldoPrepaActual)} / mes`],
       [
@@ -1386,7 +1314,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     ];
 
     descargarLibroExcelXLSX(
-      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}_${modoEvaluacion === 'calificacion' ? 'ScoreDataROI' : 'Afinidad'}.xlsx`,
+      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}_${modoEvaluacion === 'calificacion' ? 'ScoreDataROI' : 'Afinidad'}_${corteSlug}.xlsx`,
       [
         {
           nombre: '1_Ranking_DataROI',
@@ -1406,7 +1334,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
     if (listaOrdenadaCompleta.length === 0) return;
     const { cabeceras, filas } = construirTablasRanking();
     descargarCSVEstilizado(
-      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}_${modoEvaluacion === 'calificacion' ? 'ScoreDataROI' : 'Afinidad'}.csv`,
+      `DataROI_Ranking_${regionActiva}_${queryGeneroParam}_${modoEvaluacion === 'calificacion' ? 'ScoreDataROI' : 'Afinidad'}_${corteSlug}.csv`,
       cabeceras,
       filas
     );
@@ -1420,9 +1348,14 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
       {/* CABECERA CONECTADA CON LA BARRA SUPERIOR GLOBAL */}
       <div className="no-print mb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight">
-            Descubridor y Ranking Regional
-          </h1>
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <h1 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight">
+              Descubridor y Ranking Regional
+            </h1>
+            <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-extrabold">
+              Corte {etiquetaCorte}
+            </span>
+          </div>
           <p className="text-xs md:text-sm text-slate-500 mt-1">
             Evalúa las licenciaturas por su <strong>Calificación Integral DataROI (0–100)</strong> o personaliza tu búsqueda con hasta <strong>5 prioridades de afinidad</strong>.
           </p>
@@ -1459,9 +1392,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         </nav>
       </div>
 
-      {/* ========================================================================= */}
-      {/* MODO 1: ASISTENTE PASO A PASO (GRAMÁTICA DE 2 TIEMPOS EN LOS 4 PASOS)     */}
-      {/* ========================================================================= */}
+      {/* MODO 1: ASISTENTE PASO A PASO */}
       {modoVistaFiltros === 'wizard' && (
         <div className="no-print bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-8 max-w-3xl mx-auto mb-8 animate-in fade-in duration-200">
           
@@ -1500,7 +1431,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </p>
 
               <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Botones de selección de región">
-                {Object.entries(benchmarksDinamicosPorRegion).map(([idReg, meta]) => {
+                {REGIONES_ORDEN.map((idReg) => {
+                  const meta = benchmarksDinamicosPorRegion[idReg];
                   const activa = regionActiva === idReg;
                   return (
                     <button
@@ -1717,7 +1649,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* PASO 4: PISO SALARIAL CON RIEL COLOREADO Y QUICK-PRESETS + 5 PRIORIDADES */}
+          {/* PASO 4: PISO SALARIAL + 5 PRIORIDADES */}
           {pasoWizard === 4 && (
             <div key="paso4" className="animate-in fade-in slide-in-from-right-4 duration-200">
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 mb-5">
@@ -1771,10 +1703,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSueldoMinimo(Math.min(maxSueldoCatalogo, 18000))}
+                      onClick={() => setSueldoMinimo(metaAltaDinamica)}
                       className="px-2.5 py-1 rounded-lg text-[10.5px] font-bold bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 active:scale-95 transition-all cursor-pointer"
                     >
-                      Meta Alta ($18,000)
+                      Meta Alta P75 ({formatoMoneda(metaAltaDinamica)})
                     </button>
                   </div>
                 </div>
@@ -1848,7 +1780,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
             </div>
           )}
 
-          {/* PIE DE NAVEGACIÓN DEL WIZARD CON BOTÓN DINÁMICO EN EL PASO 3 */}
+          {/* PIE DE NAVEGACIÓN DEL WIZARD */}
           <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
             {pasoWizard > 1 ? (
               <button
@@ -1907,9 +1839,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODO 2: CINTA COMPACTA COLAPSADA CON SWITCH DE MODO                       */}
-      {/* ========================================================================= */}
+      {/* MODO 2: CINTA COMPACTA COLAPSADA */}
       {modoVistaFiltros === 'colapsado' && (
         <div className="no-print bg-white rounded-2xl border border-slate-200 shadow-xs p-3.5 mb-6 flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-150">
           <div className="flex flex-wrap items-center gap-2">
@@ -1996,9 +1926,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODO 3: PANEL EXPANDIDO DE 2 COLUMNAS (CON BLOQUEO HONESTO EN MODO SCORE) */}
-      {/* ========================================================================= */}
+      {/* MODO 3: PANEL EXPANDIDO DE 2 COLUMNAS */}
       {modoVistaFiltros === 'expandido' && (
         <div className={`no-print grid grid-cols-1 lg:grid-cols-12 gap-5 animate-in fade-in duration-200 ${
           carrerasEnVersus.length > 0 ? 'mb-16' : 'mb-7'
@@ -2015,7 +1943,8 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
               </div>
 
               <div className="flex flex-wrap gap-1.5 mb-2.5">
-                {Object.entries(benchmarksDinamicosPorRegion).map(([idReg, meta]) => {
+                {REGIONES_ORDEN.map((idReg) => {
+                  const meta = benchmarksDinamicosPorRegion[idReg];
                   const activa = regionActiva === idReg;
                   return (
                     <button
@@ -2154,10 +2083,10 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setSueldoMinimo(Math.min(maxSueldoCatalogo, 18000))}
+                        onClick={() => setSueldoMinimo(metaAltaDinamica)}
                         className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 active:scale-95 cursor-pointer"
                       >
-                        $18,000
+                        P75 ({formatoMoneda(metaAltaDinamica)})
                       </button>
                     </div>
                   </div>
@@ -2341,9 +2270,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* ZONA DE RESULTADOS DEL RANKING (UN SOLO PROTAGONISTA NUMÉRICO POR MODO)   */}
-      {/* ========================================================================= */}
+      {/* ZONA DE RESULTADOS DEL RANKING */}
       {tieneResultadosActivos && modoVistaFiltros !== 'wizard' && (
         <div className="animate-in fade-in duration-200">
           
@@ -2380,7 +2307,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
 
               <button
                 onClick={exportarRankingExcel}
-                title="Descargar Libro de Excel (.xlsx) con 2 Hojas, medallas Oro/Plata/Bronce y alineación uniforme"
+                title="Descargar Libro de Excel (.xlsx) con 2 Hojas"
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-2xs active:scale-95 transition-all cursor-pointer"
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
@@ -2454,10 +2381,9 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                 const topeComparador = !enComparador && carrerasCompararCves.length >= MAX_COMPARAR;
                 const slotEstilo = enComparador ? COLORES_VERSUS[idxSlotVersus] || COLORES_VERSUS[0] : null;
 
-                const capexInfo = obtenerCapExCorto(carrera.cve_carrera);
+                const capexInfo = obtenerCapExDinamico(carrera.cve_carrera, carrera.capex_mxn);
                 const primaEntero = Math.round(carrera.premioVsPrepaPct);
                 const afinidadEntero = Math.round(carrera.matchScore);
-
                 const numPrincipalBadge = esOrdenSalarial ? carrera.posicionListaActual : carrera.rankAfinidad;
 
                 let borderClass = "border-slate-200 hover:border-blue-400 hover:shadow-[0_18px_35px_-12px_rgba(37,99,235,0.16)]";
@@ -2656,7 +2582,6 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
                         </div>
                       </div>
 
-                      {/* Columna Derecha: EXCLUSIVIDAD FOCAL + BOTÓN VERSUS */}
                       <div className="flex items-center justify-between lg:flex-col lg:items-end lg:justify-between gap-3 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0">
                         {modoEvaluacion === 'calificacion' ? (
                           <AnilloScoreDataROIGrande score={carrera.scoreDataROI} rank={carrera.rankAfinidad} />
@@ -2726,9 +2651,7 @@ export default function DescubridorClient({ datos }: { datos: any[] }) {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* BANDEJA FLOTANTE INFERIOR (CONECTADA AL MODAL GLOBAL DE NAVBARGLOBAL)     */}
-      {/* ========================================================================= */}
+      {/* BANDEJA FLOTANTE INFERIOR (CONECTADA AL MODAL GLOBAL DE NAVBARGLOBAL) */}
       {carrerasEnVersus.length > 0 && (
         <div
           role="region"
