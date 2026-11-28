@@ -67,3 +67,46 @@ El sistema opera bajo una arquitectura **100% dinámica y sin valores congelados
 1. **Clonar e instalar dependencias:**
    ```bash
    npm install
+   ```
+
+2. **Crear `.env.local` en la raíz (guardado en UTF-8 sin BOM):**
+   ```env
+   NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_tu_publishable_o_anon_key
+   SUPABASE_SERVICE_ROLE_KEY=sb_secret_tu_secret_key_de_servidor
+   INGESTA_ADMIN_TOKEN=tu_clave_secreta_de_administrador
+   ```
+   * **Seguridad:** `SUPABASE_SERVICE_ROLE_KEY` e `INGESTA_ADMIN_TOKEN` nunca llevan el prefijo `NEXT_PUBLIC_` y se leen únicamente dentro del servidor (`/api/ingesta`).
+   * **Navegación de administrador:** El botón `Subir Corte` aparece automáticamente en `npm run dev` y se oculta en producción (`npm run start` / Vercel). Si deseas mostrarlo también en producción, añade `NEXT_PUBLIC_MOSTRAR_NAV_ADMIN=true`.
+
+3. **Ejecutar en desarrollo o compilar para producción:**
+   ```bash
+   # Desarrollo con Turbopack
+   npm run dev
+
+   # Verificación de tipos, compilación y arranque de producción
+   npx tsc --noEmit
+   npm run build
+   npm run start
+   ```
+
+---
+
+## Flujo de Actualización de Nuevos Cortes (Q3 2026, 2027+)
+
+| Frecuencia | Archivos oficiales a descargar | Script Python a correr | Archivos a subir en `/actualizar` |
+| :--- | :--- | :--- | :--- |
+| **Trimestral o Semestral** (ej. Q3 / Q4) | Nuevo `SDEM` de la ENOE + `inpc.CSV` actualizado | `etl_mercado_y_saturacion_definitivo.py` | `DataROI_Mercado_MacroRegional_Final.csv`, `DataROI_Benchmarks_Prepa.csv`, `DataROI_Meta_Corte.json` |
+| **Anual (Q1 / T1)** | `SDEM`, `COE1` y `COE2` de T1 + nuevo Anuario `ANUIES` (`.xlsx`) | 1. `etl_fase6_satelites.py`<br>2. `etl_mercado_y_saturacion_definitivo.py` | Los 5 archivos generados en `processed_data/` (incluyendo `DataROI_Satelites_Regional_Final.csv` y `DataROI_Satelites_Prepa.csv`) |
+
+1. Abre `/actualizar` (en local o en tu dominio de producción).
+2. Selecciona los archivos generados por Python e ingresa tu `INGESTA_ADMIN_TOKEN`.
+3. *(Opcional)* Marca **Modo Simulación (Dry-Run)** para validar todos los lotes sin escribir en Supabase.
+4. Desmarca *Dry-Run* y pulsa **Publicar Corte en Tiempo Real**: cada tabla se envía automáticamente en lotes pequeños (`<350 KB`), se actualiza Supabase por `UPSERT`, se revalidan todas las rutas y se muestra el reporte **Antes vs. Después**.
+
+---
+
+## Despliegue en Vercel
+
+1. Conecta el repositorio en Vercel y define las 4 variables de `.env.local` en **Project Settings → Environment Variables**.
+2. Despliega normalmente (`next build`). La interfaz pública mostrará solo **Catálogo**, **Descubridor y Ranking**, **Laboratorio Crudo** y **Versus**; para subir cortes futuros entra directo a `[https://tu-dominio.vercel.app/actualizar](https://tu-dominio.vercel.app/actualizar)`.
